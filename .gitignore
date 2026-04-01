@@ -1,0 +1,13 @@
+venv/
+
+exportaciones_excel/
+
+__pycache__/
+
+*.pyc
+
+.env
+
+.DS_Store
+
+.vscode/

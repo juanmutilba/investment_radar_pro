@@ -1,0 +1,275 @@
+RADAR QUANTAMENTAL v2.0 - ESTRUCTURA MODULAR
+
+1. OBJETIVO
+Sistema quantamental modular orientado a detectar:
+- oportunidades de compra
+- activos en seguimiento
+- deterioro técnico
+- cambios respecto del último radar previo
+- prioridad operativa diaria
+- lectura descriptiva por empresa y sector
+- perfil de riesgo por beta
+- fuerza relativa por sector
+- top 10 oportunidades del día
+- separación entre radar USA/CEDEAR y radar Argentina
+
+2. ESTRUCTURA DE ARCHIVOS
+- main.py -> orquestador principal
+- config.py -> parámetros globales
+- engines/usa_engine.py -> motor USA / CEDEAR subyacente
+- engines/argentina_engine.py -> motor local argentino
+- core/technicals.py -> indicadores técnicos
+- core/scoring.py -> score técnico y fundamental
+- core/risk.py -> perfil de riesgo y risk score
+- core/signals.py -> setup, señales, convicción, prioridad, evolución
+- export/exporter.py -> exportación Excel y CSV
+- export/excel_format.py -> formato visual, semáforos y comentarios
+- data/universe_usa.py -> universo USA
+- data/universe_arg.py -> universo Argentina
+- utils/history.py -> comparación histórica
+
+3. UNIVERSOS
+3.1 USA
+- CORE
+- ETF
+- GROWTH
+
+3.2 ARGENTINA
+Incluye acciones locales usando tickers Yahoo con sufijo .BA,
+pero el radar muestra el ticker local limpio.
+
+4. SCORES DEL MODELO
+4.1 TechScore
+Incluye únicamente indicadores técnicos:
+- RSI < 30 => +3
+- RSI entre 30 y 40 => +1
+- Precio < MA50 => +1
+- MA50 > MA200 => +1
+- MACD line > Signal line => +1
+
+Puntaje máximo: 7
+
+4.2 FundScore
+Incluye únicamente variables fundamentales / valuación:
+- NetIncome > 0 => +1
+- EBITDA > 0 => +1
+- DebtToEquity < 200 => +1
+- PE < 15 => +1
+- Upside > 5% => +1
+
+Puntaje máximo: 5
+
+4.3 RiskScore
+Incluye únicamente beta:
+- Beta entre 0.8 y 1.6 => +1
+- Beta entre 0.6 y 2.0 => 0
+- Beta fuera de ese rango => -1
+- Sin dato => 0
+
+Rango: -1 a +1
+
+4.4 Score total
+TotalScore = TechScore + FundScore + RiskScore
+Máximo actual: 13
+
+5. VARIABLES TÉCNICAS
+- RSI (14)
+- MA50
+- MA200
+- MACD
+- Pullback
+- Trend
+
+6. VARIABLES FUNDAMENTALES
+- PE
+- EBITDA
+- NetIncome
+- DebtToEquity
+- TargetPrice
+- Upside_%
+
+7. VARIABLES DE RIESGO
+- Beta
+- RiskProfile
+- RiskScore
+
+8. INTERPRETACIÓN DE BETA
+- beta < 0.8 => DEFENSIVO
+- 0.8 a 1.2 => BALANCEADO
+- 1.2 a 1.8 => AGRESIVO
+- > 1.8 => ESPECULATIVO
+
+9. SETUP
+- PULLBACK EN TENDENCIA
+- REVERSAL
+- TENDENCIA FIRME
+- PULLBACK
+- SIN SETUP
+
+10. SIGNALSTATE
+- COMPRA PRIORITARIA
+- COMPRA POTENCIAL
+- SEGUIMIENTO
+- TOMA DE GANANCIA
+- SOBREEXTENDIDA
+- DEBILITÁNDOSE
+- EVITAR
+
+11. CONVICCIÓN
+- ALTA
+- MEDIA
+- BAJA
+- NULA
+
+12. CAPITAL SUGERIDO
+- 12%
+- 8%
+- 4%
+- 0%
+
+13. HISTÓRICO
+Cada corrida compara contra el último Excel previo disponible.
+No depende del día calendario anterior.
+
+Campos históricos:
+- ScoreAnterior
+- EstadoAnterior
+- CambioScore
+- Evolucion
+
+14. EVOLUCIÓN
+- NUEVA INCORPORACIÓN
+- MEJORANDO
+- DETERIORANDO
+- CAMBIO DE ESTADO
+- SIN CAMBIOS
+- SIN HISTORIAL
+
+15. PRIORIDAD RADAR
+- ALTA => TotalScore >= 9 y Evolucion = MEJORANDO
+- MEDIA => TotalScore >= 8
+- BAJA => TotalScore >= 5
+- IGNORAR => resto
+
+16. HOJAS DEL EXCEL
+16.1 Radar_Operativo
+Vista minimalista de USA:
+- Ticker
+- Empresa
+- RiskProfile
+- Precio
+- Upside_%
+- RSI
+- TechScore
+- FundScore
+- RiskScore
+- TotalScore
+- ScoreAnterior
+- CambioScore
+- Setup
+- SignalState
+- EstadoAnterior
+- Evolucion
+- PrioridadRadar
+- Conviccion
+- CapitalSugerido_%
+
+16.2 Radar_Completo
+Vista completa de USA.
+
+16.3 Universo
+Vista descriptiva USA:
+- Ticker
+- Empresa
+- Sector
+- Industria
+- TipoUniverso
+- MarketCap
+- Beta
+- ROE
+- RiskProfile
+
+16.4 Resumen_Sectores
+- Sector
+- SectorScorePromedio
+- CantidadActivos
+- RankingSector
+
+16.5 Top_10
+Top 10 USA.
+
+16.6 Radar_Argentina
+Vista minimalista Argentina.
+
+16.7 Radar_Argentina_Completo
+Vista completa Argentina.
+
+16.8 Universo_Argentina
+Vista descriptiva Argentina.
+
+16.9 Sectores_Argentina
+Resumen sectorial local.
+
+16.10 Top_10_Argentina
+Top 10 local.
+
+17. COMENTARIOS EN EXCEL
+Se agregan comentarios en los encabezados:
+- TechScore -> Indicadores técnicos. Máximo 7 puntos.
+- FundScore -> Resumen fundamental. Máximo 5 puntos.
+- RiskScore -> Beta. Máximo 1, mínimo -1.
+- TotalScore -> Suma de TechScore + FundScore + RiskScore.
+- SignalState -> Clasificación operativa automática.
+- PrioridadRadar -> Prioridad diaria de seguimiento.
+
+18. SEMÁFOROS EN EXCEL
+18.1 SignalState
+- COMPRA PRIORITARIA => verde fuerte
+- COMPRA POTENCIAL => verde claro
+- SEGUIMIENTO => amarillo
+- TOMA DE GANANCIA => naranja
+- SOBREEXTENDIDA => rojo
+- DEBILITÁNDOSE => rojo
+- EVITAR => gris
+
+18.2 Evolucion
+- MEJORANDO => verde claro
+- DETERIORANDO => rojo
+- CAMBIO DE ESTADO => amarillo
+- NUEVA INCORPORACIÓN => verde fuerte
+- SIN CAMBIOS => gris
+- SIN HISTORIAL => gris
+
+18.3 TotalScore
+- >= 10 => verde fuerte
+- 8 a 9 => verde claro
+- 5 a 7 => amarillo
+- < 5 => rojo
+
+18.4 CambioScore
+- >= 2 => verde fuerte
+- > 0 => verde claro
+- = 0 => gris
+- -1 => naranja
+- <= -2 => rojo
+
+18.5 PrioridadRadar
+- ALTA => verde fuerte
+- MEDIA => verde claro
+- BAJA => amarillo
+- IGNORAR => gris
+
+18.6 RiskProfile
+- BALANCEADO => verde claro
+- AGRESIVO => amarillo
+- DEFENSIVO => gris
+- ESPECULATIVO => rojo
+
+19. EJECUCIÓN
+Correr:
+python main.py
+
+20. CRITERIO SOBRE CEDEARS
+El radar USA analiza el subyacente en USD.
+No mezcla precio local del CEDEAR con fundamentos en USD.
+Las especies tipo AAPLC / AAPLD no forman parte del motor base.
