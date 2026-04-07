@@ -1,13 +1,9 @@
 venv/
-
-exportaciones_excel/
-
 __pycache__/
-
 *.pyc
+logs/
+data/
+export/
 
 .env
-
-.DS_Store
-
-.vscode/
+.vscode/settings.json
