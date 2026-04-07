@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from config import EXPORT_FOLDER, OUTPUT_EXCEL
+from config import (
+    EXPORT_FOLDER,
+    OUTPUT_EXCEL,
+    ENABLE_TELEGRAM,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID,
+)
 from core.signals import classify_priority
 from core.alerts_engine import generate_alerts
 from engines.argentina_engine import run_argentina_engine
 from engines.usa_engine import run_usa_engine
 from export.exporter import export_all
+from notifications.telegram_notifier import send_alerts_dataframe
 from utils.history import find_previous_export, merge_history
 
 
@@ -65,6 +72,31 @@ def main():
         print(arg_alerts[["Ticker", "TipoAlerta"]].to_string(index=False))
     else:
         print("Sin alertas relevantes en Argentina")
+        
+            # =========================
+    # TELEGRAM
+    # =========================
+    if ENABLE_TELEGRAM and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        print("\nEnviando alertas por Telegram...")
+
+        sent_usa = send_alerts_dataframe(
+            TELEGRAM_BOT_TOKEN,
+            TELEGRAM_CHAT_ID,
+            usa_alerts,
+            title="ALERTAS RADAR USA",
+        )
+
+        sent_arg = send_alerts_dataframe(
+            TELEGRAM_BOT_TOKEN,
+            TELEGRAM_CHAT_ID,
+            arg_alerts,
+            title="ALERTAS RADAR ARGENTINA",
+        )
+
+        print(f"Alertas USA enviadas: {sent_usa}")
+        print(f"Alertas Argentina enviadas: {sent_arg}")
+    else:
+        print("\nTelegram desactivado o sin credenciales configuradas.")
 
     outputs = {
         "usa_df": usa_df,
