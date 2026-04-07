@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import ta
 
-from config import MA_LONG, MA_SHORT, RSI_WINDOW
+from core.config import MA_LONG, MA_SHORT, RSI_WINDOW
 
 
 def compute_technical_metrics(close: pd.Series) -> dict:

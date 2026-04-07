@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from config import BUY_PRIORITY_THRESHOLD, BUY_THRESHOLD, FOLLOW_THRESHOLD, UPSIDE_PRIORITY
-
+from core.config import BUY_PRIORITY_THRESHOLD, BUY_THRESHOLD, FOLLOW_THRESHOLD, UPSIDE_PRIORITY
 
 def classify_signal_state(
     total_score: int,

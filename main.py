@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-from config import (
+from core.config import (
     EXPORT_FOLDER,
     OUTPUT_EXCEL,
     ENABLE_TELEGRAM,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
 )
+
+
 from core.signals import classify_priority
 from core.alerts_engine import generate_alerts
 from engines.argentina_engine import run_argentina_engine
 from engines.usa_engine import run_usa_engine
 from export.exporter import export_all
 from notifications.telegram_notifier import send_alerts_dataframe
-from utils.history import find_previous_export, merge_history
-
+from core.history import find_previous_export, merge_history
 
 def prepare_dataframe(df, previous_file, previous_sheet_name):
     df = merge_history(df, previous_file, previous_sheet_name)

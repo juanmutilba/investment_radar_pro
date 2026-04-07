@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 from openpyxl import load_workbook
 
-from config import OUTPUT_CSV, OUTPUT_EXCEL
+from core.config import OUTPUT_CSV, OUTPUT_EXCEL
 from export.excel_format import format_workbook
 
 

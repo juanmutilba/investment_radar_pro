@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from config import (
+from core.config import (
     RISK_BETA_IDEAL_MAX,
     RISK_BETA_IDEAL_MIN,
     RISK_BETA_NEUTRAL_MAX,

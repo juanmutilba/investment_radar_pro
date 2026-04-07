@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import yfinance as yf
 
-from config import PRICE_HISTORY_PERIOD
+from core.config import PRICE_HISTORY_PERIOD
 from core.risk import calculate_risk_score, classify_risk_profile
 from core.scoring import calculate_fund_score, calculate_tech_score
 from core.signals import classify_conviction, classify_setup, classify_signal_state, suggested_capital

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from config import DEBT_TO_EQUITY_MAX, PE_MAX, UPSIDE_MIN
+from core.config import DEBT_TO_EQUITY_MAX, PE_MAX, UPSIDE_MIN
 
 
 def calculate_tech_score(rsi: float, pullback: bool, trend_positive: bool, macd_bullish: bool) -> int:
