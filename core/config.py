@@ -1,6 +1,9 @@
 from pathlib import Path
 from datetime import datetime
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
 EXPORT_FOLDER = BASE_DIR / 'exportaciones_excel'
