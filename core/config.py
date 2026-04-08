@@ -5,11 +5,14 @@ import os
 BASE_DIR = Path(__file__).resolve().parent
 EXPORT_FOLDER = BASE_DIR / 'exportaciones_excel'
 EXPORT_FOLDER.mkdir(exist_ok=True)
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# =====================
+# TELEGRAM
+# =====================
 
-ENABLE_TELEGRAM = os.getenv("ENABLE_TELEGRAM", "false").lower() == "true"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+ENABLE_TELEGRAM = os.getenv("ENABLE_TELEGRAM", "false").strip().lower() == "true"
 
 TIMESTAMP = datetime.now().strftime('%Y-%m-%d_%H-%M')
 OUTPUT_EXCEL = EXPORT_FOLDER / f'radar_{TIMESTAMP}.xlsx'

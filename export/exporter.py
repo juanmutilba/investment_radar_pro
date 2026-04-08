@@ -7,30 +7,47 @@ from core.config import OUTPUT_CSV, OUTPUT_EXCEL
 from export.excel_format import format_workbook
 
 
-def build_operativo_view(df: pd.DataFrame) -> pd.DataFrame:
-    return df[
-        [
-            "Ticker",
-            "Empresa",
-            "RiskProfile",
-            "Precio",
-            "Upside_%",
-            "RSI",
-            "TechScore",
-            "FundScore",
-            "RiskScore",
-            "TotalScore",
-            "ScoreAnterior",
-            "CambioScore",
-            "Setup",
-            "SignalState",
-            "EstadoAnterior",
-            "Evolucion",
-            "PrioridadRadar",
-            "Conviccion",
-            "CapitalSugerido_%",
-        ]
-    ].copy()
+def build_operativo_view(df):
+
+    df = df.copy()
+
+    if "ScoreAnterior" not in df.columns:
+        if "score_anterior" in df.columns:
+            df["ScoreAnterior"] = df["score_anterior"]
+        else:
+            df["ScoreAnterior"] = 0
+
+    if "CambioScore" not in df.columns:
+        if "Evolucion" in df.columns:
+            df["CambioScore"] = df["Evolucion"]
+        elif "TotalScore" in df.columns and "ScoreAnterior" in df.columns:
+            df["CambioScore"] = df["TotalScore"] - df["ScoreAnterior"]
+        elif "score" in df.columns and "ScoreAnterior" in df.columns:
+            df["CambioScore"] = df["score"] - df["ScoreAnterior"]
+        else:
+            df["CambioScore"] = 0
+
+    if "EstadoAnterior" not in df.columns:
+        df["EstadoAnterior"] = ""
+
+    columnas_deseadas = [
+        "Ticker",
+        "Activo",
+        "Mercado",
+        "TotalScore",
+        "ScoreAnterior",
+        "CambioScore",
+        "Evolucion",
+        "PrioridadRadar",
+        "Estado",
+        "EstadoAnterior",
+    ]
+
+    columnas_presentes = [col for col in columnas_deseadas if col in df.columns]
+
+    return df[columnas_presentes]
+
+
 
 
 def export_all(outputs: dict) -> tuple[str, str]:

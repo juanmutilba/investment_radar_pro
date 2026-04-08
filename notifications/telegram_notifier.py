@@ -20,6 +20,9 @@ def send_telegram_message(bot_token: str, chat_id: str, message: str) -> bool:
             verify=certifi.where(),
         )
 
+        print("STATUS:", response.status_code)
+        print("RESPUESTA:", response.text)
+
         return response.status_code == 200
 
     except Exception as e:

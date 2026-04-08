@@ -43,6 +43,66 @@ PRIORIDAD = {
     "compra": 1,
 }
 
+def obtener_ticker(row):
+    return (
+        row.get("ticker")
+        or row.get("Ticker")
+        or row.get("symbol")
+        or row.get("Symbol")
+        or row.get("activo")
+        or row.get("Activo")
+        or row.get("simbolo")
+        or row.get("Simbolo")
+    )
+
+
+def obtener_mercado(row):
+    return (
+        row.get("mercado")
+        or row.get("Mercado")
+        or row.get("market")
+        or row.get("Market")
+        or ""
+    )
+
+
+def obtener_score(row):
+    valor = (
+        row.get("score")
+        if row.get("score") is not None
+        else row.get("TotalScore")
+    )
+
+    if valor is None:
+        return 0
+
+    return valor
+
+
+def obtener_score_anterior(row):
+    if row.get("score_anterior") is not None:
+        return row.get("score_anterior")
+
+    score_actual = obtener_score(row)
+    evolucion = row.get("Evolucion", 0)
+
+    try:
+        return score_actual - evolucion
+    except Exception:
+        return 0
+
+
+def obtener_senales(row):
+    senales = row.get("senales")
+    if isinstance(senales, dict):
+        return senales
+
+    signals = row.get("signals")
+    if isinstance(signals, dict):
+        return signals
+
+    return {}
+
 
 def construir_fingerprint(senales, claves):
 
@@ -69,14 +129,33 @@ def es_fingerprint_nuevo(ticker, fingerprint_actual):
 
 def detectar_compra(row):
 
-    score = row.get("score", 0)
-    score_prev = row.get("score_anterior", 0)
-    cambio = score - score_prev
-    senales = row.get("senales", {})
+    ticker = obtener_ticker(row)
 
-    cantidad = contar_senales(senales, CLAVES_COMPRA)
-    fingerprint = construir_fingerprint(senales, CLAVES_COMPRA)
-    nueva_senal = es_fingerprint_nuevo(row["ticker"], fingerprint)
+    if not ticker:
+        return None
+
+    score = obtener_score(row)
+
+    score_prev = obtener_score_anterior(row)
+
+    cambio = score - score_prev
+
+    senales = obtener_senales(row)
+
+    cantidad = contar_senales(
+        senales,
+        CLAVES_COMPRA
+    )
+
+    fingerprint = construir_fingerprint(
+        senales,
+        CLAVES_COMPRA
+    )
+
+    nueva_senal = es_fingerprint_nuevo(
+        ticker,
+        fingerprint
+    )
 
     senal_fuerte = (
         senales.get("breakout") or
@@ -91,21 +170,32 @@ def detectar_compra(row):
             cambio >= CAMBIO_SCORE_COMPRA or
             nueva_senal or
             cambio >= SALTO_SCORE_IMPORTANTE
-        ) and
+        )
+        and
         (senal_fuerte or confluencia)
     ):
 
         return {
-            "ticker": row["ticker"],
-            "mercado": row.get("mercado", ""),
+
+            "ticker": ticker,
+
+            "mercado": obtener_mercado(row),
+
             "tipo_alerta": "compra",
+
             "score": score,
+
             "score_anterior": score_prev,
+
             "cambio_score": cambio,
+
             "fingerprint": fingerprint,
+
             "senales_activas": [
-                k for k in CLAVES_COMPRA if senales.get(k)
+                k for k in CLAVES_COMPRA
+                if senales.get(k)
             ],
+
             "motivo": "score_alto_y_senales_de_compra"
         }
 
@@ -113,14 +203,18 @@ def detectar_compra(row):
 
 def detectar_venta(row):
 
-    score = row.get("score", 0)
-    score_prev = row.get("score_anterior", 0)
+    ticker = obtener_ticker(row)
+    if not ticker:
+        return None
+
+    score = obtener_score(row)
+    score_prev = obtener_score_anterior(row)
     cambio = score - score_prev
-    senales = row.get("senales", {})
+    senales = obtener_senales(row)
 
     cantidad = contar_senales(senales, CLAVES_VENTA)
     fingerprint = construir_fingerprint(senales, CLAVES_VENTA)
-    nueva_senal = es_fingerprint_nuevo(row["ticker"], fingerprint)
+    nueva_senal = es_fingerprint_nuevo(ticker, fingerprint)
 
     senal_fuerte = (
         senales.get("loss_support") or
@@ -140,8 +234,8 @@ def detectar_venta(row):
     ):
 
         return {
-            "ticker": row["ticker"],
-            "mercado": row.get("mercado", ""),
+           "ticker": ticker,
+"mercado": obtener_mercado(row),
             "tipo_alerta": "venta",
             "score": score,
             "score_anterior": score_prev,
@@ -158,14 +252,18 @@ def detectar_venta(row):
 
 def detectar_toma(row):
 
-    score = row.get("score", 0)
-    score_prev = row.get("score_anterior", 0)
+    ticker = obtener_ticker(row)
+    if not ticker:
+        return None
+
+    score = obtener_score(row)
+    score_prev = obtener_score_anterior(row)
     cambio = score - score_prev
-    senales = row.get("senales", {})
+    senales = obtener_senales(row)
 
     cantidad = contar_senales(senales, CLAVES_TOMA)
     fingerprint = construir_fingerprint(senales, CLAVES_TOMA)
-    nueva_senal = es_fingerprint_nuevo(row["ticker"], fingerprint)
+    nueva_senal = es_fingerprint_nuevo(ticker, fingerprint)
 
     if (
         score >= 65 and
@@ -177,8 +275,8 @@ def detectar_toma(row):
     ):
 
         return {
-            "ticker": row["ticker"],
-            "mercado": row.get("mercado", ""),
+           "ticker": ticker,
+"mercado": obtener_mercado(row),
             "tipo_alerta": "toma_ganancia",
             "score": score,
             "score_anterior": score_prev,
@@ -335,3 +433,36 @@ def procesar_alertas(rows, notifier):
 
     return enviadas
 
+class DummyNotifier:
+    def send(self, message):
+        print("\n=== ALERTA ===")
+        print(message)
+        return True
+
+
+class DummyNotifier:
+    def send(self, message):
+        print("\n=== ALERTA ===")
+        print(message)
+        return True
+
+
+def generate_alerts(rows, notifier=None):
+
+    if notifier is None:
+        notifier = DummyNotifier()
+
+    if hasattr(rows, "to_dict"):
+        rows = rows.to_dict(orient="records")
+
+    if rows:
+        print("COLUMNAS / EJEMPLO ROW:")
+        print(rows[0])
+
+    alertas = procesar_alertas(rows, notifier)
+
+    try:
+        import pandas as pd
+        return pd.DataFrame(alertas)
+    except Exception:
+        return alertas
