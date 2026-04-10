@@ -1,19 +1,19 @@
-from datetime import datetime, timedelta
 
+from core.config import (
+    ALERT_COMPRA_FUERTE_MIN,
+    ALERT_COMPRA_MIN_DELTA,
+    ALERT_COMPRA_POTENCIAL_SCORE,
+    ALERT_COOLDOWN_MINUTOS,
+    ALERT_PRIORIDAD,
+    ALERT_REENVIO_SCORE_MIN,
+    ALERT_SALTO_SCORE_ABS,
+    ALERT_TIPO_ETIQUETA,
+    ALERT_TOMA_MAX_DELTA,
+    ALERT_TOMA_MIN_SCORE,
+    ALERT_VENTA_MAX_SCORE,
+    ALERT_VENTA_MIN_DELTA,
+)
 from core.history import get_last_state, save_state
-
-
-COOLDOWNS_MINUTOS = {
-    "compra": 120,
-    "venta": 60,
-    "toma_ganancia": 90,
-}
-
-CAMBIO_SCORE_COMPRA = 8
-CAMBIO_SCORE_VENTA = -8
-CAMBIO_SCORE_TOMA = -6
-CAMBIO_MINIMO_REENVIO = 5
-SALTO_SCORE_IMPORTANTE = 15
 
 
 CLAVES_COMPRA = [
@@ -37,12 +37,6 @@ CLAVES_TOMA = [
 ]
 
 
-PRIORIDAD = {
-    "venta": 3,
-    "toma_ganancia": 2,
-    "compra": 1,
-}
-
 def obtener_ticker(row):
     return (
         row.get("ticker")
@@ -57,13 +51,23 @@ def obtener_ticker(row):
 
 
 def obtener_mercado(row):
-    return (
-        row.get("mercado")
-        or row.get("Mercado")
-        or row.get("market")
-        or row.get("Market")
-        or ""
-    )
+    for key in ("mercado", "Mercado", "market", "Market"):
+        raw = row.get(key)
+        if raw is None:
+            continue
+        s = str(raw).strip()
+        if s and s.lower() != "nan":
+            return s
+
+    raw = row.get("TipoUniverso")
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if not s or s.lower() == "nan":
+        return ""
+    if s.upper() == "ARGENTINA":
+        return "Argentina"
+    return "USA"
 
 
 def obtener_score(row):
@@ -92,166 +96,180 @@ def obtener_score_anterior(row):
         return 0
 
 
+def _valor_rsi_fila(row) -> float | None:
+    v = row.get("RSI")
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _senales_desde_columnas_radar(row) -> dict:
+    trend = bool(row.get("Trend"))
+    macd_bull = bool(row.get("MACD_Bull"))
+    pullback = bool(row.get("Pullback"))
+    rsi = _valor_rsi_fila(row)
+
+    rsi_recovery = False
+    if rsi is not None:
+        rsi_recovery = (30.0 <= rsi <= 45.0) or (pullback and rsi < 48.0)
+
+    breakout = trend and macd_bull and not pullback
+
+    rsi_ob = rsi is not None and rsi > 70.0
+
+    return {
+        "breakout": breakout,
+        "macd_bullish_cross": macd_bull,
+        "rsi_recovery": rsi_recovery,
+        "trend_up": trend,
+        "loss_support": False,
+        "macd_bearish_cross": not macd_bull,
+        "trend_down": not trend,
+        "breakdown": (not trend) and (not macd_bull),
+        "extended_from_mean": False,
+        "rsi_overbought": rsi_ob,
+        "momentum_loss": pullback and trend,
+    }
+
+
 def obtener_senales(row):
     senales = row.get("senales")
-    if isinstance(senales, dict):
+    if isinstance(senales, dict) and senales:
         return senales
 
     signals = row.get("signals")
-    if isinstance(signals, dict):
+    if isinstance(signals, dict) and signals:
         return signals
 
-    return {}
+    return _senales_desde_columnas_radar(row)
 
 
 def construir_fingerprint(senales, claves):
-
     activas = sorted([k for k in claves if senales.get(k)])
-
     return "|".join(activas)
 
 
 def contar_senales(senales, claves):
-
     return sum(1 for k in claves if senales.get(k))
 
+
 def es_fingerprint_nuevo(ticker, fingerprint_actual):
-
     previo = get_last_state(ticker)
-
     if not previo:
         return True
-
     fingerprint_previo = previo.get("fingerprint", "")
-
     return fingerprint_actual != fingerprint_previo
 
 
-def detectar_compra(row):
+def _disparador_compra(cambio: int, nueva_senal: bool) -> bool:
+    return (
+        cambio >= ALERT_COMPRA_MIN_DELTA
+        or nueva_senal
+        or cambio >= ALERT_SALTO_SCORE_ABS
+    )
 
+
+def detectar_compra_fuerte(row):
     ticker = obtener_ticker(row)
-
     if not ticker:
         return None
 
     score = obtener_score(row)
+    if score < ALERT_COMPRA_FUERTE_MIN:
+        return None
 
     score_prev = obtener_score_anterior(row)
-
     cambio = score - score_prev
-
     senales = obtener_senales(row)
-
-    cantidad = contar_senales(
-        senales,
-        CLAVES_COMPRA
-    )
-
-    fingerprint = construir_fingerprint(
-        senales,
-        CLAVES_COMPRA
-    )
-
-    nueva_senal = es_fingerprint_nuevo(
-        ticker,
-        fingerprint
-    )
-
-    senal_fuerte = (
-        senales.get("breakout") or
-        senales.get("macd_bullish_cross")
-    )
-
+    cantidad = contar_senales(senales, CLAVES_COMPRA)
+    fingerprint = construir_fingerprint(senales, CLAVES_COMPRA)
+    nueva_senal = es_fingerprint_nuevo(ticker, fingerprint)
+    senal_fuerte = senales.get("breakout") or senales.get("macd_bullish_cross")
     confluencia = cantidad >= 2
 
-    if (
-        score >= 80 and
-        (
-            cambio >= CAMBIO_SCORE_COMPRA or
-            nueva_senal or
-            cambio >= SALTO_SCORE_IMPORTANTE
-        )
-        and
-        (senal_fuerte or confluencia)
-    ):
-
+    if _disparador_compra(cambio, nueva_senal) and (senal_fuerte or confluencia):
         return {
-
             "ticker": ticker,
-
             "mercado": obtener_mercado(row),
-
-            "tipo_alerta": "compra",
-
+            "tipo_alerta": "compra_fuerte",
             "score": score,
-
             "score_anterior": score_prev,
-
             "cambio_score": cambio,
-
             "fingerprint": fingerprint,
-
-            "senales_activas": [
-                k for k in CLAVES_COMPRA
-                if senales.get(k)
-            ],
-
-            "motivo": "score_alto_y_senales_de_compra"
+            "senales_activas": [k for k in CLAVES_COMPRA if senales.get(k)],
+            "motivo": "score_alto_y_senales_de_compra",
         }
-
     return None
+
+
+def detectar_compra_potencial(row):
+    ticker = obtener_ticker(row)
+    if not ticker:
+        return None
+
+    score = obtener_score(row)
+    if score != ALERT_COMPRA_POTENCIAL_SCORE:
+        return None
+
+    score_prev = obtener_score_anterior(row)
+    cambio = score - score_prev
+    senales = obtener_senales(row)
+    cantidad = contar_senales(senales, CLAVES_COMPRA)
+    fingerprint = construir_fingerprint(senales, CLAVES_COMPRA)
+    nueva_senal = es_fingerprint_nuevo(ticker, fingerprint)
+    senal_fuerte = senales.get("breakout") or senales.get("macd_bullish_cross")
+    confluencia = cantidad >= 2
+
+    if _disparador_compra(cambio, nueva_senal) and (senal_fuerte or confluencia):
+        return {
+            "ticker": ticker,
+            "mercado": obtener_mercado(row),
+            "tipo_alerta": "compra_potencial",
+            "score": score,
+            "score_anterior": score_prev,
+            "cambio_score": cambio,
+            "fingerprint": fingerprint,
+            "senales_activas": [k for k in CLAVES_COMPRA if senales.get(k)],
+            "motivo": "score_radar_y_senales_de_compra",
+        }
+    return None
+
 
 def detectar_venta(row):
-
     ticker = obtener_ticker(row)
     if not ticker:
         return None
 
     score = obtener_score(row)
+    if score > ALERT_VENTA_MAX_SCORE:
+        return None
+
     score_prev = obtener_score_anterior(row)
     cambio = score - score_prev
     senales = obtener_senales(row)
 
-    cantidad = contar_senales(senales, CLAVES_VENTA)
+    if cambio > ALERT_VENTA_MIN_DELTA:
+        return None
+
     fingerprint = construir_fingerprint(senales, CLAVES_VENTA)
-    nueva_senal = es_fingerprint_nuevo(ticker, fingerprint)
 
-    senal_fuerte = (
-        senales.get("loss_support") or
-        senales.get("breakdown")
-    )
-
-    confluencia = cantidad >= 2
-
-    if (
-        score <= 35 and
-        (
-            cambio <= CAMBIO_SCORE_VENTA or
-            nueva_senal or
-            cambio <= -SALTO_SCORE_IMPORTANTE
-        ) and
-        (senal_fuerte or confluencia)
-    ):
-
-        return {
-           "ticker": ticker,
-"mercado": obtener_mercado(row),
-            "tipo_alerta": "venta",
-            "score": score,
-            "score_anterior": score_prev,
-            "cambio_score": cambio,
-            "fingerprint": fingerprint,
-            "senales_activas": [
-                k for k in CLAVES_VENTA if senales.get(k)
-            ],
-            "motivo": "deterioro_y_senales_de_venta"
-        }
-
-    return None
+    return {
+        "ticker": ticker,
+        "mercado": obtener_mercado(row),
+        "tipo_alerta": "venta",
+        "score": score,
+        "score_anterior": score_prev,
+        "cambio_score": cambio,
+        "fingerprint": fingerprint,
+        "senales_activas": [k for k in CLAVES_VENTA if senales.get(k)],
+        "motivo": "score_bajo_y_deterioro",
+    }
 
 
 def detectar_toma(row):
-
     ticker = obtener_ticker(row)
     if not ticker:
         return None
@@ -261,150 +279,125 @@ def detectar_toma(row):
     cambio = score - score_prev
     senales = obtener_senales(row)
 
-    cantidad = contar_senales(senales, CLAVES_TOMA)
+    if score < ALERT_TOMA_MIN_SCORE or cambio > ALERT_TOMA_MAX_DELTA:
+        return None
+
     fingerprint = construir_fingerprint(senales, CLAVES_TOMA)
-    nueva_senal = es_fingerprint_nuevo(ticker, fingerprint)
 
-    if (
-        score >= 65 and
-        (
-            cambio <= CAMBIO_SCORE_TOMA or
-            nueva_senal
-        ) and
-        cantidad >= 1
-    ):
-
-        return {
-           "ticker": ticker,
-"mercado": obtener_mercado(row),
-            "tipo_alerta": "toma_ganancia",
-            "score": score,
-            "score_anterior": score_prev,
-            "cambio_score": cambio,
-            "fingerprint": fingerprint,
-            "senales_activas": [
-                k for k in CLAVES_TOMA if senales.get(k)
-            ],
-            "motivo": "agotamiento_o_extension"
-        }
-
-    return None
+    return {
+        "ticker": ticker,
+        "mercado": obtener_mercado(row),
+        "tipo_alerta": "toma_ganancia",
+        "score": score,
+        "score_anterior": score_prev,
+        "cambio_score": cambio,
+        "fingerprint": fingerprint,
+        "senales_activas": [k for k in CLAVES_TOMA if senales.get(k)],
+        "motivo": "retroceso_desde_nivel_alto",
+    }
 
 
 def elegir_alerta(alertas):
-
     alertas_validas = [a for a in alertas if a]
-
     if not alertas_validas:
         return None
-
     return sorted(
-
         alertas_validas,
-
-        key=lambda a:PRIORIDAD.get(
-            a["tipo_alerta"],0
-        ),
-
-        reverse=True
-
+        key=lambda a: ALERT_PRIORIDAD.get(a["tipo_alerta"], 0),
+        reverse=True,
     )[0]
 
 
-def dentro_cooldown(alerta, estado_previo):
+def _cooldown_minutos(tipo_alerta: str) -> int:
+    m = ALERT_COOLDOWN_MINUTOS.get(tipo_alerta)
+    if m is not None:
+        return m
+    if tipo_alerta == "compra":
+        return ALERT_COOLDOWN_MINUTOS["compra_fuerte"]
+    return 60
 
+
+def dentro_cooldown(alerta, estado_previo):
     if not estado_previo:
         return False
 
     tipo = alerta["tipo_alerta"]
-
     ultima = estado_previo.get("ultima_alerta")
-
     if not ultima:
         return False
 
     ultima_dt = datetime.fromisoformat(ultima)
-
-    cooldown = COOLDOWNS_MINUTOS.get(tipo,60)
-
-    return (
-        datetime.now() - ultima_dt
-        <
-        timedelta(minutes=cooldown)
-    )
+    cooldown = _cooldown_minutos(tipo)
+    return datetime.now() - ultima_dt < timedelta(minutes=cooldown)
 
 
 def debe_enviar(alerta, estado_previo):
-
     if not estado_previo:
         return True, "primera_alerta"
 
-    mismo_tipo = (
-        estado_previo.get("tipo_alerta")
-        ==
-        alerta.get("tipo_alerta")
-    )
-
-    mismo_fp = (
-        estado_previo.get("fingerprint")
-        ==
-        alerta.get("fingerprint")
-    )
-
-    score_prev = estado_previo.get("score", 0)
+    mismo_tipo = estado_previo.get("tipo_alerta") == alerta.get("tipo_alerta")
+    mismo_fp = estado_previo.get("fingerprint") == alerta.get("fingerprint")
+    score_prev_hist = estado_previo.get("score", 0)
     score_actual = alerta.get("score", 0)
-    cambio = abs(score_actual - score_prev)
+    delta_abs = abs(score_actual - score_prev_hist)
 
     if dentro_cooldown(alerta, estado_previo):
-        if mismo_tipo and mismo_fp and cambio < CAMBIO_MINIMO_REENVIO:
+        if mismo_tipo and mismo_fp and delta_abs < ALERT_REENVIO_SCORE_MIN:
             return False, "duplicada_en_cooldown"
 
-    if mismo_tipo and mismo_fp and cambio < CAMBIO_MINIMO_REENVIO:
+    if mismo_tipo and mismo_fp and delta_abs < ALERT_REENVIO_SCORE_MIN:
         return False, "sin_cambio_relevante"
 
     return True, "enviar"
 
 
 def formatear(alerta):
-
-    iconos = {
-        "compra": "🟢",
-        "venta": "🔴",
-        "toma_ganancia": "🟡"
-    }
-
-    icono = iconos.get(alerta["tipo_alerta"], "📡")
+    tipo = alerta["tipo_alerta"]
+    icono = {
+        "compra_fuerte": "[CF]",
+        "compra_potencial": "[CP]",
+        "venta": "[V]",
+        "toma_ganancia": "[TG]",
+    }.get(tipo, "[*]")
+    etiqueta = ALERT_TIPO_ETIQUETA.get(tipo, tipo.upper())
     senales = ", ".join(alerta["senales_activas"])
     motivo = alerta.get("motivo", "")
 
     return (
-        f"{icono} {alerta['tipo_alerta'].upper()} {alerta['ticker']} ({alerta.get('mercado', '').upper()})\n"
+        f"{icono} {etiqueta} {alerta['ticker']} ({alerta.get('mercado', '').upper()})\n"
         f"Score {alerta['score']} "
-        f"(prev {alerta['score_anterior']} | Δ {alerta['cambio_score']:+})\n"
-        f"Señales: {senales}\n"
+        f"(prev {alerta['score_anterior']} | d {alerta['cambio_score']:+})\n"
+        f"Se\u00f1ales: {senales}\n"
         f"Motivo: {motivo}"
     )
-def procesar_alertas(rows, notifier):
 
+
+def _enriquecer_alerta_export(alerta: dict, mensaje: str) -> None:
+    alerta["Mensaje"] = mensaje
+    alerta["Ticker"] = alerta["ticker"]
+    alerta["TipoAlerta"] = ALERT_TIPO_ETIQUETA.get(
+        alerta["tipo_alerta"], alerta["tipo_alerta"]
+    )
+
+
+def procesar_alertas(rows, notifier):
     enviadas = []
 
     for row in rows:
-
         alertas = [
-            detectar_compra(row),
+            detectar_compra_fuerte(row),
+            detectar_compra_potencial(row),
             detectar_venta(row),
-            detectar_toma(row)
+            detectar_toma(row),
         ]
-
         alerta = elegir_alerta(alertas)
 
         if not alerta:
-            ticker = row.get("ticker", "SIN_TICKER")
+            ticker = obtener_ticker(row) or row.get("ticker", "SIN_TICKER")
             print(f"[ALERTA] {ticker} sin alerta operable")
             continue
 
         previo = get_last_state(alerta["ticker"])
-
         enviar, motivo = debe_enviar(alerta, previo)
 
         if not enviar:
@@ -412,19 +405,14 @@ def procesar_alertas(rows, notifier):
             continue
 
         alerta["ultima_alerta"] = datetime.now().isoformat()
-
         mensaje = formatear(alerta)
+        _enriquecer_alerta_export(alerta, mensaje)
 
         try:
             notifier.send(mensaje)
             save_state(alerta["ticker"], alerta)
             enviadas.append(alerta)
-
-            print(
-                f"[ALERTA] {alerta['ticker']} "
-                f"{alerta['tipo_alerta']} enviada"
-            )
-
+            print(f"[ALERTA] {alerta['ticker']} {alerta['tipo_alerta']} enviada")
         except Exception as e:
             print(
                 f"[ALERTA] error enviando {alerta['ticker']} "
@@ -432,12 +420,6 @@ def procesar_alertas(rows, notifier):
             )
 
     return enviadas
-
-class DummyNotifier:
-    def send(self, message):
-        print("\n=== ALERTA ===")
-        print(message)
-        return True
 
 
 class DummyNotifier:
@@ -448,21 +430,17 @@ class DummyNotifier:
 
 
 def generate_alerts(rows, notifier=None):
-
     if notifier is None:
         notifier = DummyNotifier()
 
     if hasattr(rows, "to_dict"):
         rows = rows.to_dict(orient="records")
 
-    if rows:
-        print("COLUMNAS / EJEMPLO ROW:")
-        print(rows[0])
-
     alertas = procesar_alertas(rows, notifier)
 
     try:
         import pandas as pd
+
         return pd.DataFrame(alertas)
     except Exception:
         return alertas

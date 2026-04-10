@@ -92,7 +92,15 @@ def clear_history():
 # ===== helpers usados por main =====
 
 
-def find_previous_export(folder, filename):
+def _ticker_column_for_merge(df) -> str | None:
+    if "Ticker" in df.columns:
+        return "Ticker"
+    if "ticker" in df.columns:
+        return "ticker"
+    return None
+
+
+def find_previous_export(folder, exclude_path=None):
 
     try:
 
@@ -102,13 +110,33 @@ def find_previous_export(folder, filename):
 
             return None
 
-        file_path = folder_path / filename
+        exclude_resolved = (
+            Path(exclude_path).resolve() if exclude_path is not None else None
+        )
 
-        if file_path.exists():
+        candidates = []
 
-            return file_path
+        for p in folder_path.glob("radar_*.xlsx"):
 
-        return None
+            try:
+
+                if exclude_resolved is not None and p.resolve() == exclude_resolved:
+
+                    continue
+
+                mtime = p.stat().st_mtime
+
+            except OSError:
+
+                continue
+
+            candidates.append((mtime, p))
+
+        if not candidates:
+
+            return None
+
+        return max(candidates, key=lambda x: x[0])[1]
 
     except Exception:
 
@@ -136,8 +164,8 @@ def merge_history(current_df, previous_file, previous_sheet_name=None):
 
         previous_df = pd.read_excel(previous_file, sheet_name=previous_sheet_name)
 
-        ticker_col_actual = "ticker" if "ticker" in current_df.columns else None
-        ticker_col_prev = "ticker" if "ticker" in previous_df.columns else None
+        ticker_col_actual = _ticker_column_for_merge(current_df)
+        ticker_col_prev = _ticker_column_for_merge(previous_df)
 
         score_col_actual = None
         if "TotalScore" in current_df.columns:

@@ -7,3 +7,6 @@ export/
 
 .env
 .vscode/settings.json
+
+webapp/node_modules/
+webapp/dist/

@@ -10,10 +10,10 @@ class DummyNotifier:
 
 rows = [
     {
-        "ticker": "AAPL",
+        "Ticker": "AAPL",
         "mercado": "usa",
-        "score": 85,
-        "score_anterior": 74,
+        "TotalScore": 8,
+        "score_anterior": 6,
         "senales": {
             "breakout": True,
             "macd_bullish_cross": True,

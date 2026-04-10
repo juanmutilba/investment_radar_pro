@@ -39,3 +39,41 @@ RISK_BETA_IDEAL_MIN = 0.8
 RISK_BETA_IDEAL_MAX = 1.6
 RISK_BETA_NEUTRAL_MIN = 0.6
 RISK_BETA_NEUTRAL_MAX = 2.0
+
+# =====================
+# ALERTAS (TotalScore ~ -1..12)
+# =====================
+
+ALERT_COMPRA_FUERTE_MIN = 8
+ALERT_COMPRA_POTENCIAL_SCORE = 7
+
+ALERT_VENTA_MAX_SCORE = 3
+ALERT_VENTA_MIN_DELTA = -2
+
+ALERT_TOMA_MIN_SCORE = 7
+ALERT_TOMA_MAX_DELTA = -2
+
+ALERT_COMPRA_MIN_DELTA = 2
+ALERT_SALTO_SCORE_ABS = 4
+ALERT_REENVIO_SCORE_MIN = 2
+
+ALERT_COOLDOWN_MINUTOS = {
+    "compra_fuerte": 120,
+    "compra_potencial": 120,
+    "venta": 60,
+    "toma_ganancia": 90,
+}
+
+ALERT_PRIORIDAD = {
+    "venta": 4,
+    "toma_ganancia": 3,
+    "compra_fuerte": 2,
+    "compra_potencial": 1,
+}
+
+ALERT_TIPO_ETIQUETA = {
+    "compra_fuerte": "COMPRA FUERTE",
+    "compra_potencial": "COMPRA POTENCIAL",
+    "venta": "VENTA",
+    "toma_ganancia": "TOMA GANANCIA",
+}
