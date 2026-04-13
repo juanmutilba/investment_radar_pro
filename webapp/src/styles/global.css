@@ -169,6 +169,102 @@ a:hover {
   overflow-x: auto;
 }
 
+/** Barra de filtros / búsqueda (Acciones USA). */
+.radar-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.85rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.radar-toolbar__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.radar-toolbar__label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.radar-toolbar__input,
+.radar-toolbar__select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.875rem;
+  padding: 0.4rem 0.55rem;
+  min-width: 0;
+}
+
+.radar-toolbar__input:focus,
+.radar-toolbar__select:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.radar-toolbar__input--narrow {
+  width: 6.5rem;
+}
+
+.radar-toolbar__hint {
+  margin-left: auto;
+  align-self: center;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .radar-toolbar__hint {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+}
+
+/** Contenedor con scroll dentro del módulo (horizontal + vertical acotado). */
+.radar-table-wrap {
+  overflow: auto;
+  max-width: 100%;
+  max-height: min(58vh, 540px);
+  margin: 0;
+  padding-bottom: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent-dim) 55%, var(--border)) var(--bg);
+}
+
+.radar-table-wrap::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+.radar-table-wrap::-webkit-scrollbar-track {
+  background: var(--bg);
+  border-radius: 6px;
+}
+
+.radar-table-wrap::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--bg-hover) 85%, var(--accent-dim));
+  border: 2px solid var(--bg);
+  border-radius: 6px;
+}
+
+.radar-table-wrap::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent-dim) 40%, var(--bg-hover));
+}
+
+.radar-table-wrap::-webkit-scrollbar-corner {
+  background: var(--bg);
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -185,6 +281,163 @@ td {
 th {
   color: var(--text-muted);
   font-weight: 500;
+}
+
+table.radar-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+  min-width: 100%;
+  table-layout: fixed;
+}
+
+table.radar-table th,
+table.radar-table td {
+  vertical-align: top;
+  box-sizing: border-box;
+}
+
+table.radar-table thead th {
+  text-align: center;
+}
+
+table.radar-table .radar-table__th {
+  white-space: nowrap;
+}
+
+table.radar-table .radar-table__th--sticky-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-panel);
+  box-shadow: 0 1px 0 var(--border);
+}
+
+table.radar-table thead .radar-table__sticky-col.radar-table__th--sticky-head {
+  z-index: 4;
+}
+
+table.radar-table .radar-table__th-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  min-height: 1.35rem;
+  padding-left: 10px;
+  padding-right: 14px;
+}
+
+table.radar-table .radar-table__sort-btn {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: center;
+}
+
+table.radar-table .radar-table__sort-btn:hover {
+  color: var(--text);
+}
+
+table.radar-table .radar-table__sort-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+table.radar-table .radar-table__sort-label--static {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+table.radar-table .radar-table__sort-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+table.radar-table .radar-table__sort-priority {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--accent);
+  line-height: 1;
+}
+
+table.radar-table .radar-table__sort-dir {
+  font-size: 0.6rem;
+  line-height: 1;
+}
+
+table.radar-table .radar-table__resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  box-sizing: border-box;
+  cursor: col-resize;
+  z-index: 3;
+  touch-action: none;
+  border-left: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-hover) 65%, transparent);
+}
+
+table.radar-table .radar-table__resize-handle:hover {
+  border-left-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent-dim) 28%, var(--bg-hover));
+}
+
+table.radar-table .radar-table__resize-handle:active {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-hover));
+}
+
+table.radar-table .radar-table__th--help .radar-table__sort-btn {
+  cursor: help;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--text-muted);
+  text-underline-offset: 0.2em;
+}
+
+table.radar-table .radar-table__th--help .radar-table__sort-btn:hover {
+  text-decoration-color: var(--accent-dim);
+}
+
+table.radar-table .radar-table__sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  box-shadow: 4px 0 8px -4px rgba(0, 0, 0, 0.45);
+}
+
+table.radar-table thead .radar-table__sticky-col {
+  z-index: 2;
+}
+
+.table-cell--empty {
+  color: var(--text-muted);
+  opacity: 0.28;
+}
+
+.table-cell--nowrap {
+  white-space: nowrap;
 }
 
 .msg-error {

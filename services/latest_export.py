@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,33 @@ def read_latest_summary() -> dict[str, Any] | None:
         "arg_tickers_count": _nonempty_row_count(arg_df),
         "usa_alerts_count": _nonempty_row_count(usa_alerts),
         "arg_alerts_count": _nonempty_row_count(arg_alerts),
+    }
+
+
+def read_latest_radar() -> dict[str, Any] | None:
+    """
+    Ultimo radar_*.xlsx: filas de la hoja Radar_Completo como lista de objetos JSON-serializables.
+    """
+    path = resolve_latest_export_path()
+    if path is None:
+        return None
+
+    df = _read_sheet(path, "Radar_Completo")
+    if df.empty:
+        rows: list[dict[str, Any]] = []
+    else:
+        df = df.dropna(how="all")
+        if df.empty:
+            rows = []
+        else:
+            rows = json.loads(
+                df.to_json(orient="records", date_format="iso", default_handler=str)
+            )
+
+    return {
+        "file": str(path.resolve()),
+        "sheet": "Radar_Completo",
+        "rows": rows,
     }
 
 

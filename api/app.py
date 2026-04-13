@@ -53,3 +53,11 @@ def get_latest_alerts():
     if alerts is None:
         raise HTTPException(status_code=404, detail="No hay export radar_*.xlsx en la carpeta configurada")
     return alerts
+
+
+@app.get("/latest-radar")
+def get_latest_radar():
+    payload = latest_export.read_latest_radar()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="No hay export radar_*.xlsx en la carpeta configurada")
+    return payload

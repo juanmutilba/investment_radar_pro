@@ -9,7 +9,7 @@ type NavItem = {
 
 const ITEMS: NavItem[] = [
   { to: "/", label: "Dashboard", end: true },
-  { to: "/acciones", label: "Acciones" },
+  { to: "/acciones-usa", label: "Acciones USA" },
   { to: "/cedears", label: "CEDEARs", placeholder: true },
   { to: "/bonos", label: "Bonos", placeholder: true },
   { to: "/opciones", label: "Opciones", placeholder: true },
