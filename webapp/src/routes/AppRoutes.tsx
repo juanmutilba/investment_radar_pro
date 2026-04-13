@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { AccionesArgentinaPage } from "@/pages/AccionesArgentinaPage";
 import { AccionesUsaPage } from "@/pages/AccionesUsaPage";
 import { AlertasPage } from "@/pages/AlertasPage";
 import { DashboardPage } from "@/pages/DashboardPage";
@@ -12,6 +13,7 @@ export function AppRoutes() {
         <Route index element={<DashboardPage />} />
         <Route path="acciones" element={<Navigate to="/acciones-usa" replace />} />
         <Route path="acciones-usa" element={<AccionesUsaPage />} />
+        <Route path="acciones-argentina" element={<AccionesArgentinaPage />} />
         <Route path="alertas" element={<AlertasPage />} />
         <Route
           path="cedears"

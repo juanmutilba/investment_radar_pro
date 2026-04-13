@@ -14,6 +14,7 @@ from core.config import (
     ALERT_VENTA_MIN_DELTA,
 )
 from core.history import get_last_state, save_state
+from datetime import datetime, timedelta
 
 
 CLAVES_COMPRA = [

@@ -50,10 +50,16 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
             technicals = compute_technical_metrics(close)
             pe = format_number(info.get('trailingPE'))
+            price_to_book = format_number(info.get('priceToBook'))
             ebitda = format_number(info.get('ebitda'))
             net_income = format_number(info.get('netIncomeToCommon'))
+            total_debt = format_number(info.get('totalDebt'))
             debt_to_equity = format_number(info.get('debtToEquity'))
             target_price = format_number(info.get('targetMeanPrice'))
+
+            debt_to_ebitda = None
+            if total_debt is not None and ebitda is not None and ebitda > 0:
+                debt_to_ebitda = round(total_debt / ebitda, 2)
 
             upside = None
             if target_price is not None and technicals['Precio']:
@@ -92,9 +98,11 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
                 technicals['Precio'], technicals['RSI'], technicals['MA50'], technicals['MA200'],
                 technicals['MACD_Bull'], technicals['Pullback'], technicals['Trend'],
                 round(pe, 2) if pe is not None else None,
+                round(price_to_book, 2) if price_to_book is not None else None,
                 ebitda,
                 net_income,
                 round(debt_to_equity, 2) if debt_to_equity is not None else None,
+                debt_to_ebitda,
                 round(target_price, 2) if target_price is not None else None,
                 round(upside * 100, 2) if upside is not None else None,
                 tech_score, fund_score, total_score,
@@ -112,7 +120,7 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         'Ticker', 'Empresa', 'Sector', 'Industria', 'TipoUniverso',
         'MarketCap', 'Beta', 'ROE', 'RiskProfile', 'RiskScore',
         'Precio', 'RSI', 'MA50', 'MA200', 'MACD_Bull', 'Pullback', 'Trend',
-        'PE', 'EBITDA', 'NetIncome', 'DebtToEquity', 'TargetPrice', 'Upside_%',
+        'PE', 'PriceToBook', 'EBITDA', 'NetIncome', 'DebtToEquity', 'DebtToEbitda', 'TargetPrice', 'Upside_%',
         'TechScore', 'FundScore', 'TotalScore', 'Setup', 'SignalState',
         'Conviccion', 'CapitalSugerido_%',
     ])

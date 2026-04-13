@@ -51,15 +51,8 @@ def read_latest_summary() -> dict[str, Any] | None:
     }
 
 
-def read_latest_radar() -> dict[str, Any] | None:
-    """
-    Ultimo radar_*.xlsx: filas de la hoja Radar_Completo como lista de objetos JSON-serializables.
-    """
-    path = resolve_latest_export_path()
-    if path is None:
-        return None
-
-    df = _read_sheet(path, "Radar_Completo")
+def _df_to_radar_payload(path: Path, sheet: str) -> dict[str, Any]:
+    df = _read_sheet(path, sheet)
     if df.empty:
         rows: list[dict[str, Any]] = []
     else:
@@ -73,9 +66,29 @@ def read_latest_radar() -> dict[str, Any] | None:
 
     return {
         "file": str(path.resolve()),
-        "sheet": "Radar_Completo",
+        "sheet": sheet,
         "rows": rows,
     }
+
+
+def read_latest_radar() -> dict[str, Any] | None:
+    """
+    Ultimo radar_*.xlsx: filas de la hoja Radar_Completo como lista de objetos JSON-serializables.
+    """
+    path = resolve_latest_export_path()
+    if path is None:
+        return None
+    return _df_to_radar_payload(path, "Radar_Completo")
+
+
+def read_latest_radar_argentina() -> dict[str, Any] | None:
+    """
+    Ultimo radar_*.xlsx: filas de Radar_Argentina_Completo.
+    """
+    path = resolve_latest_export_path()
+    if path is None:
+        return None
+    return _df_to_radar_payload(path, "Radar_Argentina_Completo")
 
 
 def _cell(row: pd.Series, *names: str) -> Any:

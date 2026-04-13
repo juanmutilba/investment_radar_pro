@@ -67,3 +67,98 @@ export async function fetchLatestRadar(): Promise<LatestRadarResponse | null> {
   }
   return data;
 }
+
+/**
+ * GET /latest-radar-argentina — hoja Radar_Argentina_Completo del último export.
+ */
+export async function fetchLatestRadarArgentina(): Promise<LatestRadarResponse | null> {
+  const res = await fetch(`${BASE}/latest-radar-argentina`);
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+  }
+  const data: unknown = await res.json();
+  if (!isLatestRadarResponse(data)) {
+    throw new Error("Respuesta inesperada: se esperaba { file, sheet, rows }");
+  }
+  return data;
+}
+
+export type LatestSummary = {
+  file: string;
+  usa_tickers_count: number;
+  arg_tickers_count: number;
+  usa_alerts_count: number;
+  arg_alerts_count: number;
+};
+
+function isLatestSummary(data: unknown): data is LatestSummary {
+  if (data === null || typeof data !== "object") {
+    return false;
+  }
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.file === "string" &&
+    typeof o.usa_tickers_count === "number" &&
+    typeof o.arg_tickers_count === "number" &&
+    typeof o.usa_alerts_count === "number" &&
+    typeof o.arg_alerts_count === "number"
+  );
+}
+
+/** GET /latest-summary. null si no hay export (404). */
+export async function fetchLatestSummary(): Promise<LatestSummary | null> {
+  const res = await fetch(`${BASE}/latest-summary`);
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+  }
+  const data: unknown = await res.json();
+  if (!isLatestSummary(data)) {
+    throw new Error("Respuesta inesperada: latest-summary");
+  }
+  return data;
+}
+
+export type RunScanResponse = {
+  status: "ok";
+  summary: LatestSummary;
+};
+
+async function readHttpErrorMessage(res: Response): Promise<string> {
+  try {
+    const body: unknown = await res.json();
+    if (body !== null && typeof body === "object" && "detail" in body) {
+      const d = (body as { detail: unknown }).detail;
+      if (typeof d === "string") {
+        return d;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return res.statusText || `HTTP ${res.status}`;
+}
+
+/** POST /run-scan: ejecuta pipeline + export en el backend. */
+export async function runScan(): Promise<RunScanResponse> {
+  const res = await fetch(`${BASE}/run-scan`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(await readHttpErrorMessage(res));
+  }
+  const data: unknown = await res.json();
+  if (
+    data === null ||
+    typeof data !== "object" ||
+    (data as { status?: unknown }).status !== "ok" ||
+    !isLatestSummary((data as { summary?: unknown }).summary)
+  ) {
+    throw new Error("Respuesta inesperada: run-scan");
+  }
+  const o = data as { status: "ok"; summary: LatestSummary };
+  return { status: o.status, summary: o.summary };
+}

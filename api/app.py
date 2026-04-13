@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 
 from services import latest_export
+from services.export_service import export_results
 from services.scan_service import run_full_scan
 
 app = FastAPI(title="Investment Radar API", version="0.1.0")
@@ -16,27 +17,24 @@ def health():
 @app.post("/run-scan")
 def run_scan():
     """
-    Ejecuta el mismo pipeline que el CLI (sin prints de motores).
-    No escribe Excel/CSV; solo devuelve un resumen JSON.
+    Misma secuencia que el CLI: scan completo + export Excel/CSV.
+    Sin prints de motores (verbose=False). Devuelve estado y resumen leído del export.
     """
-    result = run_full_scan(verbose=False)
+    try:
+        outputs = run_full_scan(verbose=False)
+        outputs.pop("previous_file")
+        export_results(outputs)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
-    usa_alerts = result["usa_alerts"]
-    arg_alerts = result["arg_alerts"]
+    summary = latest_export.read_latest_summary()
+    if summary is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Scan completado pero no se pudo leer el resumen del export",
+        )
 
-    usa_alerts_count = len(usa_alerts) if usa_alerts is not None else 0
-    arg_alerts_count = len(arg_alerts) if arg_alerts is not None else 0
-
-    prev = result.get("previous_file")
-    previous_export = str(prev) if prev is not None else None
-
-    return {
-        "usa_alerts_count": usa_alerts_count,
-        "arg_alerts_count": arg_alerts_count,
-        "usa_tickers_count": len(result["usa_df"]),
-        "arg_tickers_count": len(result["arg_df"]),
-        "previous_export_used": previous_export,
-    }
+    return {"status": "ok", "summary": summary}
 
 
 @app.get("/latest-summary")
@@ -58,6 +56,14 @@ def get_latest_alerts():
 @app.get("/latest-radar")
 def get_latest_radar():
     payload = latest_export.read_latest_radar()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="No hay export radar_*.xlsx en la carpeta configurada")
+    return payload
+
+
+@app.get("/latest-radar-argentina")
+def get_latest_radar_argentina():
+    payload = latest_export.read_latest_radar_argentina()
     if payload is None:
         raise HTTPException(status_code=404, detail="No hay export radar_*.xlsx en la carpeta configurada")
     return payload
