@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   fetchLatestSummary,
   runScan,
@@ -6,6 +7,12 @@ import {
 } from "@/services/api";
 
 type ScanPhase = "idle" | "loading" | "success" | "error";
+
+function fileBasename(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const i = normalized.lastIndexOf("/");
+  return i >= 0 ? normalized.slice(i + 1) : normalized;
+}
 
 export function DashboardPage() {
   const [summary, setSummary] = useState<LatestSummary | null>(null);
@@ -47,76 +54,130 @@ export function DashboardPage() {
     }
   }, []);
 
-  const totalAlerts =
-    summary !== null
-      ? summary.usa_alerts_count + summary.arg_alerts_count
-      : null;
+  const scanStatusText =
+    scanPhase === "loading"
+      ? "Ejecutando"
+      : scanPhase === "success"
+        ? "Éxito"
+        : scanPhase === "error"
+          ? "Error"
+          : "Listo";
 
   return (
     <>
       <h1 className="page-title">Dashboard</h1>
       <p className="page-desc">
-        Vista general del radar. Ejecutá el scan aquí; en Acciones USA /
-        Argentina solo se visualizan y refrescan los datos ya generados.
+        Centro operativo del radar: ejecutá el scan, revisá totales del último
+        export y accedé a los módulos de mercado.
       </p>
 
-      <div className="dashboard__scan-row">
-        <button
-          type="button"
-          className="radar-refresh-btn"
-          disabled={scanPhase === "loading"}
-          onClick={() => void handleRunScan()}
-        >
-          {scanPhase === "loading" ? "Ejecutando…" : "Ejecutar scan"}
-        </button>
+      <div className="card dashboard-scan-card">
+        <div className="dashboard-scan-card__head">
+          <h2 className="dashboard-scan-card__title">Scan del radar</h2>
+          <span
+            className={`dashboard-scan__pill dashboard-scan__pill--${scanPhase}`}
+            aria-live="polite"
+          >
+            {scanStatusText}
+          </span>
+        </div>
+        <p className="dashboard-scan-card__lede msg-muted">
+          Ejecutá el pipeline completo y generá el Excel. Las vistas de acciones
+          solo leen el último export.
+        </p>
+        <div className="dashboard-scan-card__actions">
+          <button
+            type="button"
+            className="radar-refresh-btn"
+            disabled={scanPhase === "loading"}
+            onClick={() => void handleRunScan()}
+          >
+            {scanPhase === "loading" ? "Ejecutando…" : "Ejecutar scan"}
+          </button>
+        </div>
+
         {scanPhase === "success" && scanMessage !== null ? (
-          <span className="msg-success">{scanMessage}</span>
+          <div
+            className="dashboard-scan__result dashboard-scan__result--success"
+            role="status"
+            aria-live="polite"
+          >
+            <strong>Resultado:</strong> {scanMessage}
+          </div>
         ) : null}
         {scanPhase === "error" && scanMessage !== null ? (
-          <span className="msg-error">{scanMessage}</span>
+          <div
+            className="dashboard-scan__result dashboard-scan__result--error"
+            role="alert"
+          >
+            <strong>No se completó el scan.</strong> {scanMessage}
+          </div>
+        ) : null}
+
+        {summary?.file ? (
+          <p className="dashboard-scan__export msg-muted">
+            <span className="dashboard-scan__export-label">Último export</span>{" "}
+            <code className="dashboard-scan__export-path">{fileBasename(summary.file)}</code>
+          </p>
+        ) : null}
+
+        {summaryError !== null ? (
+          <p className="msg-error" style={{ marginBottom: 0 }}>
+            {summaryError}
+          </p>
         ) : null}
       </div>
 
-      {summaryError !== null ? (
-        <p className="msg-error" style={{ marginTop: 0 }}>
-          {summaryError}
-        </p>
-      ) : null}
-
-      <div className="grid-3">
-        <div className="stat">
-          <div className="stat__label">Radar USA</div>
+      <h2 className="dashboard-section-title">Resumen del último export</h2>
+      <div className="dashboard-stats-grid">
+        <div className="stat dashboard-stat">
+          <div className="stat__label">Activos USA</div>
           <div className="stat__value">
             {summary !== null ? summary.usa_tickers_count : "—"}
           </div>
-          <div className="msg-muted" style={{ marginTop: "0.35rem" }}>
-            tickers en último export
-          </div>
+          <div className="msg-muted dashboard-stat__hint">Filas en Radar_Completo</div>
         </div>
-        <div className="stat">
-          <div className="stat__label">Radar Argentina</div>
+        <div className="stat dashboard-stat">
+          <div className="stat__label">Activos Argentina</div>
           <div className="stat__value">
             {summary !== null ? summary.arg_tickers_count : "—"}
           </div>
-          <div className="msg-muted" style={{ marginTop: "0.35rem" }}>
-            tickers en último export
+          <div className="msg-muted dashboard-stat__hint">
+            Filas en Radar_Argentina_Completo
           </div>
         </div>
-        <div className="stat">
-          <div className="stat__label">Alertas (último export)</div>
+        <div className="stat dashboard-stat">
+          <div className="stat__label">Alertas USA</div>
           <div className="stat__value">
-            {totalAlerts !== null ? totalAlerts : "—"}
+            {summary !== null ? summary.usa_alerts_count : "—"}
           </div>
-          <div className="msg-muted" style={{ marginTop: "0.35rem" }}>
-            USA + Argentina · Ver módulo Alertas
+          <div className="msg-muted dashboard-stat__hint">Hoja Alertas_USA</div>
+        </div>
+        <div className="stat dashboard-stat">
+          <div className="stat__label">Alertas Argentina</div>
+          <div className="stat__value">
+            {summary !== null ? summary.arg_alerts_count : "—"}
           </div>
+          <div className="msg-muted dashboard-stat__hint">Hoja Alertas_Argentina</div>
         </div>
       </div>
+
       <div className="card">
-        <h2>Datos</h2>
-        <p className="msg-muted" style={{ margin: 0 }}>
-          Las tarjetas usan <code>GET /latest-summary</code>. Tras un scan
-          exitoso, el resumen se actualiza automáticamente.
+        <h2>Accesos rápidos</h2>
+        <nav className="dashboard-quick" aria-label="Accesos rápidos">
+          <Link to="/acciones-usa" className="dashboard-quick__link">
+            Acciones USA
+          </Link>
+          <Link to="/acciones-argentina" className="dashboard-quick__link">
+            Acciones Argentina
+          </Link>
+          <Link to="/alertas" className="dashboard-quick__link">
+            Alertas
+          </Link>
+        </nav>
+        <p className="msg-muted" style={{ margin: "0.85rem 0 0", fontSize: "0.82rem" }}>
+          Datos de las tarjetas: <code>GET /latest-summary</code> (mismos conteos que
+          el backend lee del Excel).
         </p>
       </div>
     </>
