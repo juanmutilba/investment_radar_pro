@@ -1,26 +1,56 @@
 TICKERS_CORE = [
     'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'AMD', 'NFLX', 'MELI',
     'KO', 'PEP', 'WMT', 'COST', 'PG', 'JNJ', 'UNH', 'XOM', 'CVX', 'V',
-    'MA', 'JPM', 'HD', 'DIS', 'MCD', 'NKE', 'CAT', 'BA', 'IBM', 'ORCL'
+    'MA', 'JPM', 'HD', 'DIS', 'MCD', 'NKE', 'CAT', 'BA', 'IBM', 'ORCL',
+]
+
+# Mega/large cap y líquidos (S&P / Nasdaq); sin solapar con CORE/ETF/GROWTH.
+TICKERS_EXTENDED = [
+    'LLY', 'ABBV', 'MRK', 'TMO', 'ABT', 'ACN', 'DHR', 'VZ', 'PM', 'TXN',
+    'QCOM', 'INTU', 'ISRG', 'AMAT', 'MU', 'ADI', 'LRCX', 'KLAC', 'SNPS', 'CDNS',
+    'SYK', 'GILD', 'MDLZ', 'ELV', 'CI', 'HUM', 'BSX', 'EW', 'ZTS', 'REGN',
+    'SCHW', 'BLK', 'SPGI', 'MCO', 'ICE', 'CME', 'BKNG', 'TMUS', 'CMCSA', 'T',
+    'NEE', 'SO', 'DUK', 'AEP',     'MMC', 'CB', 'PGR', 'ALL', 'LOW', 'TGT',
+    'SBUX', 'F', 'GM', 'GE', 'RTX', 'LMT', 'NOC', 'GD', 'DE',
+    'EMR', 'ETN', 'ITW', 'FDX', 'UPS', 'SLB', 'COP', 'OXY', 'MPC', 'PSX',
+    'VLO', 'EOG', 'WFC', 'BAC', 'C', 'MET', 'PYPL', 'UBER', 'PANW', 'CRWD',
+    'SNOW', 'NET', 'DDOG', 'SHOP', 'COIN', 'RBLX', 'BRK-B', 'AXP', 'GS', 'MS',
 ]
 
 TICKERS_ETF = [
-    'SPY', 'QQQ', 'DIA', 'IWM', 'EEM', 'XLF', 'XLE', 'XLK', 'ARKK', 'IVV'
+    'SPY', 'QQQ', 'DIA', 'IWM', 'EEM', 'XLF', 'XLE', 'XLK', 'ARKK', 'IVV',
 ]
 
 TICKERS_GROWTH = [
-    'ASML', 'TEAM', 'NOW', 'PATH', 'CEG', 'HOOD', 'RKLB', 'OKLO', 'AI', 'TEM'
+    'ASML', 'TEAM', 'NOW', 'PATH', 'CEG', 'HOOD', 'RKLB', 'OKLO', 'AI', 'TEM',
 ]
 
-TICKERS_USA = TICKERS_CORE + TICKERS_ETF + TICKERS_GROWTH
+
+def _dedupe_preserve_order(seq: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in seq:
+        u = x.upper().strip()
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+TICKERS_USA = _dedupe_preserve_order(
+    TICKERS_CORE + TICKERS_EXTENDED + TICKERS_ETF + TICKERS_GROWTH,
+)
 
 
 def classify_universe_type(ticker: str) -> str:
-    if ticker in TICKERS_CORE:
+    t = (ticker or "").upper().strip()
+    if t in TICKERS_CORE:
         return 'CORE'
-    if ticker in TICKERS_ETF:
+    if t in TICKERS_EXTENDED:
+        return 'CORE'
+    if t in TICKERS_ETF:
         return 'ETF'
-    if ticker in TICKERS_GROWTH:
+    if t in TICKERS_GROWTH:
         return 'GROWTH'
     return 'OTRO'
 
@@ -34,7 +64,7 @@ DOW_JONES_TICKERS = {
     "NKE", "PG", "TRV", "UNH", "V", "VZ", "WBA", "WMT", "XOM",
 }
 
-SP500_TICKERS = set(TICKERS_CORE) | set(TICKERS_GROWTH)
+SP500_TICKERS = set(TICKERS_CORE) | set(TICKERS_EXTENDED) | set(TICKERS_GROWTH)
 
 
 def classify_universe_visual(*, ticker: str, exchange: str | None = None) -> str:
