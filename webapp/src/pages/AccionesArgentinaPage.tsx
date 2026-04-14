@@ -1,9 +1,13 @@
+import { useSearchParams } from "react-router-dom";
 import { RadarMarketTablePage } from "@/components/radar/RadarMarketTablePage";
 import { formatEbitdaArs, formatPrecioDolarAr } from "@/components/radar/radarTableCore";
 import { COLUMNS_ARGENTINA } from "@/components/radar/radarTableModel";
 import { fetchLatestRadarArgentina } from "@/services/api";
 
 export function AccionesArgentinaPage() {
+  const [params] = useSearchParams();
+  const initialSearch = params.get("ticker")?.trim() || undefined;
+
   return (
     <RadarMarketTablePage
       pageTitle="ACCIONES ARGENTINA"
@@ -11,6 +15,7 @@ export function AccionesArgentinaPage() {
       fetchRadar={fetchLatestRadarArgentina}
       formatEbitda={formatEbitdaArs}
       formatPrecio={formatPrecioDolarAr}
+      initialSearch={initialSearch}
       universe={{
         label: "Universo",
         allLabel: "Todas",

@@ -28,6 +28,8 @@ export type RadarMarketTablePageProps = {
   /** Si se define, columna Precio usa solo este formateo visual (orden sigue con el número crudo). */
   formatPrecio?: CellFormatOptions["formatPrecio"];
   emptySheetMessage: string;
+  /** Valor inicial del campo Buscar (p. ej. desde <code>?ticker=</code> en la ruta). */
+  initialSearch?: string;
   universe?: {
     label: string;
     allLabel: string;
@@ -51,6 +53,7 @@ export function RadarMarketTablePage({
   formatEbitda,
   formatPrecio,
   universe,
+  initialSearch,
   emptySheetMessage,
 }: RadarMarketTablePageProps) {
   const cellOpts = useMemo<CellFormatOptions>(
@@ -87,7 +90,7 @@ export function RadarMarketTablePage({
   const colWidthsRef = useRef(colWidths);
   colWidthsRef.current = colWidths;
 
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => (initialSearch ?? "").trim());
   const [sector, setSector] = useState<string>("");
   const [minTotalScore, setMinTotalScore] = useState<string>("");
   const [quickFilter, setQuickFilter] = useState<QuickFilterId | null>(null);
@@ -140,12 +143,16 @@ export function RadarMarketTablePage({
       setColWidths(initialColWidths(columns));
       setSector("");
       setMinTotalScore("");
-      setSearch("");
+      setSearch((initialSearch ?? "").trim());
       setQuickFilter(null);
       setSortCriteria([]);
       setUniverseValue("");
     }
-  }, [radar?.file, columns]);
+  }, [radar?.file, columns, initialSearch]);
+
+  useEffect(() => {
+    setSearch((initialSearch ?? "").trim());
+  }, [initialSearch]);
 
   // Si hubo error de fetch/parseo, no queremos quedar "pegados" en loading.
   const loading = radar === undefined && error === null;

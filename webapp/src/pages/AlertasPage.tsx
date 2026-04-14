@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   fetchAlertHistory,
   fetchLatestAlerts,
@@ -7,6 +8,9 @@ import {
 } from "@/services/api";
 
 type AlertasTab = "actuales" | "historial";
+
+/** Filtro global por mercado (normalizado con mercadoBucket). "" = todas. */
+type MercadoFiltroVista = "" | "usa" | "argentina";
 
 const HISTORY_FETCH_LIMIT = 800;
 
@@ -87,6 +91,45 @@ function mercadoBucket(
   return "otro";
 }
 
+/** Ruta al radar con filtro inicial; null si mercado no es USA/Argentina o no hay ticker. */
+function radarHrefForTicker(
+  ticker: string | null | undefined,
+  mercado: string | null | undefined,
+): string | null {
+  const t = ticker?.trim();
+  if (!t) return null;
+  const b = mercadoBucket(mercado);
+  const q = new URLSearchParams({ ticker: t }).toString();
+  if (b === "usa") return `/acciones-usa?${q}`;
+  if (b === "argentina") return `/acciones-argentina?${q}`;
+  return null;
+}
+
+function TickerRadarLink({
+  ticker,
+  mercado,
+}: {
+  ticker: string | null;
+  mercado: string | null;
+}) {
+  const href = radarHrefForTicker(ticker, mercado);
+  if (!ticker?.trim()) {
+    return <>—</>;
+  }
+  if (!href) {
+    return <span className="table-cell--nowrap">{ticker}</span>;
+  }
+  return (
+    <Link
+      to={href}
+      className="table-cell--nowrap"
+      title={`Abrir ${ticker} en el radar (${mercado ?? "mercado"})`}
+    >
+      {ticker}
+    </Link>
+  );
+}
+
 export function AlertasPage() {
   const [tab, setTab] = useState<AlertasTab>("actuales");
   const [alerts, setAlerts] = useState<LatestAlert[] | null>(null);
@@ -96,6 +139,7 @@ export function AlertasPage() {
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
+  const [mercadoFiltro, setMercadoFiltro] = useState<MercadoFiltroVista>("");
   const [filterMercado, setFilterMercado] = useState("");
   const [filterTicker, setFilterTicker] = useState("");
   const [filterTipo, setFilterTipo] = useState("");
@@ -164,10 +208,19 @@ export function AlertasPage() {
     return [...set].sort((a, b) => a.localeCompare(b, "es", { sensitivity: "base" }));
   }, [history]);
 
+  const alertsFiltradasMercado = useMemo(() => {
+    if (!alerts) return null;
+    if (!mercadoFiltro) return alerts;
+    return alerts.filter((a) => mercadoBucket(a.mercado) === mercadoFiltro);
+  }, [alerts, mercadoFiltro]);
+
   const filteredHistory = useMemo(() => {
     const rows = history ?? [];
     const qTick = filterTicker.trim().toLowerCase();
     return rows.filter((h) => {
+      if (mercadoFiltro && mercadoBucket(h.mercado) !== mercadoFiltro) {
+        return false;
+      }
       if (filterMercado && (h.mercado ?? "").trim() !== filterMercado) {
         return false;
       }
@@ -184,7 +237,7 @@ export function AlertasPage() {
       }
       return true;
     });
-  }, [history, filterMercado, filterTicker, filterTipo]);
+  }, [history, mercadoFiltro, filterMercado, filterTicker, filterTipo]);
 
   const resumenActualesUsa = useMemo(() => {
     if (loading) return null;
@@ -263,6 +316,43 @@ export function AlertasPage() {
       </div>
 
       <div
+        role="group"
+        aria-label="Filtrar listados por mercado"
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "0.5rem",
+          marginBottom: "1rem",
+        }}
+      >
+        <span className="radar-toolbar__label" style={{ marginRight: "0.15rem" }}>
+          Mercado
+        </span>
+        <button
+          type="button"
+          className={`radar-chip${mercadoFiltro === "" ? " radar-chip--active" : ""}`}
+          onClick={() => setMercadoFiltro("")}
+        >
+          Todas
+        </button>
+        <button
+          type="button"
+          className={`radar-chip${mercadoFiltro === "usa" ? " radar-chip--active" : ""}`}
+          onClick={() => setMercadoFiltro("usa")}
+        >
+          USA
+        </button>
+        <button
+          type="button"
+          className={`radar-chip${mercadoFiltro === "argentina" ? " radar-chip--active" : ""}`}
+          onClick={() => setMercadoFiltro("argentina")}
+        >
+          Argentina
+        </button>
+      </div>
+
+      <div
         className="alertas-tablist"
         role="tablist"
         aria-label="Secciones de alertas"
@@ -306,7 +396,15 @@ export function AlertasPage() {
           {!loading && !error && alerts && alerts.length === 0 && (
             <p className="msg-muted">No hay alertas en el último export.</p>
           )}
-          {!loading && !error && alerts && alerts.length > 0 && (
+          {!loading &&
+            !error &&
+            alerts &&
+            alerts.length > 0 &&
+            alertsFiltradasMercado &&
+            alertsFiltradasMercado.length === 0 && (
+              <p className="msg-muted">No hay alertas para el mercado seleccionado.</p>
+            )}
+          {!loading && !error && alertsFiltradasMercado && alertsFiltradasMercado.length > 0 && (
             <div className="table-wrap">
               <table>
                 <thead>
@@ -320,9 +418,11 @@ export function AlertasPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {alerts.map((a, i) => (
+                  {alertsFiltradasMercado.map((a, i) => (
                     <tr key={`${a.ticker ?? "x"}-${i}`}>
-                      <td className="table-cell--nowrap">{a.ticker ?? "—"}</td>
+                      <td>
+                        <TickerRadarLink ticker={a.ticker} mercado={a.mercado} />
+                      </td>
                       <td>
                         <span className={classForTipoAlerta(a.tipo_alerta, a.tipo_alerta)}>
                           {a.tipo_alerta ?? "—"}
@@ -449,7 +549,9 @@ export function AlertasPage() {
                         >
                           {shortenScanId(h.scan_id)}
                         </td>
-                        <td className="table-cell--nowrap">{h.ticker ?? "—"}</td>
+                        <td>
+                          <TickerRadarLink ticker={h.ticker} mercado={h.mercado} />
+                        </td>
                         <td>{h.mercado ?? "—"}</td>
                         <td>{segmentLabel(h)}</td>
                         <td>
