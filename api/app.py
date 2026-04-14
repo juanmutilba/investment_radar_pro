@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 
 from services import latest_export
+from services.alert_event_log import read_alert_events
 from services.export_service import export_results
 from services.scan_service import run_full_scan
 
@@ -51,6 +52,14 @@ def get_latest_alerts():
     if alerts is None:
         raise HTTPException(status_code=404, detail="No hay export radar_*.xlsx en la carpeta configurada")
     return alerts
+
+
+@app.get("/alert-history")
+def get_alert_history(limit: int = Query(default=500, ge=1, le=50_000)):
+    """
+    Historial append-only de alertas detectadas por scan (JSONL en disco).
+    """
+    return read_alert_events(limit=limit)
 
 
 @app.get("/latest-radar")

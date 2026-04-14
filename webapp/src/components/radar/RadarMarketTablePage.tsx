@@ -28,6 +28,12 @@ export type RadarMarketTablePageProps = {
   /** Si se define, columna Precio usa solo este formateo visual (orden sigue con el número crudo). */
   formatPrecio?: CellFormatOptions["formatPrecio"];
   emptySheetMessage: string;
+  universe?: {
+    label: string;
+    allLabel: string;
+    keys: string[];
+    options: string[];
+  };
 };
 
 function colKeys(columns: ColumnDef[], id: string): string[] {
@@ -44,6 +50,7 @@ export function RadarMarketTablePage({
   fetchRadar,
   formatEbitda,
   formatPrecio,
+  universe,
   emptySheetMessage,
 }: RadarMarketTablePageProps) {
   const cellOpts = useMemo<CellFormatOptions>(
@@ -87,6 +94,7 @@ export function RadarMarketTablePage({
   const [sortCriteria, setSortCriteria] = useState<SortCriterion[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [universeValue, setUniverseValue] = useState<string>("");
 
   const onRefreshRadar = useCallback(() => {
     setRefreshError(null);
@@ -135,10 +143,12 @@ export function RadarMarketTablePage({
       setSearch("");
       setQuickFilter(null);
       setSortCriteria([]);
+      setUniverseValue("");
     }
   }, [radar?.file, columns]);
 
-  const loading = radar === undefined;
+  // Si hubo error de fetch/parseo, no queremos quedar "pegados" en loading.
+  const loading = radar === undefined && error === null;
   const noExport = radar === null;
   const rows = radar?.rows ?? [];
   const emptySheet = radar !== null && radar !== undefined && rows.length === 0;
@@ -156,6 +166,9 @@ export function RadarMarketTablePage({
 
   const filteredRows = useMemo(() => {
     let out = rows;
+    if (universe && universeValue) {
+      out = out.filter((r) => String(getRaw(r, universe.keys) ?? "").trim() === universeValue);
+    }
     const q = search.trim().toLowerCase();
     if (q) {
       out = out.filter((r) => {
@@ -201,6 +214,8 @@ export function RadarMarketTablePage({
     return out;
   }, [
     rows,
+    universe,
+    universeValue,
     search,
     sector,
     minTotalScore,
@@ -212,6 +227,7 @@ export function RadarMarketTablePage({
     rsiKeys,
     fundKeys,
     debtEbitdaKeys,
+    universe?.keys,
   ]);
 
   const displayRows = useMemo(() => {
@@ -339,6 +355,33 @@ export function RadarMarketTablePage({
       {!loading && !noExport && !emptySheet && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <div className="radar-toolbar" aria-label="Filtros del listado">
+            {universe ? (
+              <div
+                className="radar-toolbar__quick"
+                role="group"
+                aria-label={universe.label}
+                style={{ flexBasis: "100%", marginTop: 0, paddingTop: 0, borderTop: "none" }}
+              >
+                <span className="radar-toolbar__label">{universe.label}</span>
+                <button
+                  type="button"
+                  className={`radar-chip${universeValue === "" ? " radar-chip--active" : ""}`}
+                  onClick={() => setUniverseValue("")}
+                >
+                  {universe.allLabel}
+                </button>
+                {universe.options.map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    className={`radar-chip${universeValue === opt ? " radar-chip--active" : ""}`}
+                    onClick={() => setUniverseValue(opt)}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <label className="radar-toolbar__field">
               <span className="radar-toolbar__label">Buscar</span>
               <input
@@ -415,6 +458,7 @@ export function RadarMarketTablePage({
               {displayRows.length} de {rows.length} filas
               {sortCriteria.length > 1 ? ` · ${sortCriteria.length} niveles de orden` : ""}
               {quickFilter ? " · filtro rápido activo" : ""}
+              {universe && universeValue ? ` · ${universe.label.toLowerCase()}: ${universeValue}` : ""}
             </p>
           </div>
 

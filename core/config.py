@@ -45,7 +45,11 @@ RISK_BETA_NEUTRAL_MAX = 2.0
 # =====================
 
 ALERT_COMPRA_FUERTE_MIN = 8
-ALERT_COMPRA_POTENCIAL_SCORE = 7
+# Compra potencial: rango inclusivo de TotalScore (equivale a score == 7 con MIN=MAX=7).
+ALERT_COMPRA_POTENCIAL_SCORE_MIN = 7
+ALERT_COMPRA_POTENCIAL_SCORE_MAX = 7
+# Señales de compra simultáneas si no hay breakout ni MACD alcista.
+ALERT_COMPRA_CONFLUENCIA_MIN = 2
 
 ALERT_VENTA_MAX_SCORE = 3
 ALERT_VENTA_MIN_DELTA = -2

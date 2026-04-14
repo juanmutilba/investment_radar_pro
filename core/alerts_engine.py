@@ -1,8 +1,10 @@
 
 from core.config import (
+    ALERT_COMPRA_CONFLUENCIA_MIN,
     ALERT_COMPRA_FUERTE_MIN,
     ALERT_COMPRA_MIN_DELTA,
-    ALERT_COMPRA_POTENCIAL_SCORE,
+    ALERT_COMPRA_POTENCIAL_SCORE_MAX,
+    ALERT_COMPRA_POTENCIAL_SCORE_MIN,
     ALERT_COOLDOWN_MINUTOS,
     ALERT_PRIORIDAD,
     ALERT_REENVIO_SCORE_MIN,
@@ -15,6 +17,7 @@ from core.config import (
 )
 from core.history import get_last_state, save_state
 from datetime import datetime, timedelta
+
 
 
 CLAVES_COMPRA = [
@@ -189,7 +192,7 @@ def detectar_compra_fuerte(row):
     fingerprint = construir_fingerprint(senales, CLAVES_COMPRA)
     nueva_senal = es_fingerprint_nuevo(ticker, fingerprint)
     senal_fuerte = senales.get("breakout") or senales.get("macd_bullish_cross")
-    confluencia = cantidad >= 2
+    confluencia = cantidad >= ALERT_COMPRA_CONFLUENCIA_MIN
 
     if _disparador_compra(cambio, nueva_senal) and (senal_fuerte or confluencia):
         return {
@@ -212,7 +215,7 @@ def detectar_compra_potencial(row):
         return None
 
     score = obtener_score(row)
-    if score != ALERT_COMPRA_POTENCIAL_SCORE:
+    if score < ALERT_COMPRA_POTENCIAL_SCORE_MIN or score > ALERT_COMPRA_POTENCIAL_SCORE_MAX:
         return None
 
     score_prev = obtener_score_anterior(row)
@@ -222,7 +225,7 @@ def detectar_compra_potencial(row):
     fingerprint = construir_fingerprint(senales, CLAVES_COMPRA)
     nueva_senal = es_fingerprint_nuevo(ticker, fingerprint)
     senal_fuerte = senales.get("breakout") or senales.get("macd_bullish_cross")
-    confluencia = cantidad >= 2
+    confluencia = cantidad >= ALERT_COMPRA_CONFLUENCIA_MIN
 
     if _disparador_compra(cambio, nueva_senal) and (senal_fuerte or confluencia):
         return {
@@ -445,3 +448,30 @@ def generate_alerts(rows, notifier=None):
         return pd.DataFrame(alertas)
     except Exception:
         return alertas
+
+
+def collect_detected_alerts(rows):
+    """
+    Todas las alertas con candidato operable por fila (misma detección que generate_alerts),
+    sin aplicar cooldown/deduplicación ni envío ni save_state.
+
+    Sirve para un log append-only por scan; no altera core/history ni la lógica de procesar_alertas.
+    """
+    if hasattr(rows, "to_dict"):
+        rows = rows.to_dict(orient="records")
+
+    out = []
+    for row in rows:
+        alertas = [
+            detectar_compra_fuerte(row),
+            detectar_compra_potencial(row),
+            detectar_venta(row),
+            detectar_toma(row),
+        ]
+        alerta = elegir_alerta(alertas)
+        if not alerta:
+            continue
+        mensaje = formatear(alerta)
+        _enriquecer_alerta_export(alerta, mensaje)
+        out.append(alerta)
+    return out

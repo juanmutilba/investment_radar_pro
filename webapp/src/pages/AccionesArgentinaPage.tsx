@@ -11,6 +11,12 @@ export function AccionesArgentinaPage() {
       fetchRadar={fetchLatestRadarArgentina}
       formatEbitda={formatEbitdaArs}
       formatPrecio={formatPrecioDolarAr}
+      universe={{
+        label: "Universo",
+        allLabel: "Todas",
+        keys: ["Panel", "panel", "Universo", "universo", "Indice", "Índice", "indice"],
+        options: ["Merval", "Panel General"],
+      }}
       emptySheetMessage="El último export no contiene filas en Radar_Argentina_Completo."
     />
   );

@@ -27,6 +27,7 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     for item in ARGENTINA_UNIVERSE:
         yahoo_ticker = item['ticker']
         local_ticker = item['local_ticker']
+        panel = item.get("panel") or "Merval"
         print(f'Procesando Argentina: {yahoo_ticker}')
         try:
             asset = yf.Ticker(yahoo_ticker)
@@ -93,7 +94,7 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             capital = suggested_capital(total_score)
 
             results.append([
-                local_ticker, company, sector, industry, 'ARGENTINA',
+                local_ticker, company, sector, industry, 'ARGENTINA', panel,
                 market_cap, beta, roe, risk_profile, risk_score,
                 technicals['Precio'], technicals['RSI'], technicals['MA50'], technicals['MA200'],
                 technicals['MACD_Bull'], technicals['Pullback'], technicals['Trend'],
@@ -110,14 +111,14 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             ])
 
             universe_rows.append([
-                local_ticker, company, sector, industry, 'ARGENTINA',
+                local_ticker, company, sector, industry, 'ARGENTINA', panel,
                 market_cap, beta, roe, risk_profile,
             ])
         except Exception as e:
             print(f'Error Argentina en {yahoo_ticker}: {e}')
 
     df = pd.DataFrame(results, columns=[
-        'Ticker', 'Empresa', 'Sector', 'Industria', 'TipoUniverso',
+        'Ticker', 'Empresa', 'Sector', 'Industria', 'TipoUniverso', 'Panel',
         'MarketCap', 'Beta', 'ROE', 'RiskProfile', 'RiskScore',
         'Precio', 'RSI', 'MA50', 'MA200', 'MACD_Bull', 'Pullback', 'Trend',
         'PE', 'PriceToBook', 'EBITDA', 'NetIncome', 'DebtToEquity', 'DebtToEbitda', 'TargetPrice', 'Upside_%',
@@ -126,7 +127,7 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     ])
 
     df_universo = pd.DataFrame(universe_rows, columns=[
-        'Ticker', 'Empresa', 'Sector', 'Industria', 'TipoUniverso',
+        'Ticker', 'Empresa', 'Sector', 'Industria', 'TipoUniverso', 'Panel',
         'MarketCap', 'Beta', 'ROE', 'RiskProfile',
     ]).drop_duplicates(subset=['Ticker'])
 

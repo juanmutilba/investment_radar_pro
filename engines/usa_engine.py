@@ -8,7 +8,7 @@ from core.risk import calculate_risk_score, classify_risk_profile
 from core.scoring import calculate_fund_score, calculate_tech_score
 from core.signals import classify_conviction, classify_setup, classify_signal_state, suggested_capital
 from core.technicals import compute_technical_metrics
-from data.universe_usa import TICKERS_USA, classify_universe_type
+from data.universe_usa import TICKERS_USA, classify_universe_type, classify_universe_visual
 
 
 def format_number(value):
@@ -46,6 +46,7 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
             risk_profile = classify_risk_profile(beta)
             risk_score = calculate_risk_score(beta)
             universe_type = classify_universe_type(ticker)
+            universe_visual = classify_universe_visual(ticker=ticker, exchange=info.get("exchange"))
 
             technicals = compute_technical_metrics(close)
             pe = format_number(info.get('trailingPE'))
@@ -92,7 +93,7 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
             capital = suggested_capital(total_score)
 
             results.append([
-                ticker, company, sector, industry, universe_type,
+                ticker, company, sector, industry, universe_type, universe_visual,
                 market_cap, beta, roe, risk_profile, risk_score,
                 technicals['Precio'], technicals['RSI'], technicals['MA50'], technicals['MA200'],
                 technicals['MACD_Bull'], technicals['Pullback'], technicals['Trend'],
@@ -109,14 +110,14 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
             ])
 
             universe_rows.append([
-                ticker, company, sector, industry, universe_type,
+                ticker, company, sector, industry, universe_type, universe_visual,
                 market_cap, beta, roe, risk_profile,
             ])
         except Exception as e:
             print(f'Error USA en {ticker}: {e}')
 
     df = pd.DataFrame(results, columns=[
-        'Ticker', 'Empresa', 'Sector', 'Industria', 'TipoUniverso',
+        'Ticker', 'Empresa', 'Sector', 'Industria', 'TipoUniverso', 'Universo',
         'MarketCap', 'Beta', 'ROE', 'RiskProfile', 'RiskScore',
         'Precio', 'RSI', 'MA50', 'MA200', 'MACD_Bull', 'Pullback', 'Trend',
         'PE', 'PriceToBook', 'EBITDA', 'NetIncome', 'DebtToEquity', 'DebtToEbitda', 'TargetPrice', 'Upside_%',
@@ -125,7 +126,7 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
     ])
 
     df_universo = pd.DataFrame(universe_rows, columns=[
-        'Ticker', 'Empresa', 'Sector', 'Industria', 'TipoUniverso',
+        'Ticker', 'Empresa', 'Sector', 'Industria', 'TipoUniverso', 'Universo',
         'MarketCap', 'Beta', 'ROE', 'RiskProfile',
     ]).drop_duplicates(subset=['Ticker'])
 

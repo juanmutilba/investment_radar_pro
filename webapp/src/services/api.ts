@@ -28,12 +28,51 @@ export async function fetchLatestAlerts(): Promise<LatestAlert[]> {
   return data as LatestAlert[];
 }
 
+export type AlertHistoryEvent = {
+  /** Presente desde la versión con agrupación por corrida; eventos viejos pueden no tenerlo. */
+  scan_id?: string;
+  scan_at: string;
+  ticker: string | null;
+  mercado: string | null;
+  universo?: unknown;
+  panel?: unknown;
+  tipo_alerta?: string | null;
+  tipo_alerta_label?: string | null;
+  prioridad?: number | null;
+  prioridad_radar?: unknown;
+  conviccion?: unknown;
+  total_score?: unknown;
+  rsi?: unknown;
+  precio?: unknown;
+  setup?: unknown;
+  motivo?: unknown;
+  fingerprint?: unknown;
+  score?: unknown;
+  score_anterior?: unknown;
+  cambio_score?: unknown;
+  senales_activas?: unknown;
+  mensaje?: unknown;
+};
+
+export async function fetchAlertHistory(limit = 200): Promise<AlertHistoryEvent[]> {
+  const q = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(`${BASE}/alert-history?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!Array.isArray(data)) {
+    throw new Error("Respuesta inesperada: se esperaba un array");
+  }
+  return data as AlertHistoryEvent[];
+}
+
 /** Fila tal como viene del Excel (claves pueden variar en casing); usar helpers al renderizar. */
 export type RadarRow = Record<string, unknown>;
 
 export type LatestRadarResponse = {
   file: string;
-  sheet: string;
+  sheet?: string | null;
   rows: RadarRow[];
 };
 
@@ -44,7 +83,7 @@ function isLatestRadarResponse(data: unknown): data is LatestRadarResponse {
   const o = data as Record<string, unknown>;
   return (
     typeof o.file === "string" &&
-    typeof o.sheet === "string" &&
+    (typeof o.sheet === "string" || o.sheet === null || o.sheet === undefined) &&
     Array.isArray(o.rows)
   );
 }
@@ -59,11 +98,11 @@ export async function fetchLatestRadar(): Promise<LatestRadarResponse | null> {
     return null;
   }
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
   }
-  const data: unknown = await res.json();
+  const data: unknown = await res.json().catch(() => null);
   if (!isLatestRadarResponse(data)) {
-    throw new Error("Respuesta inesperada: se esperaba { file, sheet, rows }");
+    throw new Error("Respuesta inesperada: se esperaba { file, sheet?, rows }");
   }
   return data;
 }
@@ -77,11 +116,11 @@ export async function fetchLatestRadarArgentina(): Promise<LatestRadarResponse |
     return null;
   }
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
   }
-  const data: unknown = await res.json();
+  const data: unknown = await res.json().catch(() => null);
   if (!isLatestRadarResponse(data)) {
-    throw new Error("Respuesta inesperada: se esperaba { file, sheet, rows }");
+    throw new Error("Respuesta inesperada: se esperaba { file, sheet?, rows }");
   }
   return data;
 }

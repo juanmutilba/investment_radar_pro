@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from core.alerts_engine import generate_alerts
+import secrets
+from datetime import datetime, timezone
+
+from core.alerts_engine import collect_detected_alerts, generate_alerts
 from core.config import EXPORT_FOLDER, OUTPUT_EXCEL
 from core.history import find_previous_export, merge_history
 from core.signals import classify_priority
 from engines.argentina_engine import run_argentina_engine
 from engines.usa_engine import run_usa_engine
+from services.alert_event_log import append_scan_alert_events
 
 
 def _prepare_dataframe(df, previous_file, previous_sheet_name):
@@ -44,6 +48,10 @@ def run_full_scan(*, verbose: bool = True) -> dict:
         Claves esperadas por export.exporter.export_all, más:
         - previous_file: Path | None del Excel usado para Evolución/score_anterior.
     """
+    scan_ts = datetime.now(timezone.utc)
+    scan_at_iso = scan_ts.isoformat()
+    scan_id = f"{scan_ts.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(4)}"
+
     if verbose:
         print("Corriendo motor USA...")
     usa_df, usa_universo, usa_sectores, _ = run_usa_engine()
@@ -61,6 +69,22 @@ def run_full_scan(*, verbose: bool = True) -> dict:
 
     usa_alerts = generate_alerts(usa_df)
     arg_alerts = generate_alerts(arg_df)
+
+    # Historial append-only: todas las alertas detectadas por fila en este scan (sin cooldown).
+    usa_detected = collect_detected_alerts(usa_df)
+    arg_detected = collect_detected_alerts(arg_df)
+    try:
+        append_scan_alert_events(
+            scan_id=scan_id,
+            scan_at=scan_at_iso,
+            usa_alerts=usa_detected,
+            arg_alerts=arg_detected,
+            usa_df=usa_df,
+            arg_df=arg_df,
+        )
+    except Exception:
+        # No frenar el scan/export por un fallo de logging local.
+        pass
 
     return {
         "usa_df": usa_df,
