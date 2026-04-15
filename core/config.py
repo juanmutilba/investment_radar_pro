@@ -26,6 +26,15 @@ RSI_WINDOW = 14
 MA_SHORT = 50
 MA_LONG = 200
 
+# =====================
+# CACHE LOCAL (fundamentals)
+# =====================
+# Cachea datos lentos de yfinance (asset.info) por ticker.
+# Market data e indicadores técnicos se recalculan siempre.
+FUNDAMENTALS_CACHE_TTL_HOURS = int(os.getenv("FUNDAMENTALS_CACHE_TTL_HOURS", "168"))  # 7 días
+# Timeout para fetch de asset.info (evita colgar el scan completo por un ticker).
+YFINANCE_INFO_TIMEOUT_S = float(os.getenv("YFINANCE_INFO_TIMEOUT_S", "12"))
+
 BUY_PRIORITY_THRESHOLD = 10
 BUY_THRESHOLD = 8
 FOLLOW_THRESHOLD = 5

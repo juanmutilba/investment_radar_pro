@@ -16,7 +16,11 @@ def _prepare_dataframe(df, previous_file, previous_sheet_name):
     df = merge_history(df, previous_file, previous_sheet_name)
 
     df["PrioridadRadar"] = df.apply(
-        lambda row: classify_priority(row["TotalScore"], row["Evolucion"]),
+        lambda row: classify_priority(
+            row["TotalScore"],
+            row["Evolucion"],
+            row.get("score_anterior"),
+        ),
         axis=1,
     )
 

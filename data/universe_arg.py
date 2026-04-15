@@ -30,9 +30,7 @@ ARGENTINA_UNIVERSE = [
     {"ticker": "RICH.BA", "local_ticker": "RICH", "panel": "Merval"},
     {"ticker": "DOME.BA", "local_ticker": "DOME", "panel": "Merval"},
     {"ticker": "OEST.BA", "local_ticker": "OEST", "panel": "Merval"},
-    {"ticker": "AESG.BA", "local_ticker": "AESG", "panel": "Merval"},
     {"ticker": "BIOX.BA", "local_ticker": "BIOX", "panel": "Merval"},
-    {"ticker": "GLN.BA", "local_ticker": "GLN", "panel": "Merval"},
     {"ticker": "INTR.BA", "local_ticker": "INTR", "panel": "Merval"},
     {"ticker": "MORI.BA", "local_ticker": "MORI", "panel": "Merval"},
     {"ticker": "POLL.BA", "local_ticker": "POLL", "panel": "Merval"},
@@ -44,5 +42,4 @@ ARGENTINA_UNIVERSE = [
     {"ticker": "DGCU2.BA", "local_ticker": "DGCU2", "panel": "Panel General"},
     {"ticker": "FERR.BA", "local_ticker": "FERR", "panel": "Panel General"},
     {"ticker": "GARO.BA", "local_ticker": "GARO", "panel": "Panel General"},
-    {"ticker": "JMIN.BA", "local_ticker": "JMIN", "panel": "Panel General"},
 ]

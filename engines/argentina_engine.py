@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import pandas as pd
+import time
 import yfinance as yf
 
-from core.config import PRICE_HISTORY_PERIOD
+from core.config import PRICE_HISTORY_PERIOD, YFINANCE_INFO_TIMEOUT_S
 from core.risk import calculate_risk_score, classify_risk_profile
 from core.scoring import calculate_fund_score, calculate_tech_score
 from core.signals import classify_conviction, classify_setup, classify_signal_state, suggested_capital
 from core.technicals import compute_technical_metrics
 from data.universe_arg import ARGENTINA_UNIVERSE
+from services.engine_run_metrics import format_delta_line, load_previous_engine, save_engine_metrics
+from services.fundamentals_cache import FundamentalsCache
+from services.yfinance_helpers import fetch_info_with_timeout, precio_valido, try_apply_fast_info_price
 
 
 def format_number(value):
@@ -21,25 +25,59 @@ def format_number(value):
 
 
 def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    t0 = time.perf_counter()
+    prev_run = load_previous_engine("arg")
+    if prev_run:
+        print(
+            f"[ARG] Referencia corrida anterior: t={prev_run.get('elapsed_s')}s | "
+            f"OK={prev_run.get('n_ok')} cache_hits={prev_run.get('cache_hits')} "
+            f"info_fetches={prev_run.get('info_fetches')} SIN_HISTORY={prev_run.get('sin_history_total')}"
+        )
     results = []
     universe_rows = []
+    cache = FundamentalsCache()
+    cache.load()
+    n_ok = 0
+    n_fail = 0
+    n_hist_empty = 0
+    n_hist_short = 0
+    n_fast_price_used = 0
+    n_sin_precio = 0
+    fail_history_exc = 0
+    fail_tech_exc = 0
+    fail_info_exc = 0
+    fail_other = 0
 
     for item in ARGENTINA_UNIVERSE:
         yahoo_ticker = item['ticker']
         local_ticker = item['local_ticker']
         panel = item.get("panel") or "Merval"
         print(f'Procesando Argentina: {yahoo_ticker}')
+        stage = "init"
         try:
             asset = yf.Ticker(yahoo_ticker)
-            data = asset.history(period=PRICE_HISTORY_PERIOD, auto_adjust=False)
+            stage = "history"
+            # repair=True puede requerir scipy en algunas instalaciones de yfinance; evitarlo para robustez.
+            data = asset.history(period=PRICE_HISTORY_PERIOD, auto_adjust=False, actions=False, repair=False)
             if data.empty:
+                n_hist_empty += 1
+                print(f"[ARG] omitido {yahoo_ticker} ({local_ticker}): history vacío (sin velas)")
                 continue
 
             close = pd.to_numeric(data['Close'], errors='coerce').dropna()
             if len(close) < 200:
+                n_hist_short += 1
+                print(
+                    f"[ARG] omitido {yahoo_ticker} ({local_ticker}): history insuficiente "
+                    f"({len(close)} velas válidas < 200)"
+                )
                 continue
 
-            info = asset.info
+            stage = "info"
+            info = cache.get_or_fetch_info(
+                ticker=yahoo_ticker,
+                fetcher=lambda: fetch_info_with_timeout(asset, timeout_s=YFINANCE_INFO_TIMEOUT_S),
+            )
             company = info.get('longName') or info.get('shortName') or local_ticker
             sector = info.get('sector')
             industry = info.get('industry')
@@ -49,7 +87,10 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             risk_profile = classify_risk_profile(beta)
             risk_score = calculate_risk_score(beta)
 
+            stage = "technicals"
             technicals = compute_technical_metrics(close)
+            if try_apply_fast_info_price(asset, technicals, format_number):
+                n_fast_price_used += 1
             pe = format_number(info.get('trailingPE'))
             price_to_book = format_number(info.get('priceToBook'))
             ebitda = format_number(info.get('ebitda'))
@@ -114,8 +155,25 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
                 local_ticker, company, sector, industry, 'ARGENTINA', panel,
                 market_cap, beta, roe, risk_profile,
             ])
+            if not precio_valido(technicals.get("Precio")):
+                n_sin_precio += 1
+                print(
+                    f"[ARG] precio inválido tras history/fast_info: {yahoo_ticker} ({local_ticker}) "
+                    f"-> {technicals.get('Precio')!r}"
+                )
+
+            n_ok += 1
         except Exception as e:
-            print(f'Error Argentina en {yahoo_ticker}: {e}')
+            n_fail += 1
+            if stage == "history":
+                fail_history_exc += 1
+            elif stage == "info":
+                fail_info_exc += 1
+            elif stage == "technicals":
+                fail_tech_exc += 1
+            else:
+                fail_other += 1
+            print(f"[ARG] FAIL {yahoo_ticker} stage={stage} err={type(e).__name__}: {e}")
 
     df = pd.DataFrame(results, columns=[
         'Ticker', 'Empresa', 'Sector', 'Industria', 'TipoUniverso', 'Panel',
@@ -144,5 +202,41 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     else:
         df['SectorScorePromedio'] = None
         df['RankingSector'] = None
+
+    cache.save()
+
+    elapsed = time.perf_counter() - t0
+    sin_hist_total = n_hist_empty + n_hist_short
+    cmp = format_delta_line("[ARG]", prev_run, elapsed)
+    if cmp:
+        print(cmp)
+    print(
+        f"[ARG] OK={n_ok} FAIL={n_fail} | "
+        f"SIN_HISTORY={sin_hist_total} (vacío={n_hist_empty} insuf_velas={n_hist_short}) | "
+        f"SIN_PRECIO_OK={n_sin_precio} | "
+        f"cache_hits={cache.stats.hits} cache_misses={cache.stats.misses} "
+        f"info_fetches={cache.stats.stores} | "
+        f"fast_price_used={n_fast_price_used} | "
+        f"fail_breakdown=(history_exc={fail_history_exc} info_exc={fail_info_exc} tech_exc={fail_tech_exc} other={fail_other}) | "
+        f"t={elapsed:.1f}s"
+    )
+
+    save_engine_metrics(
+        "arg",
+        {
+            "elapsed_s": round(elapsed, 3),
+            "n_ok": n_ok,
+            "n_fail": n_fail,
+            "sin_history_empty": n_hist_empty,
+            "sin_history_short": n_hist_short,
+            "sin_history_total": sin_hist_total,
+            "n_sin_precio_en_ok": n_sin_precio,
+            "cache_hits": cache.stats.hits,
+            "cache_misses": cache.stats.misses,
+            "info_fetches": cache.stats.stores,
+            "fast_price_used": n_fast_price_used,
+            "cache_errors": cache.stats.errors,
+        },
+    )
 
     return df, df_universo, sector_summary
