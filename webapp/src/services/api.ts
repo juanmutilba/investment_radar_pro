@@ -6,7 +6,10 @@ const BASE = "/api";
 
 export type LatestAlert = {
   ticker: string | null;
+  /** Etiqueta legible (hoja Alertas / TipoAlerta). */
   tipo_alerta: string | null;
+  /** Clave interna del motor: compra_fuerte, compra_potencial, … (si el export la incluye). */
+  tipo_alerta_key?: string | null;
   score: number | null;
   score_anterior: number | null;
   cambio_score: number | null;

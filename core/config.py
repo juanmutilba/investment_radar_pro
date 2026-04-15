@@ -76,8 +76,9 @@ ALERT_PRIORIDAD = {
 }
 
 ALERT_TIPO_ETIQUETA = {
-    "compra_fuerte": "COMPRA FUERTE",
-    "compra_potencial": "COMPRA POTENCIAL",
-    "venta": "VENTA",
-    "toma_ganancia": "TOMA GANANCIA",
+    # Etiquetas visibles deliberadamente distintas de SignalState del radar (misma corrida, reglas distintas).
+    "compra_fuerte": "Alerta táctica · score alto (confluencia)",
+    "compra_potencial": "Alerta táctica · ventana score 7",
+    "venta": "Alerta · venta / deterioro",
+    "toma_ganancia": "Alerta · toma de ganancia",
 }

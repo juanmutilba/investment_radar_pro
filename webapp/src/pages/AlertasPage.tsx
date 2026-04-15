@@ -14,6 +14,59 @@ type MercadoFiltroVista = "" | "usa" | "argentina";
 
 const HISTORY_FETCH_LIMIT = 800;
 
+/** Tooltips por clave interna del motor (estable aunque cambien las etiquetas visibles). */
+const ALERT_TYPE_TOOLTIPS: Record<string, string> = {
+  compra_potencial:
+    "Alerta táctica en ventana intermedia de score. Puede aparecer aunque el radar aún no clasifique al activo como «compra potencial» (SignalState).",
+  compra_fuerte:
+    "Alerta táctica de score alto con señales activas o confluencia. No equivale necesariamente al nombre del estado operativo en el radar (SignalState).",
+  venta: "Señal de deterioro o debilidad según score y/o señales técnicas.",
+  toma_ganancia:
+    "Señal de posible toma de ganancia tras extensión o retroceso desde niveles altos.",
+};
+
+/** Resuelve la clave interna para estilo y tooltip (export viejos o solo etiqueta). */
+function resolveAlertTypeKey(
+  tipoKey: string | null | undefined,
+  tipoLabel: string | null | undefined,
+): string | null {
+  const k = tipoKey?.trim().toLowerCase();
+  if (k && ALERT_TYPE_TOOLTIPS[k]) {
+    return k;
+  }
+  const lab = (tipoLabel ?? "").toLowerCase();
+  if (lab.includes("ventana score 7")) {
+    return "compra_potencial";
+  }
+  if (lab.includes("score alto") && lab.includes("confluencia")) {
+    return "compra_fuerte";
+  }
+  if (lab.includes("compra fuerte")) {
+    return "compra_fuerte";
+  }
+  if (lab.includes("compra potencial")) {
+    return "compra_potencial";
+  }
+  if (lab.includes("venta") || lab.includes("deterioro")) {
+    return "venta";
+  }
+  if (lab.includes("toma") && lab.includes("ganancia")) {
+    return "toma_ganancia";
+  }
+  return k && ALERT_TYPE_TOOLTIPS[k] ? k : null;
+}
+
+function tooltipForAlertType(
+  tipoKey: string | null | undefined,
+  tipoLabel: string | null | undefined,
+): string {
+  const resolved = resolveAlertTypeKey(tipoKey, tipoLabel);
+  if (resolved && ALERT_TYPE_TOOLTIPS[resolved]) {
+    return ALERT_TYPE_TOOLTIPS[resolved];
+  }
+  return "Evento detectado en la corrida. El tipo de alerta usa reglas distintas al SignalState del radar.";
+}
+
 const scanAtFormatter = new Intl.DateTimeFormat("es-AR", {
   dateStyle: "short",
   timeStyle: "short",
@@ -38,14 +91,18 @@ function classForTipoAlerta(
   tipoKey: string | null | undefined,
   tipoLabel: string | null | undefined,
 ): string {
+  const resolved = resolveAlertTypeKey(tipoKey, tipoLabel);
+  if (resolved === "compra_fuerte" || resolved === "compra_potencial") {
+    return "radar-badge radar-badge--conv-alta";
+  }
+  if (resolved === "venta") {
+    return "radar-badge radar-badge--conv-baja";
+  }
+  if (resolved === "toma_ganancia") {
+    return "radar-badge radar-badge--conv-media";
+  }
   const raw = `${tipoKey ?? ""} ${tipoLabel ?? ""}`.toLowerCase();
-  if (raw.includes("compra_fuerte") || raw.includes("compra fuerte")) {
-    return "radar-badge radar-badge--conv-alta";
-  }
-  if (raw.includes("compra_potencial") || raw.includes("compra potencial")) {
-    return "radar-badge radar-badge--conv-alta";
-  }
-  if (raw.includes("venta")) {
+  if (raw.includes("venta") || raw.includes("deterioro")) {
     return "radar-badge radar-badge--conv-baja";
   }
   if (raw.includes("toma") || raw.includes("ganancia")) {
@@ -281,6 +338,13 @@ export function AlertasPage() {
         Consultá las alertas del último export y el historial por scan (
         <code>/latest-alerts</code> y <code>/alert-history</code> vía <code>/api</code>).
       </p>
+      <p className="msg-muted" style={{ marginTop: "-0.35rem", marginBottom: "1.25rem", maxWidth: "52rem" }}>
+        <span title="En el radar, SignalState resume el estado según score y reglas fijas. El tipo de alerta es un evento por corrida (cambio de score, huella de señales, etc.).">
+          <strong>SignalState</strong> es el estado del radar; <strong>tipo de alerta</strong> es el
+          evento detectado en esa corrida (reglas distintas). Pasá el cursor sobre el badge de tipo
+          para una explicación breve.
+        </span>
+      </p>
 
       <div className="dashboard-stats-grid" style={{ marginBottom: "1.25rem" }}>
         <div className="stat dashboard-stat">
@@ -424,7 +488,10 @@ export function AlertasPage() {
                         <TickerRadarLink ticker={a.ticker} mercado={a.mercado} />
                       </td>
                       <td>
-                        <span className={classForTipoAlerta(a.tipo_alerta, a.tipo_alerta)}>
+                        <span
+                          className={classForTipoAlerta(a.tipo_alerta_key, a.tipo_alerta)}
+                          title={tooltipForAlertType(a.tipo_alerta_key, a.tipo_alerta)}
+                        >
                           {a.tipo_alerta ?? "—"}
                         </span>
                       </td>
@@ -557,7 +624,7 @@ export function AlertasPage() {
                         <td>
                           <span
                             className={classForTipoAlerta(h.tipo_alerta, h.tipo_alerta_label)}
-                            title={h.tipo_alerta ?? ""}
+                            title={tooltipForAlertType(h.tipo_alerta, h.tipo_alerta_label)}
                           >
                             {tipoDisplay}
                           </span>

@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from core.config import EXPORT_FOLDER
+from core.config import ALERT_TIPO_ETIQUETA, EXPORT_FOLDER
 
 
 def resolve_latest_export_path() -> Path | None:
@@ -104,14 +104,31 @@ def _cell(row: pd.Series, *names: str) -> Any:
     return None
 
 
+def _alert_tipo_key(raw: Any) -> str | None:
+    """Clave interna del motor (compra_fuerte, …); None si no coincide con tipos conocidos."""
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return None
+    s = str(raw).strip().lower()
+    if s in ALERT_TIPO_ETIQUETA:
+        return s
+    return None
+
+
 def _alert_row_to_dict(row: pd.Series, mercado_fallback: str) -> dict[str, Any]:
     mercado = _cell(row, "mercado", "Mercado")
     if mercado is None or (isinstance(mercado, str) and not mercado.strip()):
         mercado = mercado_fallback
 
+    raw_key = _cell(row, "tipo_alerta")
+    tipo_key = _alert_tipo_key(raw_key)
+    visible = _cell(row, "TipoAlerta")
+    if visible is None or (isinstance(visible, float) and pd.isna(visible)):
+        visible = ALERT_TIPO_ETIQUETA.get(tipo_key, raw_key) if tipo_key else raw_key
+
     return {
         "ticker": _cell(row, "Ticker", "ticker"),
-        "tipo_alerta": _cell(row, "TipoAlerta", "tipo_alerta"),
+        "tipo_alerta": visible,
+        "tipo_alerta_key": tipo_key,
         "score": _cell(row, "score"),
         "score_anterior": _cell(row, "score_anterior", "ScoreAnterior"),
         "cambio_score": _cell(row, "cambio_score", "CambioScore"),
