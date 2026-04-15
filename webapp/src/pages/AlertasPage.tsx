@@ -331,6 +331,214 @@ export function AlertasPage() {
 
   const fmtResumen = (v: number | null) => (v === null ? "—" : String(v));
 
+  const analiticaHistorial = useMemo(() => {
+    if (historyLoading) return null;
+    if (historyError || history === null) return null;
+    const rows = history;
+
+    const out = {
+      total: rows.length,
+      usa: 0,
+      argentina: 0,
+      porTipo: {
+        compra_potencial: 0,
+        compra_fuerte: 0,
+        venta: 0,
+        toma_ganancia: 0,
+      } as Record<"compra_potencial" | "compra_fuerte" | "venta" | "toma_ganancia", number>,
+      topTicker: null as { ticker: string; count: number } | null,
+      ultimoScan: null as { scan_id: string; count: number; scan_at: string } | null,
+    };
+
+    const tickerCount = new Map<string, number>();
+    const scanCount = new Map<string, { count: number; bestAtMs: number; bestAtIso: string }>();
+
+    for (const h of rows) {
+      const b = mercadoBucket(h.mercado);
+      if (b === "usa") out.usa += 1;
+      else if (b === "argentina") out.argentina += 1;
+
+      const key = resolveAlertTypeKey(h.tipo_alerta, h.tipo_alerta_label);
+      if (key && key in out.porTipo) {
+        out.porTipo[key as keyof typeof out.porTipo] += 1;
+      }
+
+      const t = (h.ticker ?? "").trim().toUpperCase();
+      if (t) {
+        tickerCount.set(t, (tickerCount.get(t) ?? 0) + 1);
+      }
+
+      const sid = (h.scan_id ?? "").trim();
+      if (sid) {
+        const ms = Date.parse(h.scan_at);
+        const safeMs = Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
+        const prev = scanCount.get(sid);
+        if (!prev) {
+          scanCount.set(sid, { count: 1, bestAtMs: safeMs, bestAtIso: h.scan_at });
+        } else {
+          prev.count += 1;
+          if (safeMs >= prev.bestAtMs) {
+            prev.bestAtMs = safeMs;
+            prev.bestAtIso = h.scan_at;
+          }
+        }
+      }
+    }
+
+    // Top ticker por eventos
+    let bestT: string | null = null;
+    let bestN = 0;
+    for (const [t, n] of tickerCount.entries()) {
+      if (n > bestN) {
+        bestT = t;
+        bestN = n;
+      }
+    }
+    if (bestT) {
+      out.topTicker = { ticker: bestT, count: bestN };
+    }
+
+    // Último scan_id (por scan_at más reciente)
+    let bestScan: string | null = null;
+    let bestScanAtMs = Number.NEGATIVE_INFINITY;
+    for (const [sid, v] of scanCount.entries()) {
+      if (v.bestAtMs >= bestScanAtMs) {
+        bestScanAtMs = v.bestAtMs;
+        bestScan = sid;
+      }
+    }
+    if (bestScan) {
+      const v = scanCount.get(bestScan);
+      if (v) {
+        out.ultimoScan = { scan_id: bestScan, count: v.count, scan_at: v.bestAtIso };
+      }
+    }
+
+    return out;
+  }, [historyLoading, historyError, history]);
+
+  /** Tickers del último scan_id (por scan_at más reciente) con ranking vs historial completo cargado. */
+  const ultimoScanTickersRanking = useMemo(() => {
+    if (historyLoading || historyError || history === null || history.length === 0) {
+      return null;
+    }
+    const rows = history;
+
+    const scanBestAt = new Map<string, number>();
+    for (const h of rows) {
+      const sid = (h.scan_id ?? "").trim();
+      if (!sid) continue;
+      const ms = Date.parse(h.scan_at);
+      const safeMs = Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
+      const prev = scanBestAt.get(sid);
+      if (prev === undefined || safeMs >= prev) {
+        scanBestAt.set(sid, safeMs);
+      }
+    }
+    if (scanBestAt.size === 0) {
+      return { kind: "no_scan_id" as const };
+    }
+    let ultimoScanId: string | null = null;
+    let bestMs = Number.NEGATIVE_INFINITY;
+    for (const [sid, at] of scanBestAt.entries()) {
+      if (at >= bestMs) {
+        bestMs = at;
+        ultimoScanId = sid;
+      }
+    }
+    if (!ultimoScanId) {
+      return { kind: "no_scan_id" as const };
+    }
+
+    const histTotal = new Map<string, number>();
+    const tipoByTicker = new Map<string, Map<string, number>>();
+    const mercadoCualquiera = new Map<string, string>();
+
+    for (const h of rows) {
+      const t = (h.ticker ?? "").trim().toUpperCase();
+      if (!t) continue;
+      histTotal.set(t, (histTotal.get(t) ?? 0) + 1);
+      const rk = resolveAlertTypeKey(h.tipo_alerta, h.tipo_alerta_label);
+      if (rk) {
+        let m = tipoByTicker.get(t);
+        if (!m) {
+          m = new Map();
+          tipoByTicker.set(t, m);
+        }
+        m.set(rk, (m.get(rk) ?? 0) + 1);
+      }
+      const m0 = h.mercado?.trim();
+      if (m0 && !mercadoCualquiera.has(t)) {
+        mercadoCualquiera.set(t, m0);
+      }
+    }
+
+    const enUltimoScan = new Map<string, number>();
+    const mercadoUltimo = new Map<string, string>();
+    for (const h of rows) {
+      if ((h.scan_id ?? "").trim() !== ultimoScanId) continue;
+      const t = (h.ticker ?? "").trim().toUpperCase();
+      if (!t) continue;
+      enUltimoScan.set(t, (enUltimoScan.get(t) ?? 0) + 1);
+      const m0 = h.mercado?.trim();
+      if (m0 && !mercadoUltimo.has(t)) {
+        mercadoUltimo.set(t, m0);
+      }
+    }
+
+    if (enUltimoScan.size === 0) {
+      return { kind: "empty_last" as const, ultimoScanId };
+    }
+
+    const TIPO_CORTO: Record<string, string> = {
+      compra_potencial: "CP",
+      compra_fuerte: "CF",
+      venta: "V",
+      toma_ganancia: "TG",
+    };
+
+    type RankRow = {
+      ticker: string;
+      enUltimo: number;
+      enHistorial: number;
+      mercado: string | null;
+      tipoFrecuente: string | null;
+      caliente: boolean;
+    };
+
+    const outRows: RankRow[] = [];
+    for (const [ticker, enUltimo] of enUltimoScan.entries()) {
+      const enHistorial = histTotal.get(ticker) ?? enUltimo;
+      let tipoFrecuente: string | null = null;
+      let bestN = 0;
+      const tm = tipoByTicker.get(ticker);
+      if (tm) {
+        for (const [k, n] of tm.entries()) {
+          if (n > bestN) {
+            bestN = n;
+            tipoFrecuente = TIPO_CORTO[k] ?? k;
+          }
+        }
+      }
+      const mercado = mercadoUltimo.get(ticker) ?? mercadoCualquiera.get(ticker) ?? null;
+      const caliente = enHistorial >= 3;
+      outRows.push({ ticker, enUltimo, enHistorial, mercado, tipoFrecuente, caliente });
+    }
+
+    outRows.sort((a, b) => {
+      if (b.enHistorial !== a.enHistorial) return b.enHistorial - a.enHistorial;
+      if (b.enUltimo !== a.enUltimo) return b.enUltimo - a.enUltimo;
+      return a.ticker.localeCompare(b.ticker, "es", { sensitivity: "base" });
+    });
+
+    return {
+      kind: "ok" as const,
+      ultimoScanId,
+      rows: outRows.slice(0, 25),
+      totalEnUltimoScan: enUltimoScan.size,
+    };
+  }, [historyLoading, historyError, history]);
+
   return (
     <>
       <h1 className="page-title">Alertas</h1>
@@ -517,6 +725,131 @@ export function AlertasPage() {
             Todas las alertas detectadas por scan (sin cooldown). Agrupá por{" "}
             <code>scan_id</code>.
           </p>
+
+          <div className="dashboard-stats-grid" style={{ marginBottom: "1rem" }}>
+            <div className="stat dashboard-stat">
+              <div className="stat__label">Eventos cargados</div>
+              <div className="stat__value">{analiticaHistorial ? String(analiticaHistorial.total) : "—"}</div>
+              <div className="msg-muted dashboard-stat__hint">
+                Total de filas recibidas desde <code>/alert-history</code> (hasta {HISTORY_FETCH_LIMIT})
+              </div>
+            </div>
+            <div className="stat dashboard-stat">
+              <div className="stat__label">Por mercado</div>
+              <div className="stat__value">
+                {analiticaHistorial ? `USA ${analiticaHistorial.usa} · AR ${analiticaHistorial.argentina}` : "—"}
+              </div>
+              <div className="msg-muted dashboard-stat__hint">Conteo por mercado en el historial cargado</div>
+            </div>
+            <div className="stat dashboard-stat">
+              <div className="stat__label">Por tipo (4)</div>
+              <div className="stat__value" style={{ fontSize: "1.05rem" }}>
+                {analiticaHistorial
+                  ? `CP ${analiticaHistorial.porTipo.compra_potencial} · CF ${analiticaHistorial.porTipo.compra_fuerte} · V ${analiticaHistorial.porTipo.venta} · TG ${analiticaHistorial.porTipo.toma_ganancia}`
+                  : "—"}
+              </div>
+              <div className="msg-muted dashboard-stat__hint">
+                Claves internas: compra_potencial/compra_fuerte/venta/toma_ganancia
+              </div>
+            </div>
+            <div className="stat dashboard-stat">
+              <div className="stat__label">Ticker más frecuente</div>
+              <div className="stat__value">
+                {analiticaHistorial?.topTicker ? analiticaHistorial.topTicker.ticker : "—"}
+              </div>
+              <div className="msg-muted dashboard-stat__hint">
+                {analiticaHistorial?.topTicker ? `${analiticaHistorial.topTicker.count} eventos` : "—"}
+              </div>
+            </div>
+            <div className="stat dashboard-stat">
+              <div className="stat__label">Último scan_id</div>
+              <div className="stat__value" style={{ fontSize: "1.05rem" }}>
+                {analiticaHistorial?.ultimoScan ? shortenScanId(analiticaHistorial.ultimoScan.scan_id) : "—"}
+              </div>
+              <div className="msg-muted dashboard-stat__hint">
+                {analiticaHistorial?.ultimoScan
+                  ? `${analiticaHistorial.ultimoScan.count} eventos · ${formatScanAt(analiticaHistorial.ultimoScan.scan_at)}`
+                  : "—"}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: "1.1rem" }}>
+            <h3 style={{ margin: "0 0 0.35rem", fontSize: "0.95rem", fontWeight: 600 }}>
+              Ultimo scan: tickers y recurrencia
+            </h3>
+            <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.6rem", fontSize: "0.88rem" }}>
+              Ultimo <code>scan_id</code>: el mas reciente por <code>scan_at</code> en el historial cargado. El ranking
+              lista solo tickers con al menos un evento en ese scan. <strong>Caliente</strong>: en el ultimo scan y 3+
+              eventos en todo el historial cargado.
+            </p>
+            {!historyLoading && !historyError && history && history.length > 0 && ultimoScanTickersRanking?.kind === "no_scan_id" && (
+              <p className="msg-muted" style={{ margin: 0 }}>
+                No hay <code>scan_id</code> en los eventos cargados; no se puede armar este ranking.
+              </p>
+            )}
+            {!historyLoading &&
+              !historyError &&
+              history &&
+              history.length > 0 &&
+              ultimoScanTickersRanking?.kind === "empty_last" && (
+                <p className="msg-muted" style={{ margin: 0 }}>
+                  Hay <code>scan_id</code> pero ningún evento coincide con el último scan (
+                  <code>{shortenScanId(ultimoScanTickersRanking.ultimoScanId)}</code>).
+                </p>
+              )}
+            {!historyLoading &&
+              !historyError &&
+              history &&
+              history.length > 0 &&
+              ultimoScanTickersRanking?.kind === "ok" && (
+                <>
+                  <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.5rem", fontSize: "0.85rem" }}>
+                    Scan: <code title={ultimoScanTickersRanking.ultimoScanId}>{shortenScanId(ultimoScanTickersRanking.ultimoScanId)}</code>{" "}
+                    · {ultimoScanTickersRanking.totalEnUltimoScan} ticker(s) · mostrando top {ultimoScanTickersRanking.rows.length}
+                  </p>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Ticker</th>
+                          <th>Último scan</th>
+                          <th>Historial</th>
+                          <th>Mercado</th>
+                          <th>Tipo frec.</th>
+                          <th title="3+ eventos en historial cargado y presente en último scan">Caliente</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ultimoScanTickersRanking.rows.map((r) => (
+                          <tr key={r.ticker}>
+                            <td>
+                              <TickerRadarLink ticker={r.ticker} mercado={r.mercado} />
+                            </td>
+                            <td>{r.enUltimo}</td>
+                            <td>{r.enHistorial}</td>
+                            <td>{r.mercado ?? "—"}</td>
+                            <td>{r.tipoFrecuente ?? "—"}</td>
+                            <td>
+                              {r.caliente ? (
+                                <span
+                                  className="radar-badge radar-badge--conv-alta"
+                                  title="3+ eventos en el historial cargado"
+                                >
+                                  sí
+                                </span>
+                              ) : (
+                                <span className="msg-muted">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+          </div>
 
           <div
             className="radar-toolbar"
