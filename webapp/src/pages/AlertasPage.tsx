@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import { Link } from "react-router-dom";
+import { mercadoBucket, TickerRadarLink } from "@/components/navigation/radarLinks";
 import {
   ALERT_HISTORY_DEFAULT_LIMIT,
   fetchAlertHistory,
@@ -250,58 +250,6 @@ function segmentLabel(h: AlertHistoryEvent): string {
     return String(h.panel ?? "—");
   }
   return String(h.universo ?? "—");
-}
-
-/** Agrupa mercado de /latest-alerts para conteos USA vs Argentina. */
-function mercadoBucket(
-  m: string | null | undefined,
-): "usa" | "argentina" | "otro" {
-  const s = (m ?? "").trim().toUpperCase();
-  if (!s) return "otro";
-  if (s === "USA" || s === "US" || s === "UNITED STATES") return "usa";
-  if (s === "ARGENTINA" || s === "AR" || s === "ARG") return "argentina";
-  if (s.includes("ARGENTINA")) return "argentina";
-  if (s.includes("USA")) return "usa";
-  return "otro";
-}
-
-/** Ruta al radar con filtro inicial; null si mercado no es USA/Argentina o no hay ticker. */
-function radarHrefForTicker(
-  ticker: string | null | undefined,
-  mercado: string | null | undefined,
-): string | null {
-  const t = ticker?.trim();
-  if (!t) return null;
-  const b = mercadoBucket(mercado);
-  const q = new URLSearchParams({ ticker: t }).toString();
-  if (b === "usa") return `/acciones-usa?${q}`;
-  if (b === "argentina") return `/acciones-argentina?${q}`;
-  return null;
-}
-
-function TickerRadarLink({
-  ticker,
-  mercado,
-}: {
-  ticker: string | null;
-  mercado: string | null;
-}) {
-  const href = radarHrefForTicker(ticker, mercado);
-  if (!ticker?.trim()) {
-    return <>—</>;
-  }
-  if (!href) {
-    return <span className="table-cell--nowrap">{ticker}</span>;
-  }
-  return (
-    <Link
-      to={href}
-      className="table-cell--nowrap"
-      title={`Abrir ${ticker} en el radar (${mercado ?? "mercado"})`}
-    >
-      {ticker}
-    </Link>
-  );
 }
 
 export function AlertasPage() {

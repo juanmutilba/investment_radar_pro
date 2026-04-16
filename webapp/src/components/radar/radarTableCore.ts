@@ -270,6 +270,9 @@ export function cellForColumn(
   if (col.id === "macd") {
     return formatMacdAlcista(raw);
   }
+  if (col.id === "tieneCedear") {
+    return formatMacdAlcista(raw);
+  }
   return formatScalar(raw);
 }
 

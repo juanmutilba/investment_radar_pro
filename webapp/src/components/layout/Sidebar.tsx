@@ -11,7 +11,7 @@ const ITEMS: NavItem[] = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/acciones-usa", label: "Acciones USA" },
   { to: "/acciones-argentina", label: "Acciones Argentina" },
-  { to: "/cedears", label: "CEDEARs", placeholder: true },
+  { to: "/cedears", label: "CEDEARs" },
   { to: "/bonos", label: "Bonos", placeholder: true },
   { to: "/opciones", label: "Opciones", placeholder: true },
   { to: "/futuros", label: "Futuros", placeholder: true },

@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { AccionesArgentinaPage } from "@/pages/AccionesArgentinaPage";
 import { AccionesUsaPage } from "@/pages/AccionesUsaPage";
 import { AlertasPage } from "@/pages/AlertasPage";
+import { CedearsPage } from "@/pages/CedearsPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 
@@ -15,15 +16,7 @@ export function AppRoutes() {
         <Route path="acciones-usa" element={<AccionesUsaPage />} />
         <Route path="acciones-argentina" element={<AccionesArgentinaPage />} />
         <Route path="alertas" element={<AlertasPage />} />
-        <Route
-          path="cedears"
-          element={
-            <PlaceholderPage
-              title="CEDEARs"
-              description="Listados y análisis de CEDEARs. Pendiente de definir fuente de datos y API."
-            />
-          }
-        />
+        <Route path="cedears" element={<CedearsPage />} />
         <Route
           path="bonos"
           element={

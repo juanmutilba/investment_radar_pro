@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException, Query
 from services import latest_export
 from services.alert_event_log import read_alert_events
 from services.alerts_analysis import AlertsAnalysisRow, build_alerts_analysis
+from services.cedear_service import CedearRow, build_cedear_rows_from_latest_radar
 from services.export_service import export_results
 from services.scan_service import run_full_scan
 
@@ -80,6 +81,18 @@ def get_latest_radar():
     if payload is None:
         raise HTTPException(status_code=404, detail="No hay export radar_*.xlsx en la carpeta configurada")
     return payload
+
+
+@app.get("/cedears", response_model=list[CedearRow], response_model_by_alias=True)
+def get_cedears():
+    """
+    Vista CEDEAR sobre el último Radar USA: precios locales (ARS/USD) + CCL implícito
+    y gap vs precio USA del export. Scores y señal se toman del radar sin recalcular.
+    """
+    rows = build_cedear_rows_from_latest_radar()
+    if rows is None:
+        raise HTTPException(status_code=404, detail="No hay export radar_*.xlsx en la carpeta configurada")
+    return rows
 
 
 @app.get("/latest-radar-argentina")

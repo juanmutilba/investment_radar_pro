@@ -9,6 +9,7 @@ from core.risk import calculate_risk_score, classify_risk_profile
 from core.scoring import calculate_fund_score, calculate_tech_score
 from core.signals import classify_conviction, classify_setup, classify_signal_state, suggested_capital
 from core.technicals import compute_technical_metrics
+from data.cedear_mapping import enrich_usa_radar_dataframe
 from data.universe_usa import TICKERS_USA, classify_universe_type, classify_universe_visual
 from services.engine_run_metrics import format_delta_line, load_previous_engine, save_engine_metrics
 from services.fundamentals_cache import FundamentalsCache
@@ -199,6 +200,8 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
     else:
         df['SectorScorePromedio'] = None
         df['RankingSector'] = None
+
+    df = enrich_usa_radar_dataframe(df)
 
     # Persistir cache 1 vez por corrida.
     cache.save()

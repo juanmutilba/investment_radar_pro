@@ -50,7 +50,7 @@ export function renderCellInner(
   if (c.id === "trend") {
     return <span className={trendBadgeClass(text)}>{text}</span>;
   }
-  if (c.id === "macd") {
+  if (c.id === "macd" || c.id === "tieneCedear") {
     const yes = text === "Sí";
     return (
       <span className={yes ? "radar-badge radar-badge--macd-yes" : "radar-badge radar-badge--macd-no"}>

@@ -21,6 +21,43 @@ export const SCORE_HELP = {
 
 export const COLUMNS_USA: ColumnDef[] = [
   { id: "ticker", header: "Ticker", keys: ["Ticker", "ticker"], minWidth: 92, nowrap: true, sortKind: "string" },
+  {
+    id: "tieneCedear",
+    header: "CEDEAR",
+    keys: ["TieneCedear", "tieneCedear"],
+    minWidth: 76,
+    align: "center",
+    nowrap: true,
+    sortKind: "flag",
+    headerTitle:
+      "Equivalencia CEDEAR (ByMA) en la tabla maestra, activa. Sin inferencias automáticas.",
+  },
+  {
+    id: "tickerCedearArs",
+    header: "CEDEAR ARS",
+    keys: ["TickerCedearARS", "tickerCedearARS"],
+    minWidth: 104,
+    nowrap: true,
+    sortKind: "string",
+  },
+  {
+    id: "tickerCedearCcl",
+    header: "CEDEAR CCL",
+    keys: ["TickerCedearCCL", "tickerCedearCCL"],
+    minWidth: 104,
+    nowrap: true,
+    sortKind: "string",
+  },
+  {
+    id: "cedearsPorAccion",
+    header: "CEDEARs / acción",
+    keys: ["CedearsPorAccionUSA", "cedearsPorAccionUSA"],
+    minWidth: 108,
+    align: "right",
+    nowrap: true,
+    sortKind: "number",
+    headerTitle: "Cantidad de CEDEARs equivalentes a 1 acción USA (tabla maestra).",
+  },
   { id: "empresa", header: "Empresa", keys: ["Empresa", "empresa"], minWidth: 160, sortKind: "string" },
   { id: "sector", header: "Sector", keys: ["Sector", "sector"], minWidth: 120, sortKind: "string" },
   { id: "precio", header: "Precio", keys: ["Precio", "precio"], minWidth: 84, align: "right", nowrap: true, sortKind: "number" },
@@ -143,4 +180,4 @@ export const COLUMNS_USA: ColumnDef[] = [
  */
 export const COLUMNS_ARGENTINA: ColumnDef[] = [...COLUMNS_USA];
 
-export type QuickFilterId = "oportunidades" | "oversold" | "calidad";
+export type QuickFilterId = "oportunidades" | "oversold" | "calidad" | "solo_cedear";

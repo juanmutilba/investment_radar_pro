@@ -184,6 +184,75 @@ function isLatestSummary(data: unknown): data is LatestSummary {
   );
 }
 
+/**
+ * Fila GET /cedears (alias JSON TotalScore / SignalState desde el backend).
+ */
+export type CedearRow = {
+  ticker_usa: string;
+  ticker_cedear_ars: string;
+  ticker_cedear_usd: string;
+  ratio: number;
+  precio_cedear_ars: number | null;
+  precio_cedear_usd: number | null;
+  ccl_implicito: number | null;
+  precio_usa_real: number | null;
+  precio_implicito_usd: number | null;
+  gap_pct: number | null;
+  TotalScore: number | null;
+  SignalState: string | null;
+};
+
+function isNullableNumber(v: unknown): v is number | null {
+  return v === null || (typeof v === "number" && !Number.isNaN(v));
+}
+
+function isCedearRow(x: unknown): x is CedearRow {
+  if (x === null || typeof x !== "object") {
+    return false;
+  }
+  const o = x as Record<string, unknown>;
+  return (
+    typeof o.ticker_usa === "string" &&
+    typeof o.ticker_cedear_ars === "string" &&
+    typeof o.ticker_cedear_usd === "string" &&
+    typeof o.ratio === "number" &&
+    isNullableNumber(o.precio_cedear_ars) &&
+    isNullableNumber(o.precio_cedear_usd) &&
+    isNullableNumber(o.ccl_implicito) &&
+    isNullableNumber(o.precio_usa_real) &&
+    isNullableNumber(o.precio_implicito_usd) &&
+    isNullableNumber(o.gap_pct) &&
+    isNullableNumber(o.TotalScore) &&
+    (o.SignalState === null || typeof o.SignalState === "string")
+  );
+}
+
+/**
+ * GET /cedears — vista CEDEAR sobre el último radar USA.
+ * null si no hay export en el backend (404).
+ */
+export async function fetchCedears(): Promise<CedearRow[] | null> {
+  const res = await fetch(`${BASE}/cedears`);
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!Array.isArray(data)) {
+    throw new Error("Respuesta inesperada: se esperaba un array de CEDEAR");
+  }
+  const out: CedearRow[] = [];
+  for (const item of data) {
+    if (!isCedearRow(item)) {
+      throw new Error("Respuesta inesperada: fila CEDEAR inválida");
+    }
+    out.push(item);
+  }
+  return out;
+}
+
 /** GET /latest-summary. null si no hay export (404). */
 export async function fetchLatestSummary(): Promise<LatestSummary | null> {
   const res = await fetch(`${BASE}/latest-summary`);

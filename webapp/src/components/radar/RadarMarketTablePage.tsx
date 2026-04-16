@@ -76,6 +76,10 @@ export function RadarMarketTablePage({
   const rsiKeys = useMemo(() => colKeys(columns, "rsi"), [columns]);
   const fundKeys = useMemo(() => colKeys(columns, "fund"), [columns]);
   const debtEbitdaKeys = useMemo(() => colKeys(columns, "debtToEbitda"), [columns]);
+  const cedearKeys = useMemo(() => {
+    const c = columns.find((x) => x.id === "tieneCedear");
+    return c?.keys ?? ["TieneCedear", "tieneCedear"];
+  }, [columns]);
 
   const renderKeys = useMemo<RenderCellKeys>(
     () => ({ totalKeys, rsiKeys }),
@@ -160,6 +164,17 @@ export function RadarMarketTablePage({
   const rows = radar?.rows ?? [];
   const emptySheet = radar !== null && radar !== undefined && rows.length === 0;
 
+  const radarHasTieneCedear = useMemo(
+    () =>
+      rows.some(
+        (r) =>
+          typeof r === "object" &&
+          r !== null &&
+          Object.prototype.hasOwnProperty.call(r, "TieneCedear"),
+      ),
+    [rows],
+  );
+
   const sectorOptions = useMemo(() => {
     const set = new Set<string>();
     for (const row of rows) {
@@ -218,6 +233,22 @@ export function RadarMarketTablePage({
         return fs !== null && fs >= 7 && de !== null && de <= 2;
       });
     }
+    if (quickFilter === "solo_cedear" && radarHasTieneCedear) {
+      out = out.filter((r) => {
+        const v = getRaw(r, cedearKeys);
+        if (typeof v === "boolean") {
+          return v;
+        }
+        if (v === 1) {
+          return true;
+        }
+        if (typeof v === "string") {
+          const s = v.trim().toLowerCase();
+          return s === "true" || s === "1" || s === "sí" || s === "si";
+        }
+        return false;
+      });
+    }
     return out;
   }, [
     rows,
@@ -234,6 +265,8 @@ export function RadarMarketTablePage({
     rsiKeys,
     fundKeys,
     debtEbitdaKeys,
+    cedearKeys,
+    radarHasTieneCedear,
     universe?.keys,
   ]);
 
@@ -452,6 +485,16 @@ export function RadarMarketTablePage({
               >
                 Calidad
               </button>
+              {radarHasTieneCedear ? (
+                <button
+                  type="button"
+                  className={`radar-chip${quickFilter === "solo_cedear" ? " radar-chip--active" : ""}`}
+                  title="Solo tickers USA con equivalencia CEDEAR activa en la tabla maestra"
+                  onClick={() => setQuickFilter((q) => (q === "solo_cedear" ? null : "solo_cedear"))}
+                >
+                  Solo CEDEAR
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="radar-chip radar-chip--ghost"
