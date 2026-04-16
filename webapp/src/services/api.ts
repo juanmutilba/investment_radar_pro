@@ -57,7 +57,10 @@ export type AlertHistoryEvent = {
   mensaje?: unknown;
 };
 
-export async function fetchAlertHistory(limit = 200): Promise<AlertHistoryEvent[]> {
+/** Límite por defecto alineado con la UI de historial (máx. eventos pedidos al backend). */
+export const ALERT_HISTORY_DEFAULT_LIMIT = 100;
+
+export async function fetchAlertHistory(limit = ALERT_HISTORY_DEFAULT_LIMIT): Promise<AlertHistoryEvent[]> {
   const q = new URLSearchParams({ limit: String(limit) });
   const res = await fetch(`${BASE}/alert-history?${q.toString()}`);
   if (!res.ok) {
@@ -68,6 +71,37 @@ export async function fetchAlertHistory(limit = 200): Promise<AlertHistoryEvent[
     throw new Error("Respuesta inesperada: se esperaba un array");
   }
   return data as AlertHistoryEvent[];
+}
+
+export type AlertAnalysisRow = {
+  ticker: string;
+  score_actual: number;
+  tipo_actual: string | null;
+  cantidad_eventos: number;
+  cantidad_scans: number;
+  aceleracion: number;
+  novedad: number;
+  recencia_segundos: number;
+  recencia_score: number;
+  cambio_regimen: boolean;
+  direccion_regimen: "mejora" | "deterioro" | "sin_cambio";
+  racha_scans: number;
+  score_promedio: number;
+  ranking_score: number;
+  tendencia: "subiendo" | "bajando" | "plano";
+};
+
+export async function fetchAlertsAnalysis(limit = 5000): Promise<AlertAnalysisRow[]> {
+  const q = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(`${BASE}/alerts-analysis?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!Array.isArray(data)) {
+    throw new Error("Respuesta inesperada: se esperaba un array");
+  }
+  return data as AlertAnalysisRow[];
 }
 
 /** Fila tal como viene del Excel (claves pueden variar en casing); usar helpers al renderizar. */

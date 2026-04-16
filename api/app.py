@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, Query
 
 from services import latest_export
 from services.alert_event_log import read_alert_events
+from services.alerts_analysis import AlertsAnalysisRow, build_alerts_analysis
 from services.export_service import export_results
 from services.scan_service import run_full_scan
 
@@ -60,6 +61,17 @@ def get_alert_history(limit: int = Query(default=500, ge=1, le=50_000)):
     Historial append-only de alertas detectadas por scan (JSONL en disco).
     """
     return read_alert_events(limit=limit)
+
+
+@app.get("/alerts-analysis", response_model=list[AlertsAnalysisRow])
+def get_alerts_analysis(limit: int = Query(default=5000, ge=1, le=50_000)):
+    """
+    Ranking analítico por ticker (derivado únicamente del historial cargado).
+    """
+    events = read_alert_events(limit=limit)
+    if not events:
+        return []
+    return build_alerts_analysis(events=events)
 
 
 @app.get("/latest-radar")
