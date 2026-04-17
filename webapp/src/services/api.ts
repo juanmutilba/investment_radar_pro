@@ -184,6 +184,8 @@ function isLatestSummary(data: unknown): data is LatestSummary {
   );
 }
 
+export type CedearRatioEstado = "ok" | "pendiente_validar" | "revisar";
+
 /**
  * Fila GET /cedears (alias JSON TotalScore / SignalState desde el backend).
  */
@@ -191,7 +193,12 @@ export type CedearRow = {
   ticker_usa: string;
   ticker_cedear_ars: string;
   ticker_cedear_usd: string;
+  /** cedears_por_accion_usa del maestro JSON (no inferido). */
   ratio: number;
+  fuente_ratio?: string | null;
+  fecha_validacion_ratio?: string | null;
+  estado_ratio: CedearRatioEstado;
+  dias_desde_validacion: number | null;
   precio_cedear_ars: number | null;
   precio_cedear_usd: number | null;
   ccl_implicito: number | null;
@@ -206,16 +213,40 @@ function isNullableNumber(v: unknown): v is number | null {
   return v === null || (typeof v === "number" && !Number.isNaN(v));
 }
 
+function isNullableInt(v: unknown): v is number | null {
+  if (v === null) {
+    return true;
+  }
+  if (typeof v !== "number" || !Number.isFinite(v)) {
+    return false;
+  }
+  return Number.isInteger(v);
+}
+
+function isCedearRatioEstado(v: unknown): v is CedearRatioEstado {
+  return v === "ok" || v === "pendiente_validar" || v === "revisar";
+}
+
 function isCedearRow(x: unknown): x is CedearRow {
   if (x === null || typeof x !== "object") {
     return false;
   }
   const o = x as Record<string, unknown>;
+  const fr = o.fuente_ratio;
+  const fd = o.fecha_validacion_ratio;
+  if (fr !== undefined && fr !== null && typeof fr !== "string") {
+    return false;
+  }
+  if (fd !== undefined && fd !== null && typeof fd !== "string") {
+    return false;
+  }
   return (
     typeof o.ticker_usa === "string" &&
     typeof o.ticker_cedear_ars === "string" &&
     typeof o.ticker_cedear_usd === "string" &&
     typeof o.ratio === "number" &&
+    isCedearRatioEstado(o.estado_ratio) &&
+    isNullableInt(o.dias_desde_validacion) &&
     isNullableNumber(o.precio_cedear_ars) &&
     isNullableNumber(o.precio_cedear_usd) &&
     isNullableNumber(o.ccl_implicito) &&

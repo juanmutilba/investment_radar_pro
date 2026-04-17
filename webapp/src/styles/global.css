@@ -539,6 +539,20 @@ table.radar-table thead .radar-table__sticky-col {
   color: #f0b8b8;
 }
 
+/** Tabla CEDEAR: texto largo de fuente_ratio */
+.cedear-table__fuente {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.88em;
+  color: var(--text-muted);
+}
+
+/** Gap % CEDEAR: valor por debajo de la acción USA (reutiliza paleta danger) */
+.cedear-cell--gap-neg {
+  color: var(--danger);
+  font-weight: 600;
+}
+
 /** Énfasis numérico TotalScore / RSI */
 .radar-cell--score-high {
   color: #9ee6b3;

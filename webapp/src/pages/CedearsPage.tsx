@@ -1,11 +1,45 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { TickerRadarLink } from "@/components/navigation/radarLinks";
-import { fetchCedears, type CedearRow } from "@/services/api";
+import { fetchCedears, type CedearRatioEstado, type CedearRow } from "@/services/api";
 
 const EMPTY = "-";
 
 type SortMode = "gap_desc" | "gap_asc" | "score_desc" | "score_asc";
+
+/** Miles y decimales estilo ARS (sin símbolo de moneda; se antepone `$ `). */
+const fmtEsArsLike = new Intl.NumberFormat("es-AR", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+/** USD / valores en dólares: miles locales, 2 decimales, sin prefijo $. */
+const fmtEsUsd2 = new Intl.NumberFormat("es-AR", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+/** Precio CEDEAR en línea USD: hasta 4 decimales si hace falta. */
+const fmtEsUsd2to4 = new Intl.NumberFormat("es-AR", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
+});
+
+function fmtArsConSigno(v: number | null): string {
+  if (v === null || Number.isNaN(v)) return EMPTY;
+  return `$ ${fmtEsArsLike.format(v)}`;
+}
+
+/** Valores en USD: prefijo literal, miles/decimales es-AR, sin $. */
+function fmtUsdPrefijo2(v: number | null): string {
+  if (v === null || Number.isNaN(v)) return EMPTY;
+  return `USD ${fmtEsUsd2.format(v)}`;
+}
+
+function fmtUsdPrefijo2to4(v: number | null): string {
+  if (v === null || Number.isNaN(v)) return EMPTY;
+  return `USD ${fmtEsUsd2to4.format(v)}`;
+}
 
 function fmtFixed(v: number | null, digits: number): string {
   if (v === null || Number.isNaN(v)) return EMPTY;
@@ -15,6 +49,60 @@ function fmtFixed(v: number | null, digits: number): string {
 function fmtPct(v: number | null): string {
   if (v === null || Number.isNaN(v)) return EMPTY;
   return `${v.toFixed(2)}%`;
+}
+
+function fmtFuente(text: string | null | undefined): { display: string; full: string | undefined } {
+  const t = text?.trim() ?? "";
+  if (!t) {
+    return { display: EMPTY, full: undefined };
+  }
+  if (t.length > 44) {
+    return { display: `${t.slice(0, 42)}…`, full: t };
+  }
+  return { display: t, full: t };
+}
+
+const GAP_TOOLTIP =
+  "Gap % = (Acción implícita USD / Acción USA - 1) * 100\n" +
+  ">0.5% verde · <-0.5% rojo · ±0.5% gris";
+
+/** Umbrales en puntos porcentuales (mismo rango que gap_pct del backend). */
+function gapPctCellClass(gap: number | null): string {
+  if (gap === null || Number.isNaN(gap)) {
+    return "table-cell--empty";
+  }
+  if (gap > 0.5) {
+    return "radar-cell--score-high";
+  }
+  if (gap < -0.5) {
+    return "cedear-cell--gap-neg";
+  }
+  return "radar-cell--score-very-low";
+}
+
+function estadoRatioBadge(estado: CedearRatioEstado, dias: number | null): { cls: string; label: string; title: string } {
+  if (estado === "ok") {
+    return {
+      cls: "radar-badge radar-badge--conv-alta",
+      label: "OK",
+      title: dias !== null ? `Validado hace ${dias} días (ventana ≤180)` : "Ratio al día según fecha del maestro",
+    };
+  }
+  if (estado === "pendiente_validar") {
+    return {
+      cls: "radar-badge radar-badge--conv-media",
+      label: "Pendiente",
+      title: "Sin fecha de validación en el maestro o fecha no interpretable",
+    };
+  }
+  return {
+    cls: "radar-badge radar-badge--conv-baja",
+    label: "Revisar",
+    title:
+      dias !== null
+        ? `Última validación hace ${dias} días (>180); conviene actualizar fuente y fecha`
+        : "Fecha futura o antigüedad fuera de regla; revisar el maestro",
+  };
 }
 
 function compareNullableNum(a: number | null, b: number | null, dir: 1 | -1): number {
@@ -96,6 +184,7 @@ export function CedearsPage() {
           r.ticker_usa,
           r.ticker_cedear_ars,
           r.ticker_cedear_usd,
+          r.fuente_ratio ?? "",
         ]
           .join(" ")
           .toLowerCase();
@@ -169,7 +258,7 @@ export function CedearsPage() {
               <input
                 type="search"
                 className="radar-toolbar__input"
-                placeholder="USA, ARS o USD…"
+                placeholder="Ticker o fuente…"
                 value={search}
                 onChange={(ev) => setSearch(ev.target.value)}
                 autoComplete="off"
@@ -211,32 +300,38 @@ export function CedearsPage() {
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head">
                     <span className="radar-table__sort-label radar-table__sort-label--static">USA</span>
                   </th>
-                  <th scope="col" className="radar-table__th radar-table__th--sticky-head">
-                    <span className="radar-table__sort-label radar-table__sort-label--static">CEDEAR $</span>
-                  </th>
-                  <th scope="col" className="radar-table__th radar-table__th--sticky-head">
-                    <span className="radar-table__sort-label radar-table__sort-label--static">CEDEAR USD</span>
+                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
+                    <span className="radar-table__sort-label radar-table__sort-label--static" title="Precio del CEDEAR en pesos">
+                      CEDEAR $
+                    </span>
                   </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static">Ratio</span>
+                    <span className="radar-table__sort-label radar-table__sort-label--static" title="Precio del CEDEAR en USD (cable)">
+                      CEDEAR USD
+                    </span>
                   </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static">Precio $</span>
+                    <span className="radar-table__sort-label radar-table__sort-label--static" title="Tipo de cambio implícito (ARS / USD del par CEDEAR)">
+                      CCL implícito
+                    </span>
                   </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static">Precio USD</span>
+                    <span className="radar-table__sort-label radar-table__sort-label--static" title="Precio de la acción USA en el radar">
+                      Acción USA
+                    </span>
                   </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static">CCL implícito</span>
+                    <span
+                      className="radar-table__sort-label radar-table__sort-label--static"
+                      title="Precio implícito de 1 acción USA vía CEDEAR (USD)"
+                    >
+                      Acción implícita USD
+                    </span>
                   </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static">Precio USA</span>
-                  </th>
-                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static">Implícito USD</span>
-                  </th>
-                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static">Gap %</span>
+                    <span className="radar-table__sort-label radar-table__sort-label--static" title={GAP_TOOLTIP}>
+                      Gap %
+                    </span>
                   </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
                     <span className="radar-table__sort-label radar-table__sort-label--static">TotalScore</span>
@@ -244,35 +339,45 @@ export function CedearsPage() {
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head">
                     <span className="radar-table__sort-label radar-table__sort-label--static">SignalState</span>
                   </th>
+                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
+                    <span className="radar-table__sort-label radar-table__sort-label--static">Ratio</span>
+                  </th>
+                  <th scope="col" className="radar-table__th radar-table__th--sticky-head">
+                    <span className="radar-table__sort-label radar-table__sort-label--static">Fuente ratio</span>
+                  </th>
+                  <th scope="col" className="radar-table__th radar-table__th--sticky-head">
+                    <span className="radar-table__sort-label radar-table__sort-label--static">Validado</span>
+                  </th>
+                  <th scope="col" className="radar-table__th radar-table__th--sticky-head">
+                    <span className="radar-table__sort-label radar-table__sort-label--static">Estado ratio</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {displayRows.map((r) => (
+                {displayRows.map((r) => {
+                  const fuente = fmtFuente(r.fuente_ratio);
+                  const est = estadoRatioBadge(r.estado_ratio, r.dias_desde_validacion);
+                  return (
                   <tr key={r.ticker_usa}>
                     <td className="radar-table__sticky-col table-cell--nowrap">
                       <TickerRadarLink ticker={r.ticker_usa} mercado="USA" />
                     </td>
-                    <td className="table-cell--nowrap">{r.ticker_cedear_ars || EMPTY}</td>
-                    <td className="table-cell--nowrap">{r.ticker_cedear_usd || EMPTY}</td>
-                    <td style={{ textAlign: "right" }} className="table-cell--nowrap">
-                      {fmtFixed(r.ratio, 2)}
-                    </td>
                     <td style={{ textAlign: "right" }} className={r.precio_cedear_ars === null ? "table-cell--empty" : ""}>
-                      {fmtFixed(r.precio_cedear_ars, 2)}
+                      {fmtArsConSigno(r.precio_cedear_ars)}
                     </td>
                     <td style={{ textAlign: "right" }} className={r.precio_cedear_usd === null ? "table-cell--empty" : ""}>
-                      {fmtFixed(r.precio_cedear_usd, 4)}
+                      {fmtUsdPrefijo2to4(r.precio_cedear_usd)}
                     </td>
                     <td style={{ textAlign: "right" }} className={r.ccl_implicito === null ? "table-cell--empty" : ""}>
-                      {fmtFixed(r.ccl_implicito, 2)}
+                      {fmtArsConSigno(r.ccl_implicito)}
                     </td>
                     <td style={{ textAlign: "right" }} className={r.precio_usa_real === null ? "table-cell--empty" : ""}>
-                      {fmtFixed(r.precio_usa_real, 2)}
+                      {fmtUsdPrefijo2(r.precio_usa_real)}
                     </td>
                     <td style={{ textAlign: "right" }} className={r.precio_implicito_usd === null ? "table-cell--empty" : ""}>
-                      {fmtFixed(r.precio_implicito_usd, 4)}
+                      {fmtUsdPrefijo2(r.precio_implicito_usd)}
                     </td>
-                    <td style={{ textAlign: "right" }} className={r.gap_pct === null ? "table-cell--empty" : ""}>
+                    <td style={{ textAlign: "right" }} className={`table-cell--nowrap ${gapPctCellClass(r.gap_pct)}`}>
                       {fmtPct(r.gap_pct)}
                     </td>
                     <td style={{ textAlign: "right" }} className={r.TotalScore === null ? "table-cell--empty" : ""}>
@@ -281,8 +386,27 @@ export function CedearsPage() {
                     <td className="table-cell--nowrap">
                       {r.SignalState?.trim() ? r.SignalState : EMPTY}
                     </td>
+                    <td style={{ textAlign: "right" }} className="table-cell--nowrap">
+                      {fmtFixed(r.ratio, 2)}
+                    </td>
+                    <td
+                      className="table-cell--nowrap cedear-table__fuente"
+                      title={fuente.full}
+                      style={{ maxWidth: "14rem" }}
+                    >
+                      {fuente.display}
+                    </td>
+                    <td className="table-cell--nowrap">
+                      {r.fecha_validacion_ratio?.trim() ? r.fecha_validacion_ratio.trim() : EMPTY}
+                    </td>
+                    <td className="table-cell--nowrap">
+                      <span className={est.cls} title={est.title}>
+                        {est.label}
+                      </span>
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

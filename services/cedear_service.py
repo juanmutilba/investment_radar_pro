@@ -1,13 +1,44 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+import os
+import sys
+from datetime import date
+from typing import Any, Literal
 
 import yfinance as yf
 from pydantic import BaseModel, ConfigDict, Field
 
 from data.cedear_mapping import CEDEAR_MAPPINGS
 from services import latest_export
+
+RatioEstado = Literal["ok", "pendiente_validar", "revisar"]
+_RATIO_STALE_DAYS = 180
+
+
+def _derive_ratio_audit(fecha_raw: str | None) -> tuple[RatioEstado, int | None]:
+    """
+    Auditoría de frescura del ratio según fecha_validacion_ratio (ISO YYYY-MM-DD).
+    Sin fecha / vacío → pendiente_validar. Fecha inválida → pendiente_validar.
+    Fecha futura → revisar (dato sospechoso). >180 días → revisar.
+    """
+    if fecha_raw is None or not str(fecha_raw).strip():
+        return "pendiente_validar", None
+    s = str(fecha_raw).strip()
+    for sep in ("T", " "):
+        if sep in s:
+            s = s.split(sep, 1)[0]
+    try:
+        validated = date.fromisoformat(s)
+    except ValueError:
+        return "pendiente_validar", None
+    today = date.today()
+    delta = (today - validated).days
+    if delta < 0:
+        return "revisar", None
+    if delta > _RATIO_STALE_DAYS:
+        return "revisar", delta
+    return "ok", delta
 
 
 class CedearRow(BaseModel):
@@ -16,12 +47,37 @@ class CedearRow(BaseModel):
     ticker_usa: str
     ticker_cedear_ars: str
     ticker_cedear_usd: str
-    ratio: float = Field(..., description="ratio_cedear_a_accion del mapping")
+    ratio: float = Field(
+        ...,
+        description="cedears_por_accion_usa del maestro JSON (sin inferir desde precios).",
+    )
+    fuente_ratio: str | None = Field(
+        None,
+        description="Cita o referencia al ratio en cedear_mappings.json.",
+    )
+    fecha_validacion_ratio: str | None = Field(
+        None,
+        description="Fecha ISO de validación del ratio en el maestro, si existe.",
+    )
+    estado_ratio: RatioEstado = Field(
+        ...,
+        description="ok | pendiente_validar | revisar (según fecha y antigüedad).",
+    )
+    dias_desde_validacion: int | None = Field(
+        None,
+        description="Días desde fecha_validacion_ratio; null si no aplica.",
+    )
     precio_cedear_ars: float | None
     precio_cedear_usd: float | None
-    ccl_implicito: float | None = Field(None, description="precio_cedear_ars / precio_cedear_usd")
+    ccl_implicito: float | None = Field(
+        None,
+        description="precio_cedear_ars / precio línea CCL (USD por CEDEAR en cable).",
+    )
     precio_usa_real: float | None
-    precio_implicito_usd: float | None = Field(None, description="precio_cedear_usd / ratio")
+    precio_implicito_usd: float | None = Field(
+        None,
+        description="precio línea CCL * cedears_por_accion_usa (USD implícitos por 1 acción USA).",
+    )
     gap_pct: float | None = Field(
         None,
         description="(precio_implicito_usd / precio_usa_real - 1) * 100",
@@ -88,6 +144,30 @@ def _fetch_last_price(symbol: str) -> float | None:
     return None
 
 
+def _cedear_debug_line(
+    ticker_usa: str,
+    sym_ars: str,
+    sym_ccl: str,
+    cedears_por_accion: float,
+    p_ars: float | None,
+    p_ccl: float | None,
+) -> None:
+    """
+    Diagnóstico temporal: setear CEDEAR_DEBUG=1 en el entorno del proceso API.
+    Muestra por stderr símbolos y precios usados por fila (no dejar en producción ruidosa).
+    """
+    flag = os.environ.get("CEDEAR_DEBUG", "").strip().lower()
+    if flag not in ("1", "true", "yes"):
+        return
+    print(
+        "[CEDEAR_DEBUG] "
+        f"usa={ticker_usa!r} ticker_cedear_ars={sym_ars!r} ticker_cedear_ccl={sym_ccl!r} "
+        f"cedears_por_accion_usa={cedears_por_accion} precio_ars={p_ars!r} precio_ccl={p_ccl!r}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _usa_row_index(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for r in rows:
@@ -106,6 +186,17 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     """
     None si no hay export radar_*.xlsx.
     Solo incluye mapeos cuyo ticker_usa aparece en Radar_Completo del último export.
+
+    Datos del maestro (load_cedear_mappings_from_disk → CEDEAR_MAPPINGS):
+        ticker_cedear_ars, ticker_cedear_ccl, cedears_por_accion_usa
+    No usar en la lógica los alias ticker_cedear_usd / ratio_cedear_a_accion del dataclass.
+
+    Fórmulas:
+        ccl_implicito = precio_ars / precio_ccl
+        precio_implicito_usd = precio_ccl * cedears_por_accion_usa
+        gap_pct = (precio_implicito_usd / precio_usa_real - 1) * 100
+
+    Diagnóstico: CEDEAR_DEBUG=1 en el entorno imprime ARS/CCL/ratio/precios por fila en stderr.
     """
     payload = latest_export.read_latest_radar()
     if payload is None:
@@ -130,31 +221,41 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         sig = _radar_get(row, "SignalState", "signal_state")
         signal_state = str(sig).strip() if sig is not None else None
 
-        p_ars = _fetch_last_price(m.ticker_cedear_ars)
-        p_usd = _fetch_last_price(m.ticker_cedear_usd)
+        sym_ars = m.ticker_cedear_ars.strip()
+        sym_ccl = m.ticker_cedear_ccl.strip()
+        p_ars = _fetch_last_price(sym_ars)
+        p_ccl = _fetch_last_price(sym_ccl)
 
-        ratio = float(m.ratio_cedear_a_accion)
-        ccl: float | None = None
-        if p_ars is not None and p_usd is not None and p_usd > 0:
-            ccl = round(p_ars / p_usd, 6)
+        cedears_por = float(m.cedears_por_accion_usa)
+        _cedear_debug_line(usa_key, sym_ars, sym_ccl, cedears_por, p_ars, p_ccl)
+
+        ccl_impl: float | None = None
+        if p_ars is not None and p_ccl is not None and p_ccl > 0:
+            ccl_impl = round(p_ars / p_ccl, 6)
 
         precio_impl: float | None = None
-        if p_usd is not None and ratio > 0:
-            precio_impl = round(p_usd / ratio, 6)
+        if p_ccl is not None and cedears_por > 0:
+            precio_impl = round(p_ccl * cedears_por, 6)
 
         gap: float | None = None
         if precio_impl is not None and precio_usa is not None and precio_usa > 0:
             gap = round((precio_impl / precio_usa - 1.0) * 100.0, 4)
 
+        estado_r, dias_val = _derive_ratio_audit(m.fecha_validacion_ratio)
+
         out.append(
             CedearRow(
                 ticker_usa=m.ticker_usa.strip().upper(),
-                ticker_cedear_ars=m.ticker_cedear_ars.strip(),
-                ticker_cedear_usd=m.ticker_cedear_usd.strip(),
-                ratio=ratio,
+                ticker_cedear_ars=sym_ars,
+                ticker_cedear_usd=sym_ccl,
+                ratio=cedears_por,
+                fuente_ratio=m.fuente_ratio,
+                fecha_validacion_ratio=m.fecha_validacion_ratio,
+                estado_ratio=estado_r,
+                dias_desde_validacion=dias_val,
                 precio_cedear_ars=p_ars,
-                precio_cedear_usd=p_usd,
-                ccl_implicito=ccl,
+                precio_cedear_usd=p_ccl,
+                ccl_implicito=ccl_impl,
                 precio_usa_real=precio_usa,
                 precio_implicito_usd=precio_impl,
                 gap_pct=gap,
