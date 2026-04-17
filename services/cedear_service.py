@@ -11,9 +11,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from data.cedear_mapping import CEDEAR_MAPPINGS
 from services import latest_export
+from services.cocos_cedear import CocosAuthError, fetch_last_price_cocos
+from services.cocos_token_store import get_cocos_api_token
 
 RatioEstado = Literal["ok", "pendiente_validar", "revisar"]
+ModUsa = Literal["SI", "NO"]
+FuenteCedearLocal = Literal["Cocos", "Yahoo"]
 _RATIO_STALE_DAYS = 180
+
+
+class CocosTokenRequired(Exception):
+    """No hay token Cocos en memoria; el cliente debe enviarlo vía POST /cedears/cocos-token."""
 
 
 def _derive_ratio_audit(fecha_raw: str | None) -> tuple[RatioEstado, int | None]:
@@ -84,6 +92,14 @@ class CedearRow(BaseModel):
     )
     total_score: float | None = Field(None, serialization_alias="TotalScore")
     signal_state: str | None = Field(None, serialization_alias="SignalState")
+    mod_usa: ModUsa = Field(
+        ...,
+        description='SI: precio/score/señal desde el radar USA; NO: precio USA vía Yahoo (sin radar).',
+    )
+    fuente_cedear: FuenteCedearLocal = Field(
+        ...,
+        description='Cocos: ARS y cable desde Cocos; Yahoo: al menos una línea vía Yahoo.',
+    )
 
 
 def _radar_get(row: dict[str, Any], *keys: str) -> Any:
@@ -144,6 +160,24 @@ def _fetch_last_price(symbol: str) -> float | None:
     return None
 
 
+def _fetch_cedear_local_spot(symbol: str, cocos_jwt: str) -> tuple[float | None, FuenteCedearLocal]:
+    """
+    Precio spot línea CEDEAR (ARS o CCL): Cocos primero; si no hay dato, Yahoo.
+    Propaga CocosAuthError ante 401.
+    La segunda componente indica de qué integración salió el valor usado (auditoría).
+    """
+    sym = (symbol or "").strip()
+    if not sym:
+        return None, "Yahoo"
+    try:
+        p = fetch_last_price_cocos(api_jwt=cocos_jwt, yahoo_style_symbol=sym)
+    except CocosAuthError:
+        raise
+    if p is not None and p > 0:
+        return p, "Cocos"
+    return _fetch_last_price(sym), "Yahoo"
+
+
 def _cedear_debug_line(
     ticker_usa: str,
     sym_ars: str,
@@ -185,7 +219,9 @@ def _usa_row_index(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     """
     None si no hay export radar_*.xlsx.
-    Solo incluye mapeos cuyo ticker_usa aparece en Radar_Completo del último export.
+    Requiere token Cocos en memoria (POST /cedears/cocos-token); si falta, lanza CocosTokenRequired.
+    Incluye todos los mapeos activos. Si ticker_usa no está en el radar, se conserva la fila:
+    precio USA con Yahoo (mismo ticker limpio); TotalScore y SignalState en null; mod_usa=NO.
 
     Datos del maestro (load_cedear_mappings_from_disk → CEDEAR_MAPPINGS):
         ticker_cedear_ars, ticker_cedear_ccl, cedears_por_accion_usa
@@ -205,6 +241,10 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     if not isinstance(raw_rows, list):
         return []
 
+    cocos_jwt = get_cocos_api_token()
+    if not cocos_jwt:
+        raise CocosTokenRequired()
+
     by_ticker = _usa_row_index(raw_rows)
     out: list[CedearRow] = []
 
@@ -213,18 +253,25 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             continue
         usa_key = m.ticker_usa.strip().upper()
         row = by_ticker.get(usa_key)
-        if row is None:
-            continue
-
-        precio_usa = _to_float(_radar_get(row, "Precio", "precio"))
-        total_score = _to_float(_radar_get(row, "TotalScore", "total_score"))
-        sig = _radar_get(row, "SignalState", "signal_state")
-        signal_state = str(sig).strip() if sig is not None else None
+        if row is not None:
+            precio_usa = _to_float(_radar_get(row, "Precio", "precio"))
+            total_score = _to_float(_radar_get(row, "TotalScore", "total_score"))
+            sig = _radar_get(row, "SignalState", "signal_state")
+            signal_state = str(sig).strip() if sig is not None else None
+            mod_usa: ModUsa = "SI"
+        else:
+            precio_usa = _fetch_last_price(usa_key)
+            total_score = None
+            signal_state = None
+            mod_usa = "NO"
 
         sym_ars = m.ticker_cedear_ars.strip()
         sym_ccl = m.ticker_cedear_ccl.strip()
-        p_ars = _fetch_last_price(sym_ars)
-        p_ccl = _fetch_last_price(sym_ccl)
+        p_ars, src_ars = _fetch_cedear_local_spot(sym_ars, cocos_jwt)
+        p_ccl, src_ccl = _fetch_cedear_local_spot(sym_ccl, cocos_jwt)
+        fuente_cedear: FuenteCedearLocal = (
+            "Cocos" if src_ars == "Cocos" and src_ccl == "Cocos" else "Yahoo"
+        )
 
         cedears_por = float(m.cedears_por_accion_usa)
         _cedear_debug_line(usa_key, sym_ars, sym_ccl, cedears_por, p_ars, p_ccl)
@@ -261,6 +308,8 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
                 gap_pct=gap,
                 total_score=total_score,
                 signal_state=signal_state,
+                mod_usa=mod_usa,
+                fuente_cedear=fuente_cedear,
             )
         )
 
