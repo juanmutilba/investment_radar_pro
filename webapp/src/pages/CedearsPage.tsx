@@ -190,7 +190,6 @@ export function CedearsPage() {
           r.ticker_usa,
           r.ticker_cedear_ars,
           r.ticker_cedear_usd,
-          r.fuente_cedear,
           r.fuente_ratio ?? "",
         ]
           .join(" ")
@@ -319,14 +318,6 @@ export function CedearsPage() {
                       CEDEAR USD
                     </span>
                   </th>
-                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "center" }}>
-                    <span
-                      className="radar-table__sort-label radar-table__sort-label--static"
-                      title="Precios locales CEDEAR ($ y USD) vía Yahoo."
-                    >
-                      fuente_cedear
-                    </span>
-                  </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
                     <span className="radar-table__sort-label radar-table__sort-label--static" title="Tipo de cambio implícito (ARS / USD del par CEDEAR)">
                       CCL implícito
@@ -392,9 +383,6 @@ export function CedearsPage() {
                     </td>
                     <td style={{ textAlign: "right" }} className={r.precio_cedear_usd === null ? "table-cell--empty" : ""}>
                       {fmtUsdPrefijo2to4(r.precio_cedear_usd)}
-                    </td>
-                    <td style={{ textAlign: "center" }} className="table-cell--nowrap">
-                      {r.fuente_cedear}
                     </td>
                     <td style={{ textAlign: "right" }} className={r.ccl_implicito === null ? "table-cell--empty" : ""}>
                       {fmtArsConSigno(r.ccl_implicito)}

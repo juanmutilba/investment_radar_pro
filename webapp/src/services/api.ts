@@ -267,30 +267,44 @@ function isCedearRow(x: unknown): x is CedearRow {
 /** Resultado GET /cedears: filas o sin export. */
 export type CedearsFetchResult = { kind: "rows"; rows: CedearRow[] } | { kind: "no_export" };
 
+/** Una sola petición HTTP en vuelo: evita GET duplicados (p. ej. React StrictMode en dev). */
+let cedearsFetchInflight: Promise<CedearsFetchResult> | null = null;
+
 /**
  * GET /cedears — vista CEDEAR sobre el último radar USA.
  * no_export: 404.
  */
 export async function fetchCedears(): Promise<CedearsFetchResult> {
-  const res = await fetch(`${BASE}/cedears`);
-  if (res.status === 404) {
-    return { kind: "no_export" };
+  if (cedearsFetchInflight !== null) {
+    return cedearsFetchInflight;
   }
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
-  }
-  const data: unknown = await res.json().catch(() => null);
-  if (!Array.isArray(data)) {
-    throw new Error("Respuesta inesperada: se esperaba un array de CEDEAR");
-  }
-  const out: CedearRow[] = [];
-  for (const item of data) {
-    if (!isCedearRow(item)) {
-      throw new Error("Respuesta inesperada: fila CEDEAR inválida");
+  const p = (async (): Promise<CedearsFetchResult> => {
+    try {
+      const res = await fetch(`${BASE}/cedears`);
+      if (res.status === 404) {
+        return { kind: "no_export" };
+      }
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+      }
+      const data: unknown = await res.json().catch(() => null);
+      if (!Array.isArray(data)) {
+        throw new Error("Respuesta inesperada: se esperaba un array de CEDEAR");
+      }
+      const out: CedearRow[] = [];
+      for (const item of data) {
+        if (!isCedearRow(item)) {
+          throw new Error("Respuesta inesperada: fila CEDEAR inválida");
+        }
+        out.push(item);
+      }
+      return { kind: "rows", rows: out };
+    } finally {
+      cedearsFetchInflight = null;
     }
-    out.push(item);
-  }
-  return { kind: "rows", rows: out };
+  })();
+  cedearsFetchInflight = p;
+  return p;
 }
 
 /** GET /latest-summary. null si no hay export (404). */

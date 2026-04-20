@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 import sys
+import time
 from datetime import date
 from typing import Any, Literal
 
@@ -11,6 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from data.cedear_mapping import CEDEAR_MAPPINGS
 from services import latest_export
+
+logger = logging.getLogger(__name__)
 
 RatioEstado = Literal["ok", "pendiente_validar", "revisar"]
 ModUsa = Literal["SI", "NO"]
@@ -154,12 +158,28 @@ def _fetch_last_price(symbol: str) -> float | None:
     return None
 
 
-def _fetch_cedear_local_spot(symbol: str) -> tuple[float | None, FuenteCedearLocal]:
-    """Precio spot línea CEDEAR (ARS o cable) vía Yahoo."""
+def _yahoo_spot_cached(symbol: str, cache: dict[str, float | None], stats: dict[str, int]) -> float | None:
+    """
+    Mismo contrato que _fetch_last_price, pero deduplica por símbolo dentro del mismo armado
+    de filas CEDEAR (un request GET /cedears).
+
+    Un precio None (sin datos / fallo) queda guardado en cache igual que un número: no se
+    reconsulta Yahoo para el mismo símbolo en el resto de ese armado.
+    """
     sym = (symbol or "").strip()
     if not sym:
-        return None, "Yahoo"
-    return _fetch_last_price(sym), "Yahoo"
+        return None
+    key = sym.upper()
+    if key in cache:
+        stats["yahoo_cache_hits"] += 1
+        return cache[key]
+    stats["yahoo_queries"] += 1
+    p: float | None = None
+    try:
+        p = _fetch_last_price(sym)
+    finally:
+        cache[key] = p
+    return p
 
 
 def _cedear_debug_line(
@@ -217,15 +237,29 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
 
     Diagnóstico: CEDEAR_DEBUG=1 en el entorno imprime ARS/CCL/ratio/precios por fila en stderr.
     """
+    t0 = time.perf_counter()
+    yahoo_stats = {"yahoo_queries": 0, "yahoo_cache_hits": 0}
+
     payload = latest_export.read_latest_radar()
     if payload is None:
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        logger.info(
+            "cedear_build elapsed_ms=%.1f rows=0 yahoo_queries=0 yahoo_cache_hits=0 (no_export)",
+            elapsed_ms,
+        )
         return None
     raw_rows = payload.get("rows")
     if not isinstance(raw_rows, list):
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        logger.info(
+            "cedear_build elapsed_ms=%.1f rows=0 yahoo_queries=0 yahoo_cache_hits=0 (invalid_rows)",
+            elapsed_ms,
+        )
         return []
 
     by_ticker = _usa_row_index(raw_rows)
     out: list[CedearRow] = []
+    yahoo_cache: dict[str, float | None] = {}
 
     for m in CEDEAR_MAPPINGS:
         if not m.activo:
@@ -239,15 +273,15 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             signal_state = str(sig).strip() if sig is not None else None
             mod_usa: ModUsa = "SI"
         else:
-            precio_usa = _fetch_last_price(usa_key)
+            precio_usa = _yahoo_spot_cached(usa_key, yahoo_cache, yahoo_stats)
             total_score = None
             signal_state = None
             mod_usa = "NO"
 
         sym_ars = m.ticker_cedear_ars.strip()
         sym_ccl = m.ticker_cedear_ccl.strip()
-        p_ars, _ = _fetch_cedear_local_spot(sym_ars)
-        p_ccl, _ = _fetch_cedear_local_spot(sym_ccl)
+        p_ars = _yahoo_spot_cached(sym_ars, yahoo_cache, yahoo_stats)
+        p_ccl = _yahoo_spot_cached(sym_ccl, yahoo_cache, yahoo_stats)
         fuente_cedear: FuenteCedearLocal = "Yahoo"
 
         cedears_por = float(m.cedears_por_accion_usa)
@@ -290,4 +324,12 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             )
         )
 
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    logger.info(
+        "cedear_build elapsed_ms=%.1f rows=%s yahoo_queries=%s yahoo_cache_hits=%s",
+        elapsed_ms,
+        len(out),
+        yahoo_stats["yahoo_queries"],
+        yahoo_stats["yahoo_cache_hits"],
+    )
     return out
