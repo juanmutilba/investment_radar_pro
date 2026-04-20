@@ -209,8 +209,8 @@ export type CedearRow = {
   SignalState: string | null;
   /** SI: datos USA desde el radar; NO: precio USA spot (sin score/señal del radar). */
   mod_usa: "SI" | "NO";
-  /** Origen de los precios locales CEDEAR ($ y USD): ambos Cocos, o hubo fallback Yahoo. */
-  fuente_cedear: "Cocos" | "Yahoo";
+  /** Origen de los precios locales CEDEAR ($ y USD). */
+  fuente_cedear: "Yahoo";
 };
 
 function isNullableNumber(v: unknown): v is number | null {
@@ -260,61 +260,21 @@ function isCedearRow(x: unknown): x is CedearRow {
     isNullableNumber(o.TotalScore) &&
     (o.SignalState === null || typeof o.SignalState === "string") &&
     (o.mod_usa === "SI" || o.mod_usa === "NO") &&
-    (o.fuente_cedear === "Cocos" || o.fuente_cedear === "Yahoo")
+    o.fuente_cedear === "Yahoo"
   );
 }
 
-export type CedearsCocosGateCode = "cocos_token_required" | "cocos_auth_failed";
-
-/** Resultado GET /cedears: filas, falta token Cocos, o sin export. */
-export type CedearsFetchResult =
-  | { kind: "rows"; rows: CedearRow[] }
-  | { kind: "need_cocos_token"; code: CedearsCocosGateCode; message: string }
-  | { kind: "no_export" };
-
-function parseCedearsCocos403(raw: unknown): { code: CedearsCocosGateCode; message: string } {
-  let code: CedearsCocosGateCode = "cocos_token_required";
-  let message = "Se requiere token de Cocos para cotizar CEDEAR.";
-  const detail = raw && typeof raw === "object" && "detail" in raw ? (raw as { detail: unknown }).detail : null;
-  if (detail && typeof detail === "object") {
-    const o = detail as { code?: unknown; message?: unknown };
-    if (o.code === "cocos_auth_failed" || o.code === "cocos_token_required") {
-      code = o.code;
-    }
-    if (typeof o.message === "string" && o.message.trim()) {
-      message = o.message.trim();
-    }
-  }
-  return { code, message };
-}
-
-/**
- * POST /cedears/cocos-token — guarda JWT Cocos en memoria del backend.
- */
-export async function postCedearsCocosToken(token: string): Promise<void> {
-  const res = await fetch(`${BASE}/cedears/cocos-token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: token.trim() }),
-  });
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
-  }
-}
+/** Resultado GET /cedears: filas o sin export. */
+export type CedearsFetchResult = { kind: "rows"; rows: CedearRow[] } | { kind: "no_export" };
 
 /**
  * GET /cedears — vista CEDEAR sobre el último radar USA.
- * no_export: 404. need_cocos_token: 403 con código Cocos.
+ * no_export: 404.
  */
 export async function fetchCedears(): Promise<CedearsFetchResult> {
   const res = await fetch(`${BASE}/cedears`);
   if (res.status === 404) {
     return { kind: "no_export" };
-  }
-  if (res.status === 403) {
-    const raw: unknown = await res.json().catch(() => null);
-    const { code, message } = parseCedearsCocos403(raw);
-    return { kind: "need_cocos_token", code, message };
   }
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);

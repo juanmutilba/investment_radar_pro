@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { TickerRadarLink } from "@/components/navigation/radarLinks";
-import {
-  fetchCedears,
-  postCedearsCocosToken,
-  type CedearRatioEstado,
-  type CedearRow,
-} from "@/services/api";
+import { fetchCedears, type CedearRatioEstado, type CedearRow } from "@/services/api";
 
 const EMPTY = "-";
 
@@ -142,24 +137,13 @@ export function CedearsPage() {
   const [sortMode, setSortMode] = useState<SortMode>("gap_desc");
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const [cocosModal, setCocosModal] = useState<{ message: string } | null>(null);
-  const [cocosTokenDraft, setCocosTokenDraft] = useState("");
-  const [cocosSubmitting, setCocosSubmitting] = useState(false);
-  const [cocosFormError, setCocosFormError] = useState<string | null>(null);
 
   const applyCedearsResult = useCallback((r: Awaited<ReturnType<typeof fetchCedears>>) => {
     if (r.kind === "no_export") {
       setRows(null);
-      setCocosModal(null);
-      return;
-    }
-    if (r.kind === "need_cocos_token") {
-      setCocosModal({ message: r.message });
-      setRows(undefined);
       return;
     }
     setRows(r.rows);
-    setCocosModal(null);
   }, []);
 
   const load = useCallback(() => {
@@ -169,7 +153,6 @@ export function CedearsPage() {
       .then(applyCedearsResult)
       .catch((e: unknown) => {
         setRows(undefined);
-        setCocosModal(null);
         setError(e instanceof Error ? e.message : "Error al cargar CEDEARs");
       });
   }, [applyCedearsResult]);
@@ -194,28 +177,8 @@ export function CedearsPage() {
       });
   }, [applyCedearsResult]);
 
-  const submitCocosToken = useCallback(async () => {
-    const t = cocosTokenDraft.trim();
-    if (!t) {
-      setCocosFormError("Ingresá el token.");
-      return;
-    }
-    setCocosFormError(null);
-    setCocosSubmitting(true);
-    try {
-      await postCedearsCocosToken(t);
-      setCocosTokenDraft("");
-      const r = await fetchCedears();
-      applyCedearsResult(r);
-    } catch (e: unknown) {
-      setCocosFormError(e instanceof Error ? e.message : "No se pudo guardar el token.");
-    } finally {
-      setCocosSubmitting(false);
-    }
-  }, [cocosTokenDraft, applyCedearsResult]);
-
-  const noExport = rows === null && !error && !cocosModal;
-  const emptySheet = rows !== undefined && rows !== null && rows.length === 0 && !error && !cocosModal;
+  const noExport = rows === null && !error;
+  const emptySheet = rows !== undefined && rows !== null && rows.length === 0 && !error;
 
   const filtered = useMemo(() => {
     const list = rows ?? [];
@@ -245,79 +208,17 @@ export function CedearsPage() {
 
   const displayRows = useMemo(() => sortRows(filtered, sortMode), [filtered, sortMode]);
 
-  const loading = rows === undefined && error === null && !cocosModal;
+  const loading = rows === undefined && error === null;
 
   return (
     <>
-      {cocosModal ? (
-        <div
-          role="presentation"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 2000,
-            background: "rgba(0,0,0,0.45)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem",
-          }}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="cocos-token-title"
-            className="card"
-            style={{ maxWidth: "26rem", width: "100%", padding: "1.25rem" }}
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <h2 id="cocos-token-title" className="page-title" style={{ fontSize: "1.1rem", marginTop: 0 }}>
-              Token Cocos (CEDEAR)
-            </h2>
-            <p className="msg-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
-              {cocosModal.message} Los precios en pesos y cable de cada CEDEAR se obtienen primero desde Cocos; si no hay
-              cotización, se usa Yahoo. Pegá el JWT de la app (Apikey / Bearer) desde las herramientas de desarrollo del
-              navegador en{" "}
-              <span className="table-cell--nowrap">app.cocos.capital</span>. Se guarda solo en memoria del servidor.
-            </p>
-            <label className="radar-toolbar__field" style={{ display: "block", marginBottom: "0.75rem" }}>
-              <span className="radar-toolbar__label">Token</span>
-              <input
-                type="password"
-                className="radar-toolbar__input"
-                style={{ width: "100%" }}
-                autoComplete="off"
-                value={cocosTokenDraft}
-                onChange={(ev) => setCocosTokenDraft(ev.target.value)}
-                disabled={cocosSubmitting}
-              />
-            </label>
-            {cocosFormError ? (
-              <p className="msg-error" style={{ fontSize: "0.875rem", marginTop: 0 }}>
-                {cocosFormError}
-              </p>
-            ) : null}
-            <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", marginTop: "0.5rem" }}>
-              <button
-                type="button"
-                className="radar-refresh-btn"
-                disabled={cocosSubmitting}
-                onClick={() => submitCocosToken()}
-              >
-                {cocosSubmitting ? "Guardando…" : "Guardar y cargar"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       <h1 className="page-title">CEDEARs</h1>
       <p className="msg-muted" style={{ marginTop: 0, marginBottom: "1rem", maxWidth: "48rem" }}>
         Equivalencias locales sobre el último radar USA: CCL implícito (precio en pesos / precio en
         dólares del CEDEAR), precio implícito en USD y gap frente al precio USA del export. Scores y
         señal provienen del radar sin recalcular. Si el subyacente no está en ese export, el precio USA
         es spot (Yahoo) y la columna <span className="table-cell--nowrap">modulo usa</span> marca NO. Cotizaciones
-        locales CEDEAR: Cocos (token desde esta pantalla cuando lo pida el servidor), con respaldo Yahoo.
+        locales CEDEAR (ARS y cable): Yahoo.
       </p>
 
       {rows !== undefined && (
@@ -421,7 +322,7 @@ export function CedearsPage() {
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "center" }}>
                     <span
                       className="radar-table__sort-label radar-table__sort-label--static"
-                      title="Cocos: precios $ y USD desde Cocos. Yahoo: al menos una línea vía Yahoo."
+                      title="Precios locales CEDEAR ($ y USD) vía Yahoo."
                     >
                       fuente_cedear
                     </span>
