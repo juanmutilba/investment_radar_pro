@@ -17,10 +17,10 @@ export function AccionesArgentinaPage() {
       formatPrecio={formatPrecioDolarAr}
       initialSearch={initialSearch}
       universe={{
-        label: "Universo",
-        allLabel: "Todas",
-        keys: ["Panel", "panel", "Universo", "universo", "Indice", "Índice", "indice"],
-        options: ["Merval", "Panel General"],
+        label: "Mercado",
+        allLabel: "Todos",
+        keys: ["Mercado", "mercado", "Panel", "panel", "Universo", "universo", "Indice", "Índice", "indice"],
+        options: ["Merval", "General"],
       }}
       emptySheetMessage="El último export no contiene filas en Radar_Argentina_Completo."
     />

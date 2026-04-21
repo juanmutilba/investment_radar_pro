@@ -1,45 +1,112 @@
-# Yahoo Finance suele usar sufijo .BA para acciones argentinas
-ARGENTINA_UNIVERSE = [
-    {"ticker": "ALUA.BA", "local_ticker": "ALUA", "panel": "Merval"},
-    {"ticker": "BBAR.BA", "local_ticker": "BBAR", "panel": "Merval"},
-    {"ticker": "BMA.BA", "local_ticker": "BMA", "panel": "Merval"},
-    {"ticker": "BYMA.BA", "local_ticker": "BYMA", "panel": "Merval"},
-    {"ticker": "CEPU.BA", "local_ticker": "CEPU", "panel": "Merval"},
-    {"ticker": "COME.BA", "local_ticker": "COME", "panel": "Merval"},
-    {"ticker": "CRES.BA", "local_ticker": "CRES", "panel": "Merval"},
-    {"ticker": "EDN.BA", "local_ticker": "EDN", "panel": "Merval"},
-    {"ticker": "GGAL.BA", "local_ticker": "GGAL", "panel": "Merval"},
-    {"ticker": "IRSA.BA", "local_ticker": "IRSA", "panel": "Merval"},
-    {"ticker": "LOMA.BA", "local_ticker": "LOMA", "panel": "Merval"},
-    {"ticker": "PAMP.BA", "local_ticker": "PAMP", "panel": "Merval"},
-    {"ticker": "SUPV.BA", "local_ticker": "SUPV", "panel": "Merval"},
-    {"ticker": "TGNO4.BA", "local_ticker": "TGNO4", "panel": "Merval"},
-    {"ticker": "TGSU2.BA", "local_ticker": "TGSU2", "panel": "Merval"},
-    {"ticker": "TRAN.BA", "local_ticker": "TRAN", "panel": "Merval"},
-    {"ticker": "TXAR.BA", "local_ticker": "TXAR", "panel": "Merval"},
-    {"ticker": "VALO.BA", "local_ticker": "VALO", "panel": "Merval"},
-    {"ticker": "YPFD.BA", "local_ticker": "YPFD", "panel": "Merval"},
-    # Ampliación Merval (líquidos / representativos)
-    {"ticker": "AGRO.BA", "local_ticker": "AGRO", "panel": "Merval"},
-    {"ticker": "AUSO.BA", "local_ticker": "AUSO", "panel": "Merval"},
-    {"ticker": "MIRG.BA", "local_ticker": "MIRG", "panel": "Merval"},
-    {"ticker": "SEMI.BA", "local_ticker": "SEMI", "panel": "Merval"},
-    {"ticker": "TECO2.BA", "local_ticker": "TECO2", "panel": "Merval"},
-    {"ticker": "INVJ.BA", "local_ticker": "INVJ", "panel": "Merval"},
-    {"ticker": "SAMI.BA", "local_ticker": "SAMI", "panel": "Merval"},
-    {"ticker": "RICH.BA", "local_ticker": "RICH", "panel": "Merval"},
-    {"ticker": "DOME.BA", "local_ticker": "DOME", "panel": "Merval"},
-    {"ticker": "OEST.BA", "local_ticker": "OEST", "panel": "Merval"},
-    {"ticker": "BIOX.BA", "local_ticker": "BIOX", "panel": "Merval"},
-    {"ticker": "INTR.BA", "local_ticker": "INTR", "panel": "Merval"},
-    {"ticker": "MORI.BA", "local_ticker": "MORI", "panel": "Merval"},
-    {"ticker": "POLL.BA", "local_ticker": "POLL", "panel": "Merval"},
-    # Panel General (además de CVH, HARG, METR)
-    {"ticker": "CVH.BA", "local_ticker": "CVH", "panel": "Panel General"},
-    {"ticker": "HARG.BA", "local_ticker": "HARG", "panel": "Panel General"},
-    {"ticker": "METR.BA", "local_ticker": "METR", "panel": "Panel General"},
-    {"ticker": "CGPA2.BA", "local_ticker": "CGPA2", "panel": "Panel General"},
-    {"ticker": "DGCU2.BA", "local_ticker": "DGCU2", "panel": "Panel General"},
-    {"ticker": "FERR.BA", "local_ticker": "FERR", "panel": "Panel General"},
-    {"ticker": "GARO.BA", "local_ticker": "GARO", "panel": "Panel General"},
+# Yahoo Finance suele usar sufijo .BA para acciones argentinas.
+# Mantener el contrato actual: `ARGENTINA_UNIVERSE` es una lista de dicts con
+# {ticker (Yahoo), local_ticker (sin sufijo), panel}.
+
+YAHOO_ARG_SUFFIX = ".BA"
+
+# Universo principal (Merval) solicitado. Mantener sin sufijo Yahoo.
+ARG_TICKERS_MERVAL: list[str] = [
+    "ALUA",
+    "BBAR",
+    "BMA",
+    "BYMA",
+    "CEPU",
+    "COME",
+    "CRES",
+    "EDN",
+    "GGAL",
+    "IRSA",
+    "LOMA",
+    "METR",
+    "MIRG",
+    "PAMP",
+    "SUPV",
+    "TECO2",
+    "TGNO4",
+    "TGSU2",
+    "TRAN",
+    "TXAR",
+    "VALO",
+    "YPFD",
 ]
+
+# Extras actuales (se conservan para no romper lo existente).
+ARG_TICKERS_MERVAL_EXTRA: list[str] = [
+    "AGRO",
+    "AUSO",
+    "SEMI",
+    "INVJ",
+    "SAMI",
+    "RICH",
+    "DOME",
+    "OEST",
+    "BIOX",
+    "INTR",
+    "MORI",
+    "POLL",
+]
+
+ARG_TICKERS_PANEL_GENERAL: list[str] = [
+    "CVH",
+    "HARG",
+    "CGPA2",
+    "DGCU2",
+    "FERR",
+    "GARO",
+]
+
+
+def _norm_local(sym: str) -> str:
+    return (sym or "").strip().upper()
+
+
+def _yahoo_from_local(local_ticker: str) -> str:
+    s = _norm_local(local_ticker)
+    if not s:
+        return ""
+    if s.endswith(YAHOO_ARG_SUFFIX):
+        return s
+    return f"{s}{YAHOO_ARG_SUFFIX}"
+
+
+def _build_universe() -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    merval_set = {_norm_local(t) for t in ARG_TICKERS_MERVAL if _norm_local(t)}
+
+    def add(local_ticker: str) -> None:
+        lt = _norm_local(local_ticker)
+        if not lt:
+            return
+        if lt in seen:
+            return
+        seen.add(lt)
+        if lt in merval_set:
+            panel = "Merval"
+            mercado = "Merval"
+        else:
+            panel = "Panel General"
+            mercado = "General"
+        out.append(
+            {
+                "ticker": _yahoo_from_local(lt),
+                "local_ticker": lt,
+                "panel": panel,
+                "mercado": (mercado or "").strip() or panel,
+            }
+        )
+
+    # Universo principal (Merval): estos tickers deben ser los únicos clasificados como Merval.
+    for t in ARG_TICKERS_MERVAL:
+        add(t)
+    for t in ARG_TICKERS_MERVAL_EXTRA:
+        add(t)
+
+    # Panel General (extras)
+    for t in ARG_TICKERS_PANEL_GENERAL:
+        add(t)
+
+    return out
+
+
+ARGENTINA_UNIVERSE = _build_universe()
