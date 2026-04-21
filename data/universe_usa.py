@@ -19,6 +19,10 @@ TICKERS_EXTENDED = [
     'EMR', 'ETN', 'ITW', 'FDX', 'UPS', 'SLB', 'COP', 'OXY', 'MPC', 'PSX',
     'VLO', 'EOG', 'WFC', 'BAC', 'C', 'MET', 'PYPL', 'UBER', 'PANW', 'CRWD',
     'SNOW', 'NET', 'DDOG', 'SHOP', 'COIN', 'RBLX', 'BRK-B', 'AXP', 'GS', 'MS',
+    # Bloque 1 (expansión controlada): mega/large cap y defensivos líquidos
+    'CRM', 'CSCO', 'CVS', 'DAL', 'DD', 'DOW', 'EA', 'EBAY', 'ECL', 'EFX',
+    'ERJ', 'FSLR', 'GRMN', 'HAL', 'HMC', 'HON', 'HPQ', 'HSBC', 'INFY', 'ING',
+    'KMB', 'MDT', 'MMM', 'MO',
 ]
 
 TICKERS_ETF = [
@@ -27,6 +31,8 @@ TICKERS_ETF = [
 
 TICKERS_GROWTH = [
     'ASML', 'TEAM', 'NOW', 'PATH', 'CEG', 'HOOD', 'RKLB', 'OKLO', 'AI', 'TEM',
+    # Bloque 1 (expansión controlada): growth / ecommerce / SaaS
+    'DOCU', 'ETSY', 'JD',
 ]
 
 
