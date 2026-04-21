@@ -1,0 +1,648 @@
+[
+  {
+    "ticker_usa": "NKE",
+    "ticker_cedear_ars": "NKE.BA",
+    "ticker_cedear_ccl": "NKEC.BA",
+    "cedears_por_accion_usa": 12,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Nike",
+    "activo": true
+  },
+  {
+    "ticker_usa": "AAPL",
+    "ticker_cedear_ars": "AAPL.BA",
+    "ticker_cedear_ccl": "AAPLC.BA",
+    "cedears_por_accion_usa": 20,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Apple",
+    "activo": true
+  },
+  {
+    "ticker_usa": "KO",
+    "ticker_cedear_ars": "KO.BA",
+    "ticker_cedear_ccl": "KOC.BA",
+    "cedears_por_accion_usa": 5,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Coca-Cola",
+    "activo": true
+  },
+  {
+    "ticker_usa": "BABA",
+    "ticker_cedear_ars": "BABA.BA",
+    "ticker_cedear_ccl": "BABAC.BA",
+    "cedears_por_accion_usa": 9,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Alibaba",
+    "activo": true
+  },
+  {
+    "ticker_usa": "GOOGL",
+    "ticker_cedear_ars": "GOOGL.BA",
+    "ticker_cedear_ccl": "GOOGLC.BA",
+    "cedears_por_accion_usa": 58,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Alphabet",
+    "activo": true
+  },
+  {
+    "ticker_usa": "IBM",
+    "ticker_cedear_ars": "IBM.BA",
+    "ticker_cedear_ccl": "IBMC.BA",
+    "cedears_por_accion_usa": 15,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "IBM",
+    "activo": true
+  },
+  {
+    "ticker_usa": "INTC",
+    "ticker_cedear_ars": "INTC.BA",
+    "ticker_cedear_ccl": "INTCC.BA",
+    "cedears_por_accion_usa": 5,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Intel",
+    "activo": true
+  },
+  {
+    "ticker_usa": "JNJ",
+    "ticker_cedear_ars": "JNJ.BA",
+    "ticker_cedear_ccl": "JNJC.BA",
+    "cedears_por_accion_usa": 15,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Johnson & Johnson",
+    "activo": true
+  },
+  {
+    "ticker_usa": "META",
+    "ticker_cedear_ars": "META.BA",
+    "ticker_cedear_ccl": "METAC.BA",
+    "cedears_por_accion_usa": 24,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Meta",
+    "activo": true
+  },
+  {
+    "ticker_usa": "MSFT",
+    "ticker_cedear_ars": "MSFT.BA",
+    "ticker_cedear_ccl": "MSFTC.BA",
+    "cedears_por_accion_usa": 30,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Microsoft",
+    "activo": true
+  },
+  {
+    "ticker_usa": "NVDA",
+    "ticker_cedear_ars": "NVDA.BA",
+    "ticker_cedear_ccl": "NVDAC.BA",
+    "cedears_por_accion_usa": 24,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Nvidia",
+    "activo": true
+  },
+  {
+    "ticker_usa": "PBR",
+    "ticker_cedear_ars": "PBR.BA",
+    "ticker_cedear_ccl": "PBRC.BA",
+    "cedears_por_accion_usa": 1,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Petrobras",
+    "activo": true
+  },
+  {
+    "ticker_usa": "PLTR",
+    "ticker_cedear_ars": "PLTR.BA",
+    "ticker_cedear_ccl": "PLTRC.BA",
+    "cedears_por_accion_usa": 3,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Palantir",
+    "activo": true
+  },
+  {
+    "ticker_usa": "T",
+    "ticker_cedear_ars": "T.BA",
+    "ticker_cedear_ccl": "TC.BA",
+    "cedears_por_accion_usa": 3,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "AT&T",
+    "activo": true
+  },
+  {
+    "ticker_usa": "TSLA",
+    "ticker_cedear_ars": "TSLA.BA",
+    "ticker_cedear_ccl": "TSLAC.BA",
+    "cedears_por_accion_usa": 15,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "Tesla",
+    "activo": true
+  },
+  {
+    "ticker_usa": "MELI",
+    "ticker_cedear_ars": "MELI.BA",
+    "ticker_cedear_ccl": "MELID.BA",
+    "cedears_por_accion_usa": 120,
+    "fuente_ratio": "Manual validado (BYMA / broker)",
+    "fecha_validacion_ratio": "2026-04-16",
+    "nombre": "MercadoLibre",
+    "activo": true
+  },
+  {
+    "ticker_usa": "AAL",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 2,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "AAP",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 14,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "ABBV",
+    "ticker_cedear_ars": "ABBV.BA",
+    "ticker_cedear_ccl": "ABBVC.BA",
+    "cedears_por_accion_usa": 10,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "ABNB",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 15,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "ABT",
+    "ticker_cedear_ars": "ABT.BA",
+    "ticker_cedear_ccl": "ABTC.BA",
+    "cedears_por_accion_usa": 4,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "ACN",
+    "ticker_cedear_ars": "ACN.BA",
+    "ticker_cedear_ccl": "ACNC.BA",
+    "cedears_por_accion_usa": 75,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "ADBE",
+    "ticker_cedear_ars": "ADBE.BA",
+    "ticker_cedear_ccl": "ADBEC.BA",
+    "cedears_por_accion_usa": 44,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "ADI",
+    "ticker_cedear_ars": "ADI.BA",
+    "ticker_cedear_ccl": "ADIC.BA",
+    "cedears_por_accion_usa": 15,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "ADP",
+    "ticker_cedear_ars": "ADP.BA",
+    "ticker_cedear_ccl": "ADPC.BA",
+    "cedears_por_accion_usa": 6,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "AEG",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 1,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "AEM",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 6,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "AI",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 5,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "AIG",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 5,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "ALAB",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 44,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "AMAT",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 5,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "AMD",
+    "ticker_cedear_ars": "AMD.BA",
+    "ticker_cedear_ccl": "AMDC.BA",
+    "cedears_por_accion_usa": 10,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "AMGN",
+    "ticker_cedear_ars": "AMGN.BA",
+    "ticker_cedear_ccl": "AMGNC.BA",
+    "cedears_por_accion_usa": 30,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "AMX",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 1,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "AMZN",
+    "ticker_cedear_ars": "AMZN.BA",
+    "ticker_cedear_ccl": "AMZNC.BA",
+    "cedears_por_accion_usa": 144,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "ANF",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 1,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "ARM",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 27,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "ASML",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 146,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "ASR",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 20,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "ASTS",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 15,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "AUY",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 1,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "AVGO",
+    "ticker_cedear_ars": "AVGO.BA",
+    "ticker_cedear_ccl": "AVGOC.BA",
+    "cedears_por_accion_usa": 39,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "AVY",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 18,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "AXP",
+    "ticker_cedear_ars": "AXP.BA",
+    "ticker_cedear_ccl": "AXPC.BA",
+    "cedears_por_accion_usa": 15,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "AZN",
+    "ticker_cedear_ars": "AZN.BA",
+    "ticker_cedear_ccl": "AZNC.BA",
+    "cedears_por_accion_usa": 2,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "B",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 2,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BA",
+    "ticker_cedear_ars": "BA.BA",
+    "ticker_cedear_ccl": "BAC.BA",
+    "cedears_por_accion_usa": 24,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "BAK",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 2,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BB",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 3,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BBD",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 1,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BCS",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 1,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BHP",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 2,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BIDU",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 11,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BIIB",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 13,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BK",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 2,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BKNG",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 700,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BKR",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 7,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BMY",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 3,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BP",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 5,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "BSBR",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 1,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "C",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 3,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "CAH",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 3,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "CAJ",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 2,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "CAR",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 26,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "CAT",
+    "ticker_cedear_ars": "CAT.BA",
+    "ticker_cedear_ccl": "CATC.BA",
+    "cedears_por_accion_usa": 20,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  },
+  {
+    "ticker_usa": "CCL",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 3,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "CEG",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 45,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "CL",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 3,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "CLS",
+    "ticker_cedear_ars": null,
+    "ticker_cedear_ccl": null,
+    "cedears_por_accion_usa": 20,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": false
+  },
+  {
+    "ticker_usa": "COIN",
+    "ticker_cedear_ars": "COIN.BA",
+    "ticker_cedear_ccl": "COINC.BA",
+    "cedears_por_accion_usa": 27,
+    "fuente_ratio": "BYMA listado CEDEARs (PDF 2025-11-07) https://cdn.prod.website-files.com/6697a441a50c6b926e1972e0/6911fb2f8714ecd4234ad1ec_BYMA-CEDEARs-2025-11-07.pdf",
+    "fecha_validacion_ratio": "2025-11-07",
+    "activo": true
+  }
+]
