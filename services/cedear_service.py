@@ -21,6 +21,28 @@ ModUsa = Literal["SI", "NO"]
 FuenteCedearLocal = Literal["Yahoo"]
 _RATIO_STALE_DAYS = 180
 
+# Tickers para marcar focus=1 en líneas [CEDEAR_AUDIT] (grep: focus=1).
+_CEDEAR_AUDIT_FOCUS = frozenset(
+    {
+        "ABT",
+        "ADI",
+        "ADP",
+        "AMAT",
+        "AMGN",
+        "BMY",
+        "CAH",
+        "CL",
+        "DIS",
+        "GOOGL",
+        "AAL",
+        "BP",
+        "ADBE",
+        "ABNB",
+        "AVGO",
+        "AZN",
+    }
+)
+
 
 def _derive_ratio_audit(fecha_raw: str | None) -> tuple[RatioEstado, int | None]:
     """
@@ -98,6 +120,44 @@ class CedearRow(BaseModel):
         ...,
         description="Precios locales CEDEAR (ARS y cable) vía Yahoo.",
     )
+    cobertura_usa_mensaje: str | None = Field(
+        None,
+        description="null si hay fila USA y precio en export; texto si falta radar o precio USA.",
+    )
+    pricing_cedear_local_mensaje: str | None = Field(
+        None,
+        description="null si ARS/CCL Yahoo e implícitos locales completos; resume campos faltantes.",
+    )
+
+
+def _cobertura_usa_mensaje(row: dict[str, Any] | None, precio_usa: float | None) -> str | None:
+    if row is None:
+        return "Falta en módulo Acciones USA"
+    if precio_usa is None or precio_usa <= 0:
+        return "Sin precio USA en export radar"
+    return None
+
+
+def _pricing_cedear_local_mensaje(
+    p_ars: float | None,
+    p_ccl: float | None,
+    ccl_impl: float | None,
+    precio_impl: float | None,
+) -> str | None:
+    missing: list[str] = []
+    if p_ars is None:
+        missing.append("precio_cedear_ars")
+    if p_ccl is None:
+        missing.append("precio_cedear_usd")
+    elif p_ccl <= 0:
+        missing.append("precio_cedear_usd")
+    if ccl_impl is None:
+        missing.append("ccl_implicito")
+    if precio_impl is None:
+        missing.append("precio_implicito_usd")
+    if not missing:
+        return None
+    return "Pricing local CEDEAR incompleto: " + ",".join(missing)
 
 
 def _radar_get(row: dict[str, Any], *keys: str) -> Any:
@@ -206,6 +266,95 @@ def _cedear_debug_line(
     )
 
 
+def _cedear_audit_enabled() -> bool:
+    return os.environ.get("CEDEAR_AUDIT", "").strip().lower() in ("1", "true", "yes")
+
+
+def _cedear_audit_tickers_filter() -> frozenset[str] | None:
+    """
+    Si CEDEAR_AUDIT_TICKERS está definido y no vacío, solo esos ticker_usa (coma-separados)
+    generan línea [CEDEAR_AUDIT]. Si no está definido, con CEDEAR_AUDIT=1 se auditan todos.
+    """
+    raw = os.environ.get("CEDEAR_AUDIT_TICKERS", "")
+    parts = [p.strip().upper() for p in raw.split(",") if p.strip()]
+    if not parts:
+        return None
+    return frozenset(parts)
+
+
+def _cedear_audit_log(
+    *,
+    ticker_usa: str,
+    sym_ars: str,
+    sym_ccl: str,
+    usa_hit: bool,
+    mod_usa: ModUsa,
+    p_ars: float | None,
+    p_ccl: float | None,
+    ccl_impl: float | None,
+    precio_impl: float | None,
+    precio_usa: float | None,
+    ratio: float,
+) -> None:
+    """
+    Una línea INFO por fila, prefijo fijo [CEDEAR_AUDIT] para grep.
+    Activar: CEDEAR_AUDIT=1. Opcional: CEDEAR_AUDIT_TICKERS=ABT,AZN (subconjunto).
+    No altera precios ni ramas de cálculo.
+    """
+    if not _cedear_audit_enabled():
+        return
+    filt = _cedear_audit_tickers_filter()
+    u = ticker_usa.strip().upper()
+    if filt is not None and u not in filt:
+        return
+
+    y_ars = "ok" if p_ars is not None else "miss"
+    y_ccl = "ok" if p_ccl is not None else "miss"
+    # precio_cedear_usd en API = spot Yahoo línea CCL (mismo valor que p_ccl).
+    cedear_usd_line = "ok" if p_ccl is not None else "miss"
+    ccl_i = "ok" if ccl_impl is not None else "miss"
+    p_impl = "ok" if precio_impl is not None else "miss"
+    usa_row = "hit" if usa_hit else "miss"
+    usa_price = "ok" if precio_usa is not None else "miss"
+
+    reasons: list[str] = []
+    if not usa_hit:
+        reasons.append("no_fila_radar_usa")
+    elif precio_usa is None:
+        reasons.append("radar_usa_sin_precio")
+    if p_ars is None:
+        reasons.append("yahoo_sin_precio_ars")
+    if p_ccl is None:
+        reasons.append("yahoo_sin_precio_ccl")
+    elif p_ccl <= 0:
+        reasons.append("yahoo_ccl_no_positivo")
+    if ratio <= 0:
+        reasons.append("ratio_maestro_no_positivo")
+    focus = 1 if u in _CEDEAR_AUDIT_FOCUS else 0
+    reason_s = ";".join(reasons) if reasons else "ok"
+
+    logger.info(
+        "[CEDEAR_AUDIT] ticker_usa=%s ticker_cedear_ars=%s ticker_cedear_ccl=%s "
+        "yahoo_ars=%s yahoo_ccl=%s usa_radar_row=%s usa_radar_precio=%s mod_usa=%s "
+        "precio_cedear_usd_linea_ccl=%s ccl_implicito=%s precio_implicito_accion_usd=%s "
+        "ratio=%s focus=%s reasons=%s",
+        u,
+        sym_ars,
+        sym_ccl,
+        y_ars,
+        y_ccl,
+        usa_row,
+        usa_price,
+        mod_usa,
+        cedear_usd_line,
+        ccl_i,
+        p_impl,
+        ratio,
+        focus,
+        reason_s,
+    )
+
+
 def _usa_row_index(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for r in rows:
@@ -226,6 +375,9 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     Incluye todos los mapeos activos. Si ticker_usa no está en el radar, se conserva la fila:
     precio USA con Yahoo (mismo ticker limpio); TotalScore y SignalState en null; mod_usa=NO.
 
+    Cobertura USA vs pricing local: `cobertura_usa_mensaje` y `pricing_cedear_local_mensaje` separan
+    ambos mundos sin ocultar filas ni cambiar fórmulas (precios/implícitos siguen en null si faltan datos).
+
     Datos del maestro (load_cedear_mappings_from_disk → CEDEAR_MAPPINGS):
         ticker_cedear_ars, ticker_cedear_ccl, cedears_por_accion_usa
     No usar en la lógica los alias ticker_cedear_usd / ratio_cedear_a_accion del dataclass.
@@ -235,7 +387,10 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         precio_implicito_usd = precio_ccl * cedears_por_accion_usa
         gap_pct = (precio_implicito_usd / precio_usa_real - 1) * 100
 
-    Diagnóstico: CEDEAR_DEBUG=1 en el entorno imprime ARS/CCL/ratio/precios por fila en stderr.
+    Diagnóstico:
+        CEDEAR_DEBUG=1 → stderr por fila (símbolos y precios Yahoo).
+        CEDEAR_AUDIT=1 → una línea INFO [CEDEAR_AUDIT] por fila (grep). Opcional:
+        CEDEAR_AUDIT_TICKERS=ABT,AZN para acotar tickers.
     """
     t0 = time.perf_counter()
     yahoo_stats = {"yahoo_queries": 0, "yahoo_cache_hits": 0}
@@ -299,7 +454,24 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         if precio_impl is not None and precio_usa is not None and precio_usa > 0:
             gap = round((precio_impl / precio_usa - 1.0) * 100.0, 4)
 
+        _cedear_audit_log(
+            ticker_usa=usa_key,
+            sym_ars=sym_ars,
+            sym_ccl=sym_ccl,
+            usa_hit=row is not None,
+            mod_usa=mod_usa,
+            p_ars=p_ars,
+            p_ccl=p_ccl,
+            ccl_impl=ccl_impl,
+            precio_impl=precio_impl,
+            precio_usa=precio_usa,
+            ratio=cedears_por,
+        )
+
         estado_r, dias_val = _derive_ratio_audit(m.fecha_validacion_ratio)
+
+        cob_msg = _cobertura_usa_mensaje(row, precio_usa)
+        loc_msg = _pricing_cedear_local_mensaje(p_ars, p_ccl, ccl_impl, precio_impl)
 
         out.append(
             CedearRow(
@@ -321,6 +493,8 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
                 signal_state=signal_state,
                 mod_usa=mod_usa,
                 fuente_cedear=fuente_cedear,
+                cobertura_usa_mensaje=cob_msg,
+                pricing_cedear_local_mensaje=loc_msg,
             )
         )
 
