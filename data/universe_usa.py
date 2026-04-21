@@ -24,10 +24,18 @@ TICKERS_EXTENDED = [
     'ERJ', 'FSLR', 'GRMN', 'HAL', 'HMC', 'HON', 'HPQ', 'HSBC', 'INFY', 'ING',
     'KMB', 'MDT', 'MMM', 'MO',
     # Bloque 2 (expansión controlada): energía / materiales / miners / finanzas / staples / telco
-    'DEO', 'E', 'EBR', 'EQNR', 'GFI', 'GGB', 'GLW', 'GPRK', 'GSK', 'GT',
+    'DEO', 'EBR', 'EQNR', 'GFI', 'GGB', 'GLW', 'GPRK', 'GSK', 'GT',
     'HDB', 'HL', 'HMY', 'HOG', 'HWM', 'IBN', 'IFF', 'IP', 'ITUB', 'KB',
     'KEP', 'KGC', 'KOFM', 'LAC', 'LFC', 'LVS', 'LYG', 'MBT', 'MFG', 'MOS',
     'MUFG', 'NEM', 'NGG', 'NMR', 'NVS', 'ORAN', 'PBI', 'PFE', 'PHG', 'PSO',
+    # Bloque 3 (cierre lista CEDEAR→USA): faltantes reales (EXTENDED)
+    'CX', 'ELP', 'EOAN', 'ERIC', 'FMCC', 'FMX', 'FNMA', 'HSY', 'JCI', 'JOYY',
+    'LAR', 'LND', 'MBG', 'NOKA', 'NUE', 'ORLY', 'PAC', 'PCAR', 'PTR', 'RACE',
+    'RIO', 'ROST', 'SAN', 'SAP', 'SATL', 'SBS', 'SCCO', 'SE', 'SH', 'SHEL',
+    'SID', 'SMSN', 'SNA', 'SNP', 'SONY', 'SPCE', 'STLA', 'STNE', 'SUZ', 'SWKS',
+    'TEN', 'TIMB', 'TJX', 'TM', 'TRIP', 'TSM', 'TTE', 'TTM', 'TV', 'UAL',
+    'UGP', 'UL', 'UN', 'UNP', 'URBN', 'USB', 'VALE', 'VIST', 'VIV', 'VOD',
+    'VRSN', 'VRTX', 'VST', 'WBA', 'YELP',
 ]
 
 TICKERS_ETF = [
@@ -35,11 +43,15 @@ TICKERS_ETF = [
 ]
 
 TICKERS_GROWTH = [
-    'ASML', 'TEAM', 'NOW', 'PATH', 'CEG', 'HOOD', 'RKLB', 'OKLO', 'AI', 'TEM',
+    'ASML', 'TEAM', 'NOW', 'PATH', 'CEG', 'RKLB', 'OKLO', 'AI', 'TEM',
     # Bloque 1 (expansión controlada): growth / ecommerce / SaaS
     'DOCU', 'ETSY', 'JD',
     # Bloque 2 (expansión controlada): growth / ecommerce / biotech-tech
-    'DISN', 'GLOB', 'JMIA', 'MRNA', 'NIO', 'NTES', 'PAGS', 'PINS', 'PKS',
+    'GLOB', 'JMIA', 'MRNA', 'NIO', 'NTES', 'PAGS', 'PINS', 'PKS',
+    # Bloque 3 (cierre lista CEDEAR→USA): faltantes reales (GROWTH)
+    'CRWV', 'CS', 'DECK', 'DTEA', 'HUT', 'INTC', 'IREN', 'MRVL', 'MSI', 'MSTR',
+    'PBR', 'PDD', 'PLTR', 'RGTI', 'RIOT', 'SI', 'SNAP', 'SPOT', 'TCOM',
+    'TWLO', 'TWTR', 'UPST', 'XP', 'XPEV', 'XYZ', 'ZM',
 ]
 
 
