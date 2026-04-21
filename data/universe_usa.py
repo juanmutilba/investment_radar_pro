@@ -23,6 +23,11 @@ TICKERS_EXTENDED = [
     'CRM', 'CSCO', 'CVS', 'DAL', 'DD', 'DOW', 'EA', 'EBAY', 'ECL', 'EFX',
     'ERJ', 'FSLR', 'GRMN', 'HAL', 'HMC', 'HON', 'HPQ', 'HSBC', 'INFY', 'ING',
     'KMB', 'MDT', 'MMM', 'MO',
+    # Bloque 2 (expansión controlada): energía / materiales / miners / finanzas / staples / telco
+    'DEO', 'E', 'EBR', 'EQNR', 'GFI', 'GGB', 'GLW', 'GPRK', 'GSK', 'GT',
+    'HDB', 'HL', 'HMY', 'HOG', 'HWM', 'IBN', 'IFF', 'IP', 'ITUB', 'KB',
+    'KEP', 'KGC', 'KOFM', 'LAC', 'LFC', 'LVS', 'LYG', 'MBT', 'MFG', 'MOS',
+    'MUFG', 'NEM', 'NGG', 'NMR', 'NVS', 'ORAN', 'PBI', 'PFE', 'PHG', 'PSO',
 ]
 
 TICKERS_ETF = [
@@ -33,6 +38,8 @@ TICKERS_GROWTH = [
     'ASML', 'TEAM', 'NOW', 'PATH', 'CEG', 'HOOD', 'RKLB', 'OKLO', 'AI', 'TEM',
     # Bloque 1 (expansión controlada): growth / ecommerce / SaaS
     'DOCU', 'ETSY', 'JD',
+    # Bloque 2 (expansión controlada): growth / ecommerce / biotech-tech
+    'DISN', 'GLOB', 'JMIA', 'MRNA', 'NIO', 'NTES', 'PAGS', 'PINS', 'PKS',
 ]
 
 
