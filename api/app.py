@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 
+from api.portfolio import router as portfolio_router
 from persistence.sqlite import init_database
 from persistence.sqlite.connection import connection_scope
 from persistence.sqlite.scan_runs_repo import (
@@ -38,6 +39,8 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Investment Radar API", version="0.1.0", lifespan=lifespan)
+
+app.include_router(portfolio_router)
 
 
 @app.get("/health")

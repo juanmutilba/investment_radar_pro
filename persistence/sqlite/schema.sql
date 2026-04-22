@@ -3,25 +3,53 @@
 
 PRAGMA foreign_keys = ON;
 
--- Seguimiento de compras / cartera (módulo nuevo; no reemplaza Excel del radar).
+-- Cartera: una fila por posición; compra manual + cierre total (sin ventas parciales).
 CREATE TABLE IF NOT EXISTS positions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ticker TEXT NOT NULL,
+  asset_type TEXT NOT NULL CHECK (asset_type IN ('USA', 'Argentina', 'CEDEAR')),
+  quantity REAL NOT NULL,
+  buy_date TEXT NOT NULL,
+  buy_price_ars REAL,
+  buy_price_usd REAL,
+  notes TEXT,
+  buy_price_cedear_usd REAL,
+  buy_price_usa REAL,
+  buy_gap REAL,
+  score_at_buy REAL,
+  signalstate_at_buy TEXT,
+  techscore_at_buy REAL,
+  fundscore_at_buy REAL,
+  riskscore_at_buy REAL,
+  sell_date TEXT,
+  sell_price_ars REAL,
+  sell_price_usd REAL,
+  sell_notes TEXT,
+  sell_price_cedear_usd REAL,
+  sell_price_usa REAL,
+  sell_gap REAL,
+  score_at_sell REAL,
+  signalstate_at_sell TEXT,
+  techscore_at_sell REAL,
+  fundscore_at_sell REAL,
+  riskscore_at_sell REAL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+  realized_return_pct REAL,
+  holding_days INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   market TEXT,
-  side TEXT NOT NULL DEFAULT 'long' CHECK (side IN ('long', 'short')),
-  quantity REAL,
+  side TEXT DEFAULT 'long',
   avg_price REAL,
   currency TEXT,
   opened_at TEXT,
   closed_at TEXT,
-  notes TEXT,
-  meta_json TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  meta_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS ix_positions_ticker ON positions (ticker);
-CREATE INDEX IF NOT EXISTS ix_positions_opened_at ON positions (opened_at);
+CREATE INDEX IF NOT EXISTS ix_positions_buy_date ON positions (buy_date);
+CREATE INDEX IF NOT EXISTS ix_positions_status ON positions (status);
 
 -- Una fila por ejecución de scan (CLI, API, etc.).
 CREATE TABLE IF NOT EXISTS scan_runs (

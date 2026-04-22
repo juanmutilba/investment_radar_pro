@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { AccionesArgentinaPage } from "@/pages/AccionesArgentinaPage";
 import { AccionesUsaPage } from "@/pages/AccionesUsaPage";
 import { AlertasPage } from "@/pages/AlertasPage";
+import { CarteraPage } from "@/pages/CarteraPage";
 import { CedearsPage } from "@/pages/CedearsPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
@@ -44,15 +45,7 @@ export function AppRoutes() {
             />
           }
         />
-        <Route
-          path="tenencia"
-          element={
-            <PlaceholderPage
-              title="Tenencia"
-              description="Cartera propia, P&amp;L y asignación. Conectará con backend dedicado."
-            />
-          }
-        />
+        <Route path="cartera" element={<CarteraPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

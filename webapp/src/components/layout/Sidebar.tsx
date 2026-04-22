@@ -16,7 +16,7 @@ const ITEMS: NavItem[] = [
   { to: "/opciones", label: "Opciones", placeholder: true },
   { to: "/futuros", label: "Futuros", placeholder: true },
   { to: "/alertas", label: "Alertas" },
-  { to: "/tenencia", label: "Tenencia", placeholder: true },
+  { to: "/cartera", label: "Cartera" },
 ];
 
 export function Sidebar() {

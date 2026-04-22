@@ -556,3 +556,121 @@ export async function runScan(): Promise<RunScanResponse> {
   const o = data as { status: "ok"; summary: LatestSummary };
   return { status: o.status, summary: o.summary };
 }
+
+// --- Cartera (SQLite) ---
+
+export type PortfolioAssetType = "USA" | "Argentina" | "CEDEAR";
+
+export type PortfolioOpenRow = {
+  id: number;
+  ticker: string;
+  asset_type: PortfolioAssetType;
+  quantity: number;
+  buy_date: string;
+  buy_price_ars: number | null;
+  buy_price_usd: number | null;
+  notes: string | null;
+  buy_price_cedear_usd?: number | null;
+  buy_price_usa?: number | null;
+  buy_gap?: number | null;
+  score_at_buy: number | null;
+  signalstate_at_buy: string | null;
+  techscore_at_buy?: number | null;
+  fundscore_at_buy?: number | null;
+  riskscore_at_buy?: number | null;
+  current_score: number | null;
+  current_signalstate: string | null;
+  current_price_ars: number | null;
+  current_price_usd: number | null;
+  return_pct: number | null;
+  days_in_position: number | null;
+};
+
+export type PortfolioHistoryRow = {
+  id: number;
+  ticker: string;
+  asset_type: PortfolioAssetType;
+  buy_date: string | null;
+  sell_date: string | null;
+  buy_price_ars: number | null;
+  buy_price_usd: number | null;
+  sell_price_ars: number | null;
+  sell_price_usd: number | null;
+  score_at_buy: number | null;
+  score_at_sell: number | null;
+  signalstate_at_buy: string | null;
+  signalstate_at_sell: string | null;
+  realized_return_pct: number | null;
+  holding_days: number | null;
+};
+
+export type PortfolioCreatePayload = {
+  ticker: string;
+  asset_type: PortfolioAssetType;
+  quantity: number;
+  buy_date: string;
+  buy_price_ars?: number | null;
+  buy_price_usd?: number | null;
+  notes?: string | null;
+};
+
+export type PortfolioClosePayload = {
+  sell_date: string;
+  sell_price_ars?: number | null;
+  sell_price_usd?: number | null;
+  sell_notes?: string | null;
+  sell_price_cedear_usd?: number | null;
+  sell_price_usa?: number | null;
+  sell_gap?: number | null;
+};
+
+export async function fetchPortfolioOpen(): Promise<PortfolioOpenRow[]> {
+  const res = await fetch(`${BASE}/portfolio/positions/open`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!Array.isArray(data)) {
+    throw new Error("Respuesta inesperada: portfolio open");
+  }
+  return data as PortfolioOpenRow[];
+}
+
+export async function fetchPortfolioHistory(): Promise<PortfolioHistoryRow[]> {
+  const res = await fetch(`${BASE}/portfolio/positions/history`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!Array.isArray(data)) {
+    throw new Error("Respuesta inesperada: portfolio history");
+  }
+  return data as PortfolioHistoryRow[];
+}
+
+export async function createPortfolioPosition(payload: PortfolioCreatePayload): Promise<{ id: number }> {
+  const res = await fetch(`${BASE}/portfolio/positions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readHttpErrorMessage(res));
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object" || typeof (data as { id?: unknown }).id !== "number") {
+    throw new Error("Respuesta inesperada: crear posición");
+  }
+  return { id: (data as { id: number }).id };
+}
+
+export async function closePortfolioPosition(positionId: number, payload: PortfolioClosePayload): Promise<void> {
+  const res = await fetch(`${BASE}/portfolio/positions/${positionId}/close`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readHttpErrorMessage(res));
+  }
+}
