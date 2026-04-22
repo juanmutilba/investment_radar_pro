@@ -1,7 +1,18 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from typing import Any
+
 from fastapi import FastAPI, HTTPException, Query
 
+from persistence.sqlite import init_database
+from persistence.sqlite.connection import connection_scope
+from persistence.sqlite.scan_runs_repo import (
+    finalize_scan_run,
+    insert_running_scan_run,
+    insert_scan_metrics_row,
+    persist_failed_scan_run,
+)
 from services import latest_export
 from services.alert_event_log import read_alert_events
 from services.alerts_analysis import AlertsAnalysisRow, build_alerts_analysis
@@ -19,7 +30,14 @@ from services.engine_run_metrics import load_last_scan_metrics, save_last_scan_m
 from services.scan_service import run_full_scan_timed
 import time
 
-app = FastAPI(title="Investment Radar API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_database()
+    yield
+
+
+app = FastAPI(title="Investment Radar API", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -33,11 +51,25 @@ def run_scan():
     Misma secuencia que el CLI: scan completo + export Excel/CSV.
     Sin prints de motores (verbose=False). Devuelve estado y resumen leído del export.
     """
+    started_at = datetime.now(timezone.utc).isoformat()
+    scan_metrics: dict[str, Any] = {}
+    run_id: int | None = None
+
+    try:
+        with connection_scope() as conn:
+            run_id = insert_running_scan_run(conn, started_at, source="api")
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudo registrar el scan en SQLite: {e}",
+        ) from e
+
     try:
         outputs, scan_metrics = run_full_scan_timed(verbose=False)
         outputs.pop("previous_file")
         export_results(outputs)
     except Exception as e:
+        persist_failed_scan_run(run_id, str(e), scan_metrics if scan_metrics else None)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
     scan_finished_at = str(scan_metrics.get("scan_finished_at") or "")
@@ -53,6 +85,11 @@ def run_scan():
     summary = latest_export.read_latest_summary()
     summary_s = time.perf_counter() - t0
     if summary is None:
+        persist_failed_scan_run(
+            run_id,
+            "Scan completado pero no se pudo leer el resumen del export",
+            scan_metrics,
+        )
         raise HTTPException(
             status_code=500,
             detail="Scan completado pero no se pudo leer el resumen del export",
@@ -67,6 +104,30 @@ def run_scan():
         3,
     )
     save_last_scan_metrics(scan_metrics)
+
+    finished_at = datetime.now(timezone.utc).isoformat()
+    ep = latest_export.resolve_latest_export_path()
+    export_key = str(ep.resolve()) if ep is not None else None
+    run_finalized = False
+    try:
+        with connection_scope() as conn:
+            finalize_scan_run(
+                conn,
+                run_id,
+                finished_at=finished_at,
+                status="completed",
+                export_file=export_key,
+                error_message=None,
+            )
+        run_finalized = True
+    except Exception:
+        pass
+    if run_finalized:
+        try:
+            with connection_scope() as conn:
+                insert_scan_metrics_row(conn, run_id, scan_metrics)
+        except Exception:
+            pass
 
     # Compat: mantener summary como antes; agregar scan_metrics consolidado.
     return {"status": "ok", "summary": summary, "scan_metrics": scan_metrics}

@@ -10,3 +10,55 @@ export/
 
 webapp/node_modules/
 webapp/dist/
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# =========================
+# Entornos virtuales
+# =========================
+venv/
+.env
+
+# =========================
+# SQLite (base de datos)
+# =========================
+*.db
+*.sqlite
+*.sqlite3
+
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# =========================
+# Exportaciones (Excel / CSV)
+# =========================
+*.xlsx
+*.csv
+
+# =========================
+# Data (ignorar todo excepto mappings)
+# =========================
+data/*
+!data/cedear_mappings.json
+!data/cedear_mapping.py
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Frontend
+# =========================
+node_modules/
+dist/
