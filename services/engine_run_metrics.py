@@ -49,6 +49,41 @@ def save_engine_metrics(engine_key: str, metrics: dict[str, Any]) -> None:
         pass
 
 
+def _last_scan_metrics_path() -> Path:
+    base = Path(__file__).resolve().parent.parent
+    d = base / "data"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "last_scan_metrics.json"
+
+
+def load_last_scan_metrics() -> dict[str, Any] | None:
+    path = _last_scan_metrics_path()
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+        if not raw:
+            return None
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+def save_last_scan_metrics(metrics: dict[str, Any]) -> None:
+    """
+    Persiste métricas agregadas del último scan (para mostrar en Dashboard).
+    Best-effort: no debe romper el pipeline si falla I/O.
+    """
+    path = _last_scan_metrics_path()
+    try:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
 def format_delta_line(label: str, prev: dict[str, Any] | None, cur_t: float) -> str | None:
     if not prev:
         return None

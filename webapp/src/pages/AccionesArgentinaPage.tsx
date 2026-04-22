@@ -7,6 +7,7 @@ import { fetchLatestRadarArgentina } from "@/services/api";
 export function AccionesArgentinaPage() {
   const [params] = useSearchParams();
   const initialSearch = params.get("ticker")?.trim() || undefined;
+  const tickerSearchExact = params.get("exact") === "1";
 
   return (
     <RadarMarketTablePage
@@ -16,6 +17,7 @@ export function AccionesArgentinaPage() {
       formatEbitda={formatEbitdaArs}
       formatPrecio={formatPrecioDolarAr}
       initialSearch={initialSearch}
+      tickerSearchExact={tickerSearchExact}
       universe={{
         label: "Mercado",
         allLabel: "Todos",

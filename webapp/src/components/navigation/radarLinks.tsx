@@ -21,7 +21,8 @@ export function radarHrefForTicker(
   const t = ticker?.trim();
   if (!t) return null;
   const b = mercadoBucket(mercado);
-  const q = new URLSearchParams({ ticker: t }).toString();
+  /** exact=1: filtro por ticker exacto (evita coincidencias parciales t.includes(q)). */
+  const q = new URLSearchParams({ ticker: t, exact: "1" }).toString();
   if (b === "usa") return `/acciones-usa?${q}`;
   if (b === "argentina") return `/acciones-argentina?${q}`;
   return null;
@@ -43,6 +44,7 @@ export function TickerRadarLink({
   }
   return (
     <Link
+      replace
       to={href}
       className="table-cell--nowrap"
       title={`Abrir ${ticker} en el radar (${mercado ?? "mercado"})`}

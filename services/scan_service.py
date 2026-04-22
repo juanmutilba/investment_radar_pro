@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import time
 from datetime import datetime, timezone
 
 from core.alerts_engine import collect_detected_alerts, generate_alerts
@@ -103,3 +104,101 @@ def run_full_scan(*, verbose: bool = True) -> dict:
         "arg_alerts": arg_alerts,
         "previous_file": previous_file,
     }
+
+
+def _count_nonempty_rows_df(df) -> int:
+    try:
+        if df is None or getattr(df, "empty", False):
+            return 0
+        return int(df.dropna(how="all").shape[0])
+    except Exception:
+        return 0
+
+
+def run_full_scan_timed(*, verbose: bool = True) -> tuple[dict, dict]:
+    """
+    Igual a run_full_scan pero devuelve además métricas/timings por etapa,
+    sin alterar la lógica de cálculo.
+    """
+    t_total0 = time.perf_counter()
+    scan_ts = datetime.now(timezone.utc)
+    scan_at_iso = scan_ts.isoformat()
+    scan_id = f"{scan_ts.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(4)}"
+
+    if verbose:
+        print("Corriendo motor USA...")
+    t0 = time.perf_counter()
+    usa_df, usa_universo, usa_sectores, _ = run_usa_engine()
+    usa_scan_s = time.perf_counter() - t0
+
+    if verbose:
+        print("\nCorriendo motor Argentina...")
+    t0 = time.perf_counter()
+    arg_df, arg_universo, arg_sectores = run_argentina_engine()
+    arg_scan_s = time.perf_counter() - t0
+
+    previous_file = find_previous_export(EXPORT_FOLDER, exclude_path=OUTPUT_EXCEL)
+
+    t0 = time.perf_counter()
+    usa_df = _prepare_dataframe(usa_df, previous_file, "Radar_Completo")
+    arg_df = _prepare_dataframe(arg_df, previous_file, "Radar_Argentina_Completo")
+    prep_s = time.perf_counter() - t0
+
+    usa_top10 = usa_df.head(10).copy()
+    arg_top10 = arg_df.head(10).copy()
+
+    t0 = time.perf_counter()
+    usa_alerts = generate_alerts(usa_df)
+    arg_alerts = generate_alerts(arg_df)
+
+    usa_detected = collect_detected_alerts(usa_df)
+    arg_detected = collect_detected_alerts(arg_df)
+    try:
+        append_scan_alert_events(
+            scan_id=scan_id,
+            scan_at=scan_at_iso,
+            usa_alerts=usa_detected,
+            arg_alerts=arg_detected,
+            usa_df=usa_df,
+            arg_df=arg_df,
+        )
+    except Exception:
+        pass
+    alerts_s = time.perf_counter() - t0
+
+    outputs = {
+        "usa_df": usa_df,
+        "usa_universo": usa_universo,
+        "usa_sectores": usa_sectores,
+        "usa_top10": usa_top10,
+        "usa_alerts": usa_alerts,
+        "arg_df": arg_df,
+        "arg_universo": arg_universo,
+        "arg_sectores": arg_sectores,
+        "arg_top10": arg_top10,
+        "arg_alerts": arg_alerts,
+        "previous_file": previous_file,
+    }
+
+    usa_total_activos = _count_nonempty_rows_df(usa_df)
+    arg_total_activos = _count_nonempty_rows_df(arg_df)
+    usa_alertas = _count_nonempty_rows_df(usa_alerts)
+    arg_alertas = _count_nonempty_rows_df(arg_alerts)
+
+    metrics = {
+        "scan_finished_at": scan_at_iso,
+        "usa_scan_seconds": round(usa_scan_s, 3),
+        "arg_scan_seconds": round(arg_scan_s, 3),
+        "cedear_scan_seconds": 0.0,
+        "alerts_seconds": round(alerts_s, 3),
+        "summary_seconds": None,
+        "total_scan_seconds": round(time.perf_counter() - t_total0, 3),
+        "usa_total_activos": usa_total_activos,
+        "arg_total_activos": arg_total_activos,
+        "cedear_total_activos": 0,
+        "usa_alertas": usa_alertas,
+        "arg_alertas": arg_alertas,
+        "cedear_alertas": 0,
+        "prep_seconds": round(prep_s, 3),
+    }
+    return outputs, metrics

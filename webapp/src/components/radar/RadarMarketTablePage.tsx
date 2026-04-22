@@ -30,6 +30,8 @@ export type RadarMarketTablePageProps = {
   emptySheetMessage: string;
   /** Valor inicial del campo Buscar (p. ej. desde <code>?ticker=</code> en la ruta). */
   initialSearch?: string;
+  /** Si true (p. ej. <code>?exact=1</code>), el texto de búsqueda filtra solo por ticker exacto. */
+  tickerSearchExact?: boolean;
   universe?: {
     label: string;
     allLabel: string;
@@ -54,6 +56,7 @@ export function RadarMarketTablePage({
   formatPrecio,
   universe,
   initialSearch,
+  tickerSearchExact = false,
   emptySheetMessage,
 }: RadarMarketTablePageProps) {
   const cellOpts = useMemo<CellFormatOptions>(
@@ -158,6 +161,17 @@ export function RadarMarketTablePage({
     setSearch((initialSearch ?? "").trim());
   }, [initialSearch]);
 
+  /** Al llegar con <code>?ticker=</code> (p. ej. desde CEDEAR), no arrastrar filtros de una visita o ticker anterior. */
+  useEffect(() => {
+    const tin = (initialSearch ?? "").trim();
+    if (!tin) return;
+    setQuickFilter(null);
+    setUniverseValue("");
+    setSector("");
+    setMinTotalScore("");
+    setSortCriteria([]);
+  }, [initialSearch]);
+
   // Si hubo error de fetch/parseo, no queremos quedar "pegados" en loading.
   const loading = radar === undefined && error === null;
   const noExport = radar === null;
@@ -200,6 +214,9 @@ export function RadarMarketTablePage({
         const e = String(getRaw(r, empresaKeys) ?? "")
           .toLowerCase()
           .trim();
+        if (tickerSearchExact) {
+          return t === q;
+        }
         return t.includes(q) || e.includes(q);
       });
     }
@@ -258,6 +275,7 @@ export function RadarMarketTablePage({
     sector,
     minTotalScore,
     quickFilter,
+    tickerSearchExact,
     tickerCol.keys,
     empresaKeys,
     sectorKeys,

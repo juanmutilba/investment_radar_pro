@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { TickerRadarLink } from "@/components/navigation/radarLinks";
-import { fetchCedears, type CedearRatioEstado, type CedearRow } from "@/services/api";
+import { fetchCedears, peekCedearsCache, type CedearRatioEstado, type CedearRow } from "@/services/api";
 
 const EMPTY = "-";
 
-type SortMode = "gap_desc" | "gap_asc" | "score_desc" | "score_asc";
+type SortDir = "asc" | "desc";
+type SortKey =
+  | "ticker_usa"
+  | "gap_pct"
+  | "TotalScore"
+  | "precio_cedear_ars"
+  | "precio_cedear_usd"
+  | "ccl_implicito"
+  | "precio_usa_real"
+  | "precio_implicito_usd"
+  | "ratio";
 
 /** Miles y decimales estilo ARS (sin símbolo de moneda; se antepone `$ `). */
 const fmtEsArsLike = new Intl.NumberFormat("es-AR", {
@@ -64,17 +74,19 @@ function fmtFuente(text: string | null | undefined): { display: string; full: st
 
 const GAP_TOOLTIP =
   "Gap % = (Acción implícita USD / Acción USA - 1) * 100\n" +
-  ">0.5% verde · <-0.5% rojo · ±0.5% gris";
+  "<-1% verde · >1% rojo · ±1% gris";
 
 /** Umbrales en puntos porcentuales (mismo rango que gap_pct del backend). */
 function gapPctCellClass(gap: number | null): string {
   if (gap === null || Number.isNaN(gap)) {
     return "table-cell--empty";
   }
-  if (gap > 0.5) {
+  // CEDEAR: gap < 0 => subvaluado vs USA (verde). gap > 0 => sobrevaluado (rojo).
+  // Banda neutra para evitar ruido visual en gaps chicos.
+  if (gap < -1) {
     return "radar-cell--score-high";
   }
-  if (gap < -0.5) {
+  if (gap > 1) {
     return "cedear-cell--gap-neg";
   }
   return "radar-cell--score-very-low";
@@ -113,16 +125,75 @@ function compareNullableNum(a: number | null, b: number | null, dir: 1 | -1): nu
   return a < b ? -dir : dir;
 }
 
-function sortRows(rows: CedearRow[], mode: SortMode): CedearRow[] {
+function compareNullableStr(a: string | null | undefined, b: string | null | undefined, dir: 1 | -1): number {
+  const sa = (a ?? "").trim();
+  const sb = (b ?? "").trim();
+  const aEmpty = sa === "";
+  const bEmpty = sb === "";
+  if (aEmpty && bEmpty) return 0;
+  if (aEmpty) return 1;
+  if (bEmpty) return -1;
+  const c = sa.localeCompare(sb, "en", { sensitivity: "base" });
+  return c === 0 ? 0 : c * dir;
+}
+
+function sortRows(rows: CedearRow[], key: SortKey, dir: SortDir): CedearRow[] {
   const copy = [...rows];
-  const dir: 1 | -1 = mode === "gap_desc" || mode === "score_desc" ? -1 : 1;
+  const sdir: 1 | -1 = dir === "asc" ? 1 : -1;
   copy.sort((ra, rb) => {
-    if (mode === "gap_desc" || mode === "gap_asc") {
-      const c = compareNullableNum(ra.gap_pct, rb.gap_pct, dir);
-      if (c !== 0) return c;
-    } else {
-      const c = compareNullableNum(ra.TotalScore, rb.TotalScore, dir);
-      if (c !== 0) return c;
+    let c = 0;
+    switch (key) {
+      case "ticker_usa":
+        c = compareNullableStr(ra.ticker_usa, rb.ticker_usa, sdir);
+        break;
+      case "gap_pct":
+        c = compareNullableNum(ra.gap_pct, rb.gap_pct, sdir);
+        break;
+      case "TotalScore":
+        c = compareNullableNum(ra.TotalScore, rb.TotalScore, sdir);
+        break;
+      case "precio_cedear_ars":
+        c = compareNullableNum(ra.precio_cedear_ars, rb.precio_cedear_ars, sdir);
+        break;
+      case "precio_cedear_usd":
+        c = compareNullableNum(ra.precio_cedear_usd, rb.precio_cedear_usd, sdir);
+        break;
+      case "ccl_implicito":
+        c = compareNullableNum(ra.ccl_implicito, rb.ccl_implicito, sdir);
+        break;
+      case "precio_usa_real":
+        c = compareNullableNum(ra.precio_usa_real, rb.precio_usa_real, sdir);
+        break;
+      case "precio_implicito_usd":
+        c = compareNullableNum(ra.precio_implicito_usd, rb.precio_implicito_usd, sdir);
+        break;
+      case "ratio":
+        c = compareNullableNum(ra.ratio, rb.ratio, sdir);
+        break;
+      default:
+        c = 0;
+    }
+    if (c !== 0) return c;
+    // Tie-breaker estable: ticker asc
+    return ra.ticker_usa.localeCompare(rb.ticker_usa, "en", { sensitivity: "base" });
+  });
+  return copy;
+}
+
+function sortTopOportunidades(rows: CedearRow[]): CedearRow[] {
+  const copy = [...rows];
+  copy.sort((ra, rb) => {
+    const ga = ra.gap_pct!;
+    const gb = rb.gap_pct!;
+    if (ga !== gb) {
+      // ambos son number (filtro previo), gap asc = más negativo primero
+      return ga - gb;
+    }
+    const sa = ra.TotalScore!;
+    const sb = rb.TotalScore!;
+    if (sa !== sb) {
+      // ambos son number (filtro previo), TotalScore desc
+      return sb - sa;
     }
     return ra.ticker_usa.localeCompare(rb.ticker_usa, "en", { sensitivity: "base" });
   });
@@ -134,9 +205,11 @@ export function CedearsPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [minScore, setMinScore] = useState("");
-  const [sortMode, setSortMode] = useState<SortMode>("gap_desc");
+  const [sortKey, setSortKey] = useState<SortKey>("gap_pct");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [top10Open, setTop10Open] = useState(false);
 
   const applyCedearsResult = useCallback((r: Awaited<ReturnType<typeof fetchCedears>>) => {
     if (r.kind === "no_export") {
@@ -148,6 +221,11 @@ export function CedearsPage() {
 
   const load = useCallback(() => {
     setError(null);
+    const cached = peekCedearsCache();
+    if (cached !== null) {
+      applyCedearsResult(cached);
+      return;
+    }
     setRows(undefined);
     fetchCedears()
       .then(applyCedearsResult)
@@ -164,7 +242,7 @@ export function CedearsPage() {
   const onRefresh = useCallback(() => {
     setRefreshError(null);
     setRefreshing(true);
-    fetchCedears()
+    fetchCedears({ force: true })
       .then((r) => {
         applyCedearsResult(r);
         setError(null);
@@ -205,9 +283,43 @@ export function CedearsPage() {
     return out;
   }, [rows, search, minScore]);
 
-  const displayRows = useMemo(() => sortRows(filtered, sortMode), [filtered, sortMode]);
+  const top10 = useMemo(() => {
+    const base = rows ?? [];
+    return sortTopOportunidades(base.filter((r) => r.gap_pct !== null && r.gap_pct < 0 && r.TotalScore !== null)).slice(0, 10);
+  }, [rows]);
+
+  const displayRows = useMemo(() => sortRows(filtered, sortKey, sortDir), [filtered, sortKey, sortDir]);
 
   const loading = rows === undefined && error === null;
+  const filtersActive =
+    search.trim() !== "" || (minScore.trim() !== "" && Number.isFinite(Number(minScore.trim())));
+
+  const headerBtnStyle: React.CSSProperties = {
+    background: "none",
+    border: "none",
+    padding: 0,
+    margin: 0,
+    cursor: "pointer",
+    color: "inherit",
+    font: "inherit",
+    textAlign: "inherit",
+  };
+
+  const toggleSort = useCallback((key: SortKey, defaultDir: SortDir) => {
+    setSortKey((prevKey) => {
+      if (prevKey !== key) {
+        setSortDir(defaultDir);
+        return key;
+      }
+      setSortDir((prevDir) => (prevDir === "asc" ? "desc" : "asc"));
+      return prevKey;
+    });
+  }, []);
+
+  const sortIndicator = useCallback(
+    (key: SortKey) => (sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : ""),
+    [sortDir, sortKey],
+  );
 
   return (
     <>
@@ -260,6 +372,66 @@ export function CedearsPage() {
 
       {!loading && !error && rows !== null && rows !== undefined && rows.length > 0 && (
         <div className="card" style={{ marginBottom: "1rem" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
+            <h2 style={{ marginTop: 0, marginBottom: 0 }}>Top 10 oportunidades CEDEAR</h2>
+            <button
+              type="button"
+              className="radar-refresh-btn"
+              onClick={() => setTop10Open((v) => !v)}
+              aria-expanded={top10Open}
+            >
+              {top10Open ? "Contraer" : "Expandir"}
+            </button>
+          </div>
+          {top10Open ? (
+            top10.length > 0 ? (
+              <div className="radar-table-wrap" style={{ marginTop: "0.75rem" }}>
+                <table className="radar-table">
+                  <thead>
+                    <tr>
+                      <th scope="col" className="radar-table__th radar-table__th--sticky-head">
+                        <span className="radar-table__sort-label radar-table__sort-label--static">USA</span>
+                      </th>
+                      <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
+                        <span className="radar-table__sort-label radar-table__sort-label--static" title={GAP_TOOLTIP}>
+                          Gap %
+                        </span>
+                      </th>
+                      <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
+                        <span className="radar-table__sort-label radar-table__sort-label--static">TotalScore</span>
+                      </th>
+                      <th scope="col" className="radar-table__th radar-table__th--sticky-head">
+                        <span className="radar-table__sort-label radar-table__sort-label--static">SignalState</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {top10.map((r) => (
+                      <tr key={r.ticker_usa}>
+                        <td className="radar-table__sticky-col table-cell--nowrap">
+                          <TickerRadarLink ticker={r.ticker_usa} mercado="USA" />
+                        </td>
+                        <td style={{ textAlign: "right" }} className={`table-cell--nowrap ${gapPctCellClass(r.gap_pct)}`}>
+                          {fmtPct(r.gap_pct)}
+                        </td>
+                        <td style={{ textAlign: "right" }}>{fmtFixed(r.TotalScore, 1)}</td>
+                        <td className="table-cell--nowrap">{r.SignalState?.trim() ? r.SignalState : EMPTY}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="msg-muted" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
+                En este export no hay filas con gap % negativo y TotalScore definido; el ranking se aplicará cuando existan.
+              </p>
+            )
+          ) : null}
+        </div>
+      )}
+
+      {!loading && !error && rows !== null && rows !== undefined && rows.length > 0 && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
           <div className="radar-toolbar" aria-label="Filtros CEDEAR">
             <label className="radar-toolbar__field">
               <span className="radar-toolbar__label">Buscar ticker</span>
@@ -283,21 +455,14 @@ export function CedearsPage() {
                 step="any"
               />
             </label>
-            <label className="radar-toolbar__field">
-              <span className="radar-toolbar__label">Orden</span>
-              <select
-                className="radar-toolbar__select"
-                value={sortMode}
-                onChange={(ev) => setSortMode(ev.target.value as SortMode)}
-              >
-                <option value="gap_desc">Gap % (mayor primero)</option>
-                <option value="gap_asc">Gap % (menor primero)</option>
-                <option value="score_desc">TotalScore (mayor primero)</option>
-                <option value="score_asc">TotalScore (menor primero)</option>
-              </select>
-            </label>
             <p className="radar-toolbar__hint msg-muted">
-              {displayRows.length} de {rows.length} filas
+              CEDEAR totales: {rows.length}
+              {filtersActive ? (
+                <>
+                  <br />
+                  Mostrando {displayRows.length} de {rows.length}
+                </>
+              ) : null}
             </p>
           </div>
 
@@ -306,43 +471,92 @@ export function CedearsPage() {
               <thead>
                 <tr>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head">
-                    <span className="radar-table__sort-label radar-table__sort-label--static">USA</span>
-                  </th>
-                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static" title="Precio del CEDEAR en pesos">
-                      CEDEAR $
-                    </span>
-                  </th>
-                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static" title="Precio del CEDEAR en USD (cable)">
-                      CEDEAR USD
-                    </span>
-                  </th>
-                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static" title="Tipo de cambio implícito (ARS / USD del par CEDEAR)">
-                      CCL implícito
-                    </span>
-                  </th>
-                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static" title="Precio de la acción USA en el radar">
-                      Acción USA
-                    </span>
-                  </th>
-                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span
+                    <button
+                      type="button"
+                      style={headerBtnStyle}
                       className="radar-table__sort-label radar-table__sort-label--static"
-                      title="Precio implícito de 1 acción USA vía CEDEAR (USD)"
+                      onClick={() => toggleSort("ticker_usa", "asc")}
+                      title="Ordenar por ticker"
                     >
-                      Acción implícita USD
-                    </span>
+                      USA{sortIndicator("ticker_usa")}
+                    </button>
                   </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static" title={GAP_TOOLTIP}>
-                      Gap %
-                    </span>
+                    <button
+                      type="button"
+                      style={{ ...headerBtnStyle, width: "100%" }}
+                      className="radar-table__sort-label radar-table__sort-label--static"
+                      onClick={() => toggleSort("precio_cedear_ars", "desc")}
+                      title="Ordenar por precio CEDEAR $"
+                    >
+                      CEDEAR ${sortIndicator("precio_cedear_ars")}
+                    </button>
                   </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static">TotalScore</span>
+                    <button
+                      type="button"
+                      style={{ ...headerBtnStyle, width: "100%" }}
+                      className="radar-table__sort-label radar-table__sort-label--static"
+                      onClick={() => toggleSort("precio_cedear_usd", "desc")}
+                      title="Ordenar por precio CEDEAR USD (cable)"
+                    >
+                      CEDEAR USD{sortIndicator("precio_cedear_usd")}
+                    </button>
+                  </th>
+                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
+                    <button
+                      type="button"
+                      style={{ ...headerBtnStyle, width: "100%" }}
+                      className="radar-table__sort-label radar-table__sort-label--static"
+                      onClick={() => toggleSort("ccl_implicito", "desc")}
+                      title="Ordenar por CCL implícito (ARS/USD)"
+                    >
+                      CCL implícito{sortIndicator("ccl_implicito")}
+                    </button>
+                  </th>
+                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
+                    <button
+                      type="button"
+                      style={{ ...headerBtnStyle, width: "100%" }}
+                      className="radar-table__sort-label radar-table__sort-label--static"
+                      onClick={() => toggleSort("precio_usa_real", "desc")}
+                      title="Ordenar por precio Acción USA"
+                    >
+                      Acción USA{sortIndicator("precio_usa_real")}
+                    </button>
+                  </th>
+                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
+                    <button
+                      type="button"
+                      style={{ ...headerBtnStyle, width: "100%" }}
+                      className="radar-table__sort-label radar-table__sort-label--static"
+                      onClick={() => toggleSort("precio_implicito_usd", "desc")}
+                      title="Ordenar por Acción implícita USD"
+                    >
+                      Acción implícita USD{sortIndicator("precio_implicito_usd")}
+                    </button>
+                  </th>
+                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
+                    <button
+                      type="button"
+                      style={{ ...headerBtnStyle, width: "100%" }}
+                      className="radar-table__sort-label radar-table__sort-label--static"
+                      onClick={() => toggleSort("gap_pct", "desc")}
+                      title={GAP_TOOLTIP}
+                    >
+                      Gap %{sortIndicator("gap_pct")}
+                    </button>
+                  </th>
+                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
+                    <button
+                      type="button"
+                      style={{ ...headerBtnStyle, width: "100%" }}
+                      className="radar-table__sort-label radar-table__sort-label--static"
+                      onClick={() => toggleSort("TotalScore", "desc")}
+                      title="Ordenar por TotalScore"
+                    >
+                      TotalScore{sortIndicator("TotalScore")}
+                    </button>
                   </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head">
                     <span className="radar-table__sort-label radar-table__sort-label--static">SignalState</span>
@@ -356,7 +570,15 @@ export function CedearsPage() {
                     </span>
                   </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <span className="radar-table__sort-label radar-table__sort-label--static">Ratio</span>
+                    <button
+                      type="button"
+                      style={{ ...headerBtnStyle, width: "100%" }}
+                      className="radar-table__sort-label radar-table__sort-label--static"
+                      onClick={() => toggleSort("ratio", "desc")}
+                      title="Ordenar por Ratio"
+                    >
+                      Ratio{sortIndicator("ratio")}
+                    </button>
                   </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head">
                     <span className="radar-table__sort-label radar-table__sort-label--static">Fuente ratio</span>

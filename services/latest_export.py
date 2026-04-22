@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from core.config import ALERT_TIPO_ETIQUETA, EXPORT_FOLDER
+from services.engine_run_metrics import load_last_scan_metrics
 
 
 def resolve_latest_export_path() -> Path | None:
@@ -42,13 +43,17 @@ def read_latest_summary() -> dict[str, Any] | None:
     usa_alerts = _read_sheet(path, "Alertas_USA")
     arg_alerts = _read_sheet(path, "Alertas_Argentina")
 
-    return {
+    out = {
         "file": str(path.resolve()),
         "usa_tickers_count": _nonempty_row_count(usa_df),
         "arg_tickers_count": _nonempty_row_count(arg_df),
         "usa_alerts_count": _nonempty_row_count(usa_alerts),
         "arg_alerts_count": _nonempty_row_count(arg_alerts),
     }
+    last = load_last_scan_metrics()
+    if last:
+        out["last_scan"] = last
+    return out
 
 
 def _df_to_radar_payload(path: Path, sheet: str) -> dict[str, Any]:

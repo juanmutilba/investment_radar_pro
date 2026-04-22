@@ -4,6 +4,7 @@ import {
   fetchLatestSummary,
   runScan,
   type LatestSummary,
+  type ScanMetrics,
 } from "@/services/api";
 
 type ScanPhase = "idle" | "loading" | "success" | "error";
@@ -19,11 +20,13 @@ export function DashboardPage() {
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [scanPhase, setScanPhase] = useState<ScanPhase>("idle");
   const [scanMessage, setScanMessage] = useState<string | null>(null);
+  const [lastScan, setLastScan] = useState<ScanMetrics | null>(null);
 
   const loadSummary = useCallback(() => {
     return fetchLatestSummary()
       .then((s) => {
         setSummary(s);
+        setLastScan(s?.last_scan ?? null);
         setSummaryError(null);
       })
       .catch((e: unknown) => {
@@ -41,8 +44,10 @@ export function DashboardPage() {
     setScanMessage(null);
     setScanPhase("loading");
     try {
-      const { summary: next } = await runScan();
+      const r = await runScan();
+      const next = r.summary;
       setSummary(next);
+      setLastScan(r.scan_metrics ?? next.last_scan ?? null);
       setSummaryError(null);
       setScanPhase("success");
       setScanMessage("Scan completado. Datos actualizados.");
@@ -121,45 +126,57 @@ export function DashboardPage() {
           </p>
         ) : null}
 
+        <h3 className="dashboard-section-title" style={{ marginTop: "1rem", marginBottom: "0.5rem" }}>
+          Último scan
+        </h3>
+        <div className="dashboard-stats-grid">
+          <div className="stat dashboard-stat">
+            <div className="stat__label">Duración total</div>
+            <div className="stat__value">{lastScan ? `${lastScan.total_scan_seconds.toFixed(1)}s` : "—"}</div>
+            <div className="msg-muted dashboard-stat__hint">USA + ARG + CEDEAR + alertas</div>
+          </div>
+          <div className="stat dashboard-stat">
+            <div className="stat__label">USA</div>
+            <div className="stat__value">{lastScan ? `${lastScan.usa_scan_seconds.toFixed(1)}s` : "—"}</div>
+            <div className="msg-muted dashboard-stat__hint">
+              {lastScan ? `${lastScan.usa_total_activos} activos · ${lastScan.usa_alertas} alertas` : "—"}
+            </div>
+          </div>
+          <div className="stat dashboard-stat">
+            <div className="stat__label">Argentina</div>
+            <div className="stat__value">{lastScan ? `${lastScan.arg_scan_seconds.toFixed(1)}s` : "—"}</div>
+            <div className="msg-muted dashboard-stat__hint">
+              {lastScan ? `${lastScan.arg_total_activos} activos · ${lastScan.arg_alertas} alertas` : "—"}
+            </div>
+          </div>
+          <div className="stat dashboard-stat">
+            <div className="stat__label">CEDEAR</div>
+            <div className="stat__value">{lastScan ? `${lastScan.cedear_scan_seconds.toFixed(1)}s` : "—"}</div>
+            <div className="msg-muted dashboard-stat__hint">
+              {lastScan ? `${lastScan.cedear_total_activos} activos · ${lastScan.cedear_alertas} con señal` : "—"}
+            </div>
+          </div>
+          <div className="stat dashboard-stat">
+            <div className="stat__label">Alertas (pipeline)</div>
+            <div className="stat__value">{lastScan ? `${lastScan.alerts_seconds.toFixed(1)}s` : "—"}</div>
+            <div className="msg-muted dashboard-stat__hint">
+              {lastScan && lastScan.summary_seconds !== null
+                ? `Resumen Excel: ${lastScan.summary_seconds.toFixed(1)}s`
+                : "—"}
+            </div>
+          </div>
+        </div>
+        {lastScan?.scan_finished_at ? (
+          <p className="msg-muted" style={{ marginBottom: 0, marginTop: "0.75rem" }}>
+            Finalizado: <code>{lastScan.scan_finished_at}</code>
+          </p>
+        ) : null}
+
         {summaryError !== null ? (
           <p className="msg-error" style={{ marginBottom: 0 }}>
             {summaryError}
           </p>
         ) : null}
-      </div>
-
-      <h2 className="dashboard-section-title">Resumen del último export</h2>
-      <div className="dashboard-stats-grid">
-        <div className="stat dashboard-stat">
-          <div className="stat__label">Activos USA</div>
-          <div className="stat__value">
-            {summary !== null ? summary.usa_tickers_count : "—"}
-          </div>
-          <div className="msg-muted dashboard-stat__hint">Filas en Radar_Completo</div>
-        </div>
-        <div className="stat dashboard-stat">
-          <div className="stat__label">Activos Argentina</div>
-          <div className="stat__value">
-            {summary !== null ? summary.arg_tickers_count : "—"}
-          </div>
-          <div className="msg-muted dashboard-stat__hint">
-            Filas en Radar_Argentina_Completo
-          </div>
-        </div>
-        <div className="stat dashboard-stat">
-          <div className="stat__label">Alertas USA</div>
-          <div className="stat__value">
-            {summary !== null ? summary.usa_alerts_count : "—"}
-          </div>
-          <div className="msg-muted dashboard-stat__hint">Hoja Alertas_USA</div>
-        </div>
-        <div className="stat dashboard-stat">
-          <div className="stat__label">Alertas Argentina</div>
-          <div className="stat__value">
-            {summary !== null ? summary.arg_alerts_count : "—"}
-          </div>
-          <div className="msg-muted dashboard-stat__hint">Hoja Alertas_Argentina</div>
-        </div>
       </div>
 
       <div className="card">
@@ -176,8 +193,7 @@ export function DashboardPage() {
           </Link>
         </nav>
         <p className="msg-muted" style={{ margin: "0.85rem 0 0", fontSize: "0.82rem" }}>
-          Datos de las tarjetas: <code>GET /latest-summary</code> (mismos conteos que
-          el backend lee del Excel).
+          Métricas del último scan: <code>GET /latest-summary</code> (campo <code>last_scan</code>).
         </p>
       </div>
     </>

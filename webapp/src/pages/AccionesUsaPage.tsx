@@ -7,6 +7,7 @@ import { fetchLatestRadar } from "@/services/api";
 export function AccionesUsaPage() {
   const [params] = useSearchParams();
   const initialSearch = params.get("ticker")?.trim() || undefined;
+  const tickerSearchExact = params.get("exact") === "1";
 
   return (
     <RadarMarketTablePage
@@ -15,6 +16,7 @@ export function AccionesUsaPage() {
       fetchRadar={fetchLatestRadar}
       formatEbitda={formatEbitdaUsd}
       initialSearch={initialSearch}
+      tickerSearchExact={tickerSearchExact}
       universe={{
         label: "Universo",
         allLabel: "Todas",

@@ -168,6 +168,7 @@ export type LatestSummary = {
   arg_tickers_count: number;
   usa_alerts_count: number;
   arg_alerts_count: number;
+  last_scan?: ScanMetrics;
 };
 
 function isLatestSummary(data: unknown): data is LatestSummary {
@@ -183,6 +184,22 @@ function isLatestSummary(data: unknown): data is LatestSummary {
     typeof o.arg_alerts_count === "number"
   );
 }
+
+export type ScanMetrics = {
+  scan_finished_at: string;
+  usa_scan_seconds: number;
+  arg_scan_seconds: number;
+  cedear_scan_seconds: number;
+  alerts_seconds: number;
+  summary_seconds: number | null;
+  total_scan_seconds: number;
+  usa_total_activos: number;
+  arg_total_activos: number;
+  cedear_total_activos: number;
+  usa_alertas: number;
+  arg_alertas: number;
+  cedear_alertas: number;
+};
 
 export type CedearRatioEstado = "ok" | "pendiente_validar" | "revisar";
 
@@ -270,19 +287,193 @@ export type CedearsFetchResult = { kind: "rows"; rows: CedearRow[] } | { kind: "
 /** Una sola petición HTTP en vuelo: evita GET duplicados (p. ej. React StrictMode en dev). */
 let cedearsFetchInflight: Promise<CedearsFetchResult> | null = null;
 
+type CedearsCache = { data: CedearsFetchResult; cached_at_ms: number; source_scan_finished_at?: string | null };
+let cedearsCache: CedearsCache | null = null;
+const CEDEARS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const CEDEARS_CACHE_STORAGE_KEY = "investment_radar_pro:cedears_cache:v1";
+
+export type CedearsBuildMeta = {
+  scan_finished_at: string | null;
+  row_count: number | null;
+  cedear_alertas: number | null;
+  source_export_file?: string | null;
+};
+
+function isCedearsBuildMeta(data: unknown): data is CedearsBuildMeta {
+  if (data === null || typeof data !== "object") {
+    return false;
+  }
+  const o = data as Record<string, unknown>;
+  const sf = o.scan_finished_at;
+  const rc = o.row_count;
+  const ca = o.cedear_alertas;
+  const sef = o.source_export_file;
+  if (!(sf === null || typeof sf === "string")) {
+    return false;
+  }
+  if (!(rc === null || typeof rc === "number")) {
+    return false;
+  }
+  if (!(ca === null || typeof ca === "number")) {
+    return false;
+  }
+  if ("source_export_file" in o && !(sef === null || sef === undefined || typeof sef === "string")) {
+    return false;
+  }
+  return true;
+}
+
+export async function fetchCedearsBuildMeta(): Promise<CedearsBuildMeta | null> {
+  const res = await fetch(`${BASE}/cedears/build-meta`);
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCedearsBuildMeta(data)) {
+    throw new Error("Respuesta inesperada: cedears/build-meta");
+  }
+  return data;
+}
+
+function readCedearsCacheFromSessionStorage(nowMs: number): CedearsCache | null {
+  try {
+    if (typeof sessionStorage === "undefined") {
+      return null;
+    }
+    const raw = sessionStorage.getItem(CEDEARS_CACHE_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object") {
+      return null;
+    }
+    const o = parsed as { cached_at_ms?: unknown; data?: unknown; source_scan_finished_at?: unknown };
+    if (typeof o.cached_at_ms !== "number" || !Number.isFinite(o.cached_at_ms)) {
+      return null;
+    }
+    if (nowMs - o.cached_at_ms > CEDEARS_CACHE_TTL_MS) {
+      return null;
+    }
+    const src =
+      o.source_scan_finished_at === null || o.source_scan_finished_at === undefined
+        ? null
+        : typeof o.source_scan_finished_at === "string"
+          ? o.source_scan_finished_at
+          : null;
+    const d = o.data as { kind?: unknown; rows?: unknown } | undefined;
+    if (d?.kind === "no_export") {
+      return { cached_at_ms: o.cached_at_ms, data: { kind: "no_export" }, source_scan_finished_at: src };
+    }
+    if (d?.kind === "rows" && Array.isArray(d.rows)) {
+      const out: CedearRow[] = [];
+      for (const item of d.rows) {
+        if (!isCedearRow(item)) {
+          return null;
+        }
+        out.push(item);
+      }
+      return { cached_at_ms: o.cached_at_ms, data: { kind: "rows", rows: out }, source_scan_finished_at: src };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function writeCedearsCacheToSessionStorage(cache: CedearsCache): void {
+  try {
+    if (typeof sessionStorage === "undefined") {
+      return;
+    }
+    sessionStorage.setItem(CEDEARS_CACHE_STORAGE_KEY, JSON.stringify(cache));
+  } catch {
+    // ignore
+  }
+}
+
+export function peekCedearsCache(): CedearsFetchResult | null {
+  const now = Date.now();
+  if (cedearsCache !== null && now - cedearsCache.cached_at_ms <= CEDEARS_CACHE_TTL_MS) {
+    return cedearsCache.data;
+  }
+  const fromStorage = readCedearsCacheFromSessionStorage(now);
+  if (fromStorage !== null) {
+    cedearsCache = fromStorage;
+    return fromStorage.data;
+  }
+  return null;
+}
+
 /**
  * GET /cedears — vista CEDEAR sobre el último radar USA.
  * no_export: 404.
  */
-export async function fetchCedears(): Promise<CedearsFetchResult> {
+export async function fetchCedears(opts?: { force?: boolean }): Promise<CedearsFetchResult> {
+  const force = Boolean(opts?.force);
+  const now = Date.now();
+
+  const shouldInvalidateAgainstMeta = async (cur: CedearsCache | null): Promise<boolean> => {
+    if (force) {
+      return false;
+    }
+    try {
+      const meta = await fetchCedearsBuildMeta();
+      const m = meta?.scan_finished_at?.trim() ?? "";
+      if (!m) {
+        return false;
+      }
+      const s = cur?.source_scan_finished_at?.trim() ?? "";
+      if (!s) {
+        return true;
+      }
+      return m !== s;
+    } catch {
+      return false;
+    }
+  };
+
+  if (!force && cedearsCache !== null && now - cedearsCache.cached_at_ms <= CEDEARS_CACHE_TTL_MS) {
+    if (await shouldInvalidateAgainstMeta(cedearsCache)) {
+      cedearsCache = null;
+    } else {
+      return cedearsCache.data;
+    }
+  }
+  if (!force) {
+    const fromStorage = readCedearsCacheFromSessionStorage(now);
+    if (fromStorage !== null) {
+      if (await shouldInvalidateAgainstMeta(fromStorage)) {
+        cedearsCache = null;
+      } else {
+        cedearsCache = fromStorage;
+        return fromStorage.data;
+      }
+    }
+  }
   if (cedearsFetchInflight !== null) {
     return cedearsFetchInflight;
   }
   const p = (async (): Promise<CedearsFetchResult> => {
     try {
-      const res = await fetch(`${BASE}/cedears`);
+      let metaScanAt: string | null = null;
+      try {
+        const meta = await fetchCedearsBuildMeta();
+        metaScanAt = meta?.scan_finished_at?.trim() ? meta.scan_finished_at : null;
+      } catch {
+        metaScanAt = null;
+      }
+
+      const q = force ? "?force=1" : "";
+      const res = await fetch(`${BASE}/cedears${q}`);
       if (res.status === 404) {
-        return { kind: "no_export" };
+        const out: CedearsFetchResult = { kind: "no_export" };
+        cedearsCache = { data: out, cached_at_ms: Date.now(), source_scan_finished_at: metaScanAt };
+        writeCedearsCacheToSessionStorage(cedearsCache);
+        return out;
       }
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
@@ -298,7 +489,10 @@ export async function fetchCedears(): Promise<CedearsFetchResult> {
         }
         out.push(item);
       }
-      return { kind: "rows", rows: out };
+      const result: CedearsFetchResult = { kind: "rows", rows: out };
+      cedearsCache = { data: result, cached_at_ms: Date.now(), source_scan_finished_at: metaScanAt };
+      writeCedearsCacheToSessionStorage(cedearsCache);
+      return result;
     } finally {
       cedearsFetchInflight = null;
     }
@@ -326,6 +520,7 @@ export async function fetchLatestSummary(): Promise<LatestSummary | null> {
 export type RunScanResponse = {
   status: "ok";
   summary: LatestSummary;
+  scan_metrics?: ScanMetrics;
 };
 
 async function readHttpErrorMessage(res: Response): Promise<string> {
