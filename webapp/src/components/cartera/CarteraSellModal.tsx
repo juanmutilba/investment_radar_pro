@@ -120,13 +120,16 @@ export function CarteraSellModal({
             ) : null}
             {position.asset_type === "CEDEAR" ? (
               <label className={`cartera-field${sellValidation.inv.price ? " cartera-field--invalid" : ""}`}>
-                <span>Precio venta USD (ref USA)</span>
+                <span>Precio venta USD (subyacente USA)</span>
                 <input
                   value={sellCedearUsd}
                   onChange={(e) => setSellCedearUsd(e.target.value)}
                   inputMode="decimal"
-                  placeholder="obligatorio"
+                  placeholder="obligatorio — misma base que cartera abierta"
                 />
+                <small className="cartera-hint" style={{ display: "block", marginTop: "0.25rem" }}>
+                  No uses aquí el precio cable del CEDEAR: es el USD de la acción en USA al vender.
+                </small>
               </label>
             ) : null}
             {position.asset_type === "Argentina" || position.asset_type === "CEDEAR" ? (

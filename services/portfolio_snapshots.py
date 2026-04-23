@@ -115,6 +115,22 @@ def find_cedear_row(ticker: str) -> CedearRow | None:
     return None
 
 
+def _cedear_usa_reference_price(c: CedearRow) -> float | None:
+    """
+    USD por acción USA (subyacente): siempre vía market_data; fallback a la fila CEDEAR si falla.
+    Import diferido: market_data → portfolio_snapshots en cadena de imports.
+    """
+    try:
+        from services.market_data import get_usa_price
+
+        q = get_usa_price(c.ticker_usa, prefer_export=True)
+        if q.is_valid and q.value is not None:
+            return float(q.value)
+    except Exception:
+        pass
+    return c.precio_usa_real
+
+
 def snapshot_fields_for_buy(ticker: str, asset_type: str) -> dict[str, Any]:
     """
     Campos persistidos al comprar: scores desde último radar + pricing CEDEAR si aplica.
@@ -134,7 +150,7 @@ def snapshot_fields_for_buy(ticker: str, asset_type: str) -> dict[str, Any]:
         c = find_cedear_row(ticker)
         if c:
             out["buy_price_cedear_usd"] = c.precio_cedear_usd
-            out["buy_price_usa"] = c.precio_usa_real
+            out["buy_price_usa"] = _cedear_usa_reference_price(c)
             out["buy_gap"] = c.gap_pct
             out["score_at_buy"] = c.total_score
             out["signalstate_at_buy"] = c.signal_state
@@ -179,8 +195,8 @@ def current_market_snapshot(ticker: str, asset_type: str) -> dict[str, Any]:
         if c:
             out["current_score"] = c.total_score
             out["current_signalstate"] = c.signal_state
-            # Base principal USA (misma referencia que buy_price_usd / módulo CEDEAR).
-            out["current_price_usd"] = c.precio_usa_real
+            # Base principal USA: market_data (export + Yahoo), no solo fila snapshot/CCL.
+            out["current_price_usd"] = _cedear_usa_reference_price(c)
             # Auxiliar: mercado local (no usar como base de retorno vs compra USA).
             out["current_price_ars"] = c.precio_cedear_ars
             out["current_price_cedear_usd"] = c.precio_cedear_usd

@@ -242,6 +242,30 @@ def _yahoo_spot_cached(symbol: str, cache: dict[str, float | None], stats: dict[
     return p
 
 
+def _usa_price_spot_cached(ticker_usa: str, cache: dict[str, float | None], stats: dict[str, int]) -> float | None:
+    """
+    precio_usa_real siempre vía services.market_data.get_usa_price (export preferido, Yahoo fallback).
+    Cache dedicado (no compartir con _yahoo_spot_cached de ARS/CCL) para evitar colisiones de ticker.
+    """
+    sym = (ticker_usa or "").strip()
+    if not sym:
+        return None
+    key = sym.upper()
+    if key in cache:
+        stats["yahoo_cache_hits"] += 1
+        return cache[key]
+    stats["yahoo_queries"] += 1
+    p: float | None = None
+    try:
+        from services.market_data import get_usa_price
+
+        q = get_usa_price(sym, prefer_export=True)
+        p = q.value
+    finally:
+        cache[key] = p
+    return p
+
+
 def _cedear_debug_line(
     ticker_usa: str,
     sym_ars: str,
@@ -369,11 +393,63 @@ def _usa_row_index(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _log_cedear_timing_breakdown(
+    *,
+    total_ms: float,
+    maestro_scan_ms: float,
+    maestro_entries: int,
+    maestro_active: int,
+    radar_usa_ms: float | None,
+    usa_rows_indexed: int | None,
+    loop_rows: int,
+    usa_price_ms: float,
+    local_yahoo_ms: float,
+    row_other_ms: float,
+    yahoo_queries: int,
+    yahoo_cache_hits: int,
+    phase_note: str | None = None,
+) -> None:
+    """
+    Resumen de performance por fase (grep: CEDEAR_TIMING).
+    maestro: tupla CEDEAR_MAPPINGS ya cargada al import; maestro_scan_ms es recorrido en memoria.
+    radar_usa: lectura radar_*.xlsx (USA) + índice por ticker.
+    usa_price: suma wall-clock de _usa_price_spot_cached (market_data / Yahoo).
+    local_yahoo: suma wall-clock de _yahoo_spot_cached ARS + CCL por fila activa.
+    row_other: lookup fila USA, gap, debug/audit, mensajes cobertura, CedearRow y append (sin red).
+    """
+    radar_s = f"{radar_usa_ms:.1f} (usa_rows_indexed={usa_rows_indexed})" if radar_usa_ms is not None else "n/a"
+    extra = f" note={phase_note}" if phase_note else ""
+    msg = (
+        "[CEDEAR_TIMING] total_ms=%.1f rows_out=%s yahoo_queries=%s yahoo_cache_hits=%s%s\n"
+        "  maestro_scan_ms=%.1f (entries=%s active=%s; tupla ya en RAM al import)\n"
+        "  radar_usa_ms=%s\n"
+        "  usa_price_resolve_ms=%.1f\n"
+        "  local_yahoo_ars_ccl_ms=%.1f\n"
+        "  row_other_ms=%.1f"
+        % (
+            total_ms,
+            loop_rows,
+            yahoo_queries,
+            yahoo_cache_hits,
+            extra,
+            maestro_scan_ms,
+            maestro_entries,
+            maestro_active,
+            radar_s,
+            usa_price_ms,
+            local_yahoo_ms,
+            row_other_ms,
+        )
+    )
+    logger.info(msg)
+    print(msg, file=sys.stderr, flush=True)
+
+
 def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     """
     None si no hay export radar_*.xlsx.
-    Incluye todos los mapeos activos. Si ticker_usa no está en el radar, se conserva la fila:
-    precio USA con Yahoo (mismo ticker limpio); TotalScore y SignalState en null; mod_usa=NO.
+    Incluye todos los mapeos activos. precio_usa_real siempre desde market_data (export + Yahoo);
+    si ticker_usa no está en el radar, TotalScore y SignalState en null; mod_usa=NO.
 
     Cobertura USA vs pricing local: `cobertura_usa_mensaje` y `pricing_cedear_local_mensaje` separan
     ambos mundos sin ocultar filas ni cambiar fórmulas (precios/implícitos siguen en null si faltan datos).
@@ -391,52 +467,107 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         CEDEAR_DEBUG=1 → stderr por fila (símbolos y precios Yahoo).
         CEDEAR_AUDIT=1 → una línea INFO [CEDEAR_AUDIT] por fila (grep). Opcional:
         CEDEAR_AUDIT_TICKERS=ABT,AZN para acotar tickers.
+        Siempre: una línea INFO [CEDEAR_TIMING] con desglose de ms por fase (grep CEDEAR_TIMING).
     """
     t0 = time.perf_counter()
     yahoo_stats = {"yahoo_queries": 0, "yahoo_cache_hits": 0}
 
+    t_maestro0 = time.perf_counter()
+    maestro_entries = len(CEDEAR_MAPPINGS)
+    maestro_active = sum(1 for m in CEDEAR_MAPPINGS if m.activo)
+    maestro_scan_ms = (time.perf_counter() - t_maestro0) * 1000.0
+
+    t_radar0 = time.perf_counter()
     payload = latest_export.read_latest_radar()
     if payload is None:
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        radar_usa_ms = (time.perf_counter() - t_radar0) * 1000.0
         logger.info(
             "cedear_build elapsed_ms=%.1f rows=0 yahoo_queries=0 yahoo_cache_hits=0 (no_export)",
             elapsed_ms,
+        )
+        _log_cedear_timing_breakdown(
+            total_ms=elapsed_ms,
+            maestro_scan_ms=maestro_scan_ms,
+            maestro_entries=maestro_entries,
+            maestro_active=maestro_active,
+            radar_usa_ms=radar_usa_ms,
+            usa_rows_indexed=None,
+            loop_rows=0,
+            usa_price_ms=0.0,
+            local_yahoo_ms=0.0,
+            row_other_ms=0.0,
+            yahoo_queries=0,
+            yahoo_cache_hits=0,
+            phase_note="no_export",
         )
         return None
     raw_rows = payload.get("rows")
     if not isinstance(raw_rows, list):
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        radar_usa_ms = (time.perf_counter() - t_radar0) * 1000.0
         logger.info(
             "cedear_build elapsed_ms=%.1f rows=0 yahoo_queries=0 yahoo_cache_hits=0 (invalid_rows)",
             elapsed_ms,
         )
+        _log_cedear_timing_breakdown(
+            total_ms=elapsed_ms,
+            maestro_scan_ms=maestro_scan_ms,
+            maestro_entries=maestro_entries,
+            maestro_active=maestro_active,
+            radar_usa_ms=radar_usa_ms,
+            usa_rows_indexed=None,
+            loop_rows=0,
+            usa_price_ms=0.0,
+            local_yahoo_ms=0.0,
+            row_other_ms=0.0,
+            yahoo_queries=0,
+            yahoo_cache_hits=0,
+            phase_note="invalid_rows",
+        )
         return []
 
     by_ticker = _usa_row_index(raw_rows)
+    radar_usa_ms = (time.perf_counter() - t_radar0) * 1000.0
+    usa_rows_indexed = len(by_ticker)
+
     out: list[CedearRow] = []
     yahoo_cache: dict[str, float | None] = {}
+    usa_price_cache: dict[str, float | None] = {}
+
+    acc_usa_price_ms = 0.0
+    acc_local_yahoo_ms = 0.0
+    acc_row_other_ms = 0.0
 
     for m in CEDEAR_MAPPINGS:
         if not m.activo:
             continue
+        t_row0 = time.perf_counter()
         usa_key = m.ticker_usa.strip().upper()
         row = by_ticker.get(usa_key)
         if row is not None:
-            precio_usa = _to_float(_radar_get(row, "Precio", "precio"))
             total_score = _to_float(_radar_get(row, "TotalScore", "total_score"))
             sig = _radar_get(row, "SignalState", "signal_state")
             signal_state = str(sig).strip() if sig is not None else None
             mod_usa: ModUsa = "SI"
         else:
-            precio_usa = _yahoo_spot_cached(usa_key, yahoo_cache, yahoo_stats)
             total_score = None
             signal_state = None
             mod_usa = "NO"
 
+        t_usa0 = time.perf_counter()
+        precio_usa = _usa_price_spot_cached(usa_key, usa_price_cache, yahoo_stats)
+        t_usa1 = time.perf_counter()
+        acc_usa_price_ms += (t_usa1 - t_usa0) * 1000.0
+
         sym_ars = m.ticker_cedear_ars.strip()
         sym_ccl = m.ticker_cedear_ccl.strip()
+        t_loc0 = time.perf_counter()
         p_ars = _yahoo_spot_cached(sym_ars, yahoo_cache, yahoo_stats)
         p_ccl = _yahoo_spot_cached(sym_ccl, yahoo_cache, yahoo_stats)
+        t_loc1 = time.perf_counter()
+        acc_local_yahoo_ms += (t_loc1 - t_loc0) * 1000.0
+
         fuente_cedear: FuenteCedearLocal = "Yahoo"
 
         cedears_por = float(m.cedears_por_accion_usa)
@@ -497,6 +628,8 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
                 pricing_cedear_local_mensaje=loc_msg,
             )
         )
+        t_row1 = time.perf_counter()
+        acc_row_other_ms += (t_row1 - t_row0) * 1000.0 - (t_usa1 - t_usa0) * 1000.0 - (t_loc1 - t_loc0) * 1000.0
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     logger.info(
@@ -505,5 +638,20 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         len(out),
         yahoo_stats["yahoo_queries"],
         yahoo_stats["yahoo_cache_hits"],
+    )
+    _log_cedear_timing_breakdown(
+        total_ms=elapsed_ms,
+        maestro_scan_ms=maestro_scan_ms,
+        maestro_entries=maestro_entries,
+        maestro_active=maestro_active,
+        radar_usa_ms=radar_usa_ms,
+        usa_rows_indexed=usa_rows_indexed,
+        loop_rows=len(out),
+        usa_price_ms=acc_usa_price_ms,
+        local_yahoo_ms=acc_local_yahoo_ms,
+        row_other_ms=acc_row_other_ms,
+        yahoo_queries=yahoo_stats["yahoo_queries"],
+        yahoo_cache_hits=yahoo_stats["yahoo_cache_hits"],
+        phase_note=None,
     )
     return out

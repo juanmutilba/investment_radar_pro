@@ -228,12 +228,14 @@ export function CarteraBuyModal({
                   buyValidation.inv.price && (assetType === "USA" || assetType === "CEDEAR") ? " cartera-field--invalid" : ""
                 }`}
               >
-                <span>Precio compra USD</span>
+                <span>{assetType === "CEDEAR" ? "Precio compra USD (subyacente USA)" : "Precio compra USD"}</span>
                 <input
                   value={buyPriceUsd}
                   onChange={(e) => setBuyPriceUsd(e.target.value)}
                   inputMode="decimal"
-                  placeholder={assetType === "CEDEAR" ? "precio CEDEAR USD (cable), obligatorio" : "obligatorio"}
+                  placeholder={
+                    assetType === "CEDEAR" ? "USD por acción USA — costo/tu referencia (obligatorio)" : "obligatorio"
+                  }
                 />
               </label>
             ) : null}
@@ -249,7 +251,8 @@ export function CarteraBuyModal({
             </label>
           </div>
           <p className="cartera-hint">
-            USA: precio en USD. Argentina: precio en ARS + TC MEP. CEDEAR: precio en USD + TC MEP de referencia.
+            USA: precio en USD. Argentina: precio en ARS + TC MEP. CEDEAR: USD del subyacente listado en USA (no cable
+            CCL) + TC MEP de referencia.
           </p>
           {!buyValidation.valid && buyValidation.message ? (
             <div className="cartera-validation-hint" role="status">

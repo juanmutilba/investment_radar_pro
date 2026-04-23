@@ -48,7 +48,13 @@ export function computeBuyValidation(
     priceOk = parsePositiveNumber(buyPriceUsd) !== null;
   }
   if (!priceOk) {
-    missing.push(assetType === "Argentina" ? "precio en ARS" : "precio en USD");
+    missing.push(
+      assetType === "Argentina"
+        ? "precio en ARS"
+        : assetType === "CEDEAR"
+          ? "precio en USD (subyacente USA)"
+          : "precio en USD",
+    );
     inv.price = true;
   }
   if (assetType === "Argentina" || assetType === "CEDEAR") {
@@ -96,10 +102,14 @@ export function computeSellValidation(
   } else {
     priceOk = parsePositiveNumber(sellCedearUsd) !== null;
   }
-    if (!priceOk) {
-      missing.push(
-        at === "Argentina" ? "precio de venta ARS" : at === "CEDEAR" ? "precio venta USD (ref USA)" : "precio de venta USD",
-      );
+  if (!priceOk) {
+    missing.push(
+      at === "Argentina"
+        ? "precio de venta ARS"
+        : at === "CEDEAR"
+          ? "precio venta USD (subyacente USA)"
+          : "precio de venta USD",
+    );
     inv.price = true;
   }
   if (at === "Argentina" || at === "CEDEAR") {

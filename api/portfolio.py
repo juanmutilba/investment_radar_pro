@@ -70,12 +70,16 @@ def _enrich_open_row(row: sqlite3.Row) -> dict[str, Any]:
         d["current_price_ars"] = None
         d["current_price_cedear_usd"] = m.get("current_price_cedear_usd")
     d["buy_alert_label"] = buy_alert_label_or_default(ticker=d.get("ticker"), buy_date=d.get("buy_date"))
+    cur_ars = m["current_price_ars"]
+    cur_usd = m["current_price_usd"]
+    if d.get("asset_type") == ASSET_CEDEAR:
+        cur_ars = None
     d["return_pct"] = compute_return_pct_open(
         asset_type=d["asset_type"],
         buy_price_ars=d.get("buy_price_ars"),
         buy_price_usd=d.get("buy_price_usd"),
-        cur_ars=m["current_price_ars"],
-        cur_usd=m["current_price_usd"],
+        cur_ars=cur_ars,
+        cur_usd=cur_usd,
     )
     try:
         d0 = date.fromisoformat(str(d.get("buy_date") or "")[:10])
@@ -191,18 +195,17 @@ def close_position_endpoint(position_id: int, body: PositionCloseBody):
     rr: float | None
     rr_usd: float | None = None
     if d["asset_type"] == ASSET_CEDEAR:
-        # Venta en columna principal sell_price_usd = precio USA (ref acción). CCL al cierre → sell_price_cedear_usd (snap).
+        # Venta: sell_price_usd / retorno = precio USA (subyacente). CCL va solo a sell_price_cedear_usd (aux).
         sell_aux_ccl = snap.get("sell_price_cedear_usd")
-        sell_usa_explicit = (
-            body.sell_price_usd
-            if body.sell_price_usd is not None
-            else body.sell_price_cedear_usd
-        )
+        if body.sell_price_cedear_usd is not None:
+            sell_aux_ccl = body.sell_price_cedear_usd
+        # No usar precio CCL como proxy de USD USA si falta sell_price_usd.
+        sell_usa_explicit = body.sell_price_usd
         sell_usa_ref = sell_usa_explicit if sell_usa_explicit is not None else snap.get("sell_price_usa")
         sell_price_ars_out = None
         sell_price_usd_out = sell_usa_ref
         sell_price_cedear_usd_out = sell_aux_ccl
-        sell_price_usa_out = sell_usa_snap
+        sell_price_usa_out = body.sell_price_usa if body.sell_price_usa is not None else sell_usa_ref
 
         buy_usd_basis = d.get("buy_price_usd")
         try:
@@ -210,8 +213,7 @@ def close_position_endpoint(position_id: int, body: PositionCloseBody):
                 buy_usd_basis = d.get("buy_price_usa")
         except (TypeError, ValueError):
             buy_usd_basis = d.get("buy_price_usa")
-        if buy_usd_basis is None:
-            buy_usd_basis = d.get("buy_price_cedear_usd")
+        # buy_price_cedear_usd es línea CCL (USD por CEDEAR), no USD por acción USA — no usar en retorno USA.
         try:
             buy_f = float(buy_usd_basis) if buy_usd_basis is not None else None
         except (TypeError, ValueError):

@@ -192,13 +192,22 @@ export function CarteraPage() {
       return r.buy_price_ars != null ? `ARS ${fmtNum(r.buy_price_ars, 2)}` : "—";
     }
     if (r.asset_type === "CEDEAR") {
-      return r.buy_price_usd != null ? `USD ${fmtNum(r.buy_price_usd, 4)}` : "—";
+      return r.buy_price_usd != null ? `USD (USA) ${fmtNum(r.buy_price_usd, 4)}` : "—";
     }
     return r.buy_price_usd != null ? `USD ${fmtNum(r.buy_price_usd, 4)}` : r.buy_price_ars != null ? `ARS ${fmtNum(r.buy_price_ars, 2)}` : "—";
   }
 
+  function histUsdCell(r: PortfolioHistoryRow, v: number | null | undefined): string {
+    if (v === null || v === undefined) return "—";
+    const s = fmtNum(v, 4);
+    return r.asset_type === "CEDEAR" ? `USD (USA) ${s}` : s;
+  }
+
   function openPrecioActualCell(r: PortfolioOpenRow): string {
-    if (r.asset_type === "CEDEAR" || r.asset_type === "USA") {
+    if (r.asset_type === "CEDEAR") {
+      return r.current_price_usd != null ? `USD (USA) ${fmtNum(r.current_price_usd, 4)}` : "—";
+    }
+    if (r.asset_type === "USA") {
       return r.current_price_usd != null ? `USD ${fmtNum(r.current_price_usd, 4)}` : "—";
     }
     return r.current_price_ars != null
@@ -263,7 +272,10 @@ export function CarteraPage() {
   return (
     <>
       <h1 className="page-title">Cartera</h1>
-      <p className="page-desc">Compras manuales, seguimiento y cierre total. Persistencia en SQLite.</p>
+      <p className="page-desc">
+        Compras manuales, seguimiento y cierre total. Persistencia en SQLite. En CEDEAR, precios y retornos en USD
+        usan la acción subyacente listada en USA (no el precio local ni la línea CCL).
+      </p>
 
       <div className="cartera-tabs" role="tablist" aria-label="Secciones cartera">
         <button
@@ -367,12 +379,14 @@ export function CarteraPage() {
                   buyValidation.inv.price && (assetType === "USA" || assetType === "CEDEAR") ? " cartera-field--invalid" : ""
                 }`}
               >
-                <span>Precio compra USD</span>
+                <span>{assetType === "CEDEAR" ? "Precio compra USD (subyacente USA)" : "Precio compra USD"}</span>
                 <input
                   value={buyPriceUsd}
                   onChange={(e) => setBuyPriceUsd(e.target.value)}
                   inputMode="decimal"
-                  placeholder={assetType === "CEDEAR" ? "precio CEDEAR USD (cable), obligatorio" : "obligatorio"}
+                  placeholder={
+                    assetType === "CEDEAR" ? "USD por acción USA — costo/tu referencia (obligatorio)" : "obligatorio"
+                  }
                 />
               </label>
             ) : null}
@@ -388,7 +402,9 @@ export function CarteraPage() {
             </label>
           </div>
           <p className="cartera-hint">
-            USA: precio en USD. Argentina: precio en ARS + TC MEP de la compra (para retorno USD al cerrar). CEDEAR: precio en USD + TC MEP de referencia. El backend sigue tomando score del último radar / snapshot CEDEAR.
+            USA: precio en USD. Argentina: precio en ARS + TC MEP de la compra (para retorno USD al cerrar). CEDEAR: el
+            precio en USD es el del subyacente listado en USA (no ARS ni cable CCL) + TC MEP de referencia. El backend
+            toma score del último radar / snapshot CEDEAR.
           </p>
           {!buyValidation.valid && buyValidation.message ? (
             <div className="cartera-validation-hint" role="status">
@@ -404,6 +420,11 @@ export function CarteraPage() {
       {tab === "cartera" ? (
         <div className="card cartera-table-wrap">
           <h2 className="cartera-form__title">Posiciones abiertas</h2>
+          {openRows.some((r) => r.asset_type === "CEDEAR") ? (
+            <p className="cartera-hint" style={{ marginTop: 0 }}>
+              Filas CEDEAR: &quot;precio compra&quot; y &quot;precio actual&quot; en USD (USA) = subyacente; no es cotización cable CCL.
+            </p>
+          ) : null}
           {openRows.length === 0 ? (
             <p className="cartera-empty">No hay posiciones abiertas.</p>
           ) : (
@@ -420,9 +441,13 @@ export function CarteraPage() {
                     <th>score actual</th>
                     <th>alerta compra</th>
                     <th>cant compra</th>
-                    <th>precio compra</th>
-                    <th>precio actual</th>
-                    <th>retorno</th>
+                    <th title="CEDEAR: USD del subyacente USA. Argentina: ARS. USA: USD.">
+                      precio compra
+                    </th>
+                    <th title="CEDEAR: USD mercado del subyacente USA (no CCL local). USA: USD. Argentina: ARS.">
+                      precio actual
+                    </th>
+                    <th title="CEDEAR y USA: % vs precio compra en USD (misma moneda / referencia).">retorno</th>
                     <th />
                   </tr>
                 </thead>
@@ -443,9 +468,30 @@ export function CarteraPage() {
                         return <td className={isSinAlerta(lab) ? "cartera-alert--none" : ""}>{lab}</td>;
                       })()}
                       <td>{fmtNum(r.quantity, 6)}</td>
-                      <td>{openBuyPriceCompraCell(r)}</td>
-                      <td>{openPrecioActualCell(r)}</td>
-                      <td className={classifyReturn(r.return_pct)}>
+                      <td title={r.asset_type === "CEDEAR" ? "Costo en USD del subyacente USA" : undefined}>
+                        {openBuyPriceCompraCell(r)}
+                      </td>
+                      <td
+                        title={
+                          r.asset_type === "CEDEAR"
+                            ? "Mercado actual USD del subyacente USA (no CCL local)"
+                            : r.asset_type === "USA"
+                              ? "Precio actual en USD"
+                              : undefined
+                        }
+                      >
+                        {openPrecioActualCell(r)}
+                      </td>
+                      <td
+                        className={classifyReturn(r.return_pct)}
+                        title={
+                          r.asset_type === "CEDEAR"
+                            ? "Retorno vs costo en USD (subyacente USA)"
+                            : r.asset_type === "USA"
+                              ? "Retorno vs costo en USD"
+                              : undefined
+                        }
+                      >
                         {r.return_pct === null || r.return_pct === undefined ? "—" : `${fmtNum(r.return_pct, 2)}%`}
                       </td>
                       <td>
@@ -465,6 +511,11 @@ export function CarteraPage() {
       {tab === "historial" ? (
         <div className="card cartera-table-wrap">
           <h2 className="cartera-form__title">Historial de ventas</h2>
+          {histRows.some((r) => r.asset_type === "CEDEAR") ? (
+            <p className="cartera-hint" style={{ marginTop: 0 }}>
+              CEDEAR: columnas &quot;Precio USD&quot; compra/venta y &quot;Retorno USD %&quot; = subyacente USA (misma base que al operar).
+            </p>
+          ) : null}
           {histRows.length === 0 ? (
             <p className="cartera-empty">No hay posiciones cerradas.</p>
           ) : (
@@ -477,15 +528,15 @@ export function CarteraPage() {
                     <th>Compra</th>
                     <th>Venta</th>
                     <th>Precio ARS compra</th>
-                    <th>Precio USD compra</th>
+                    <th title="En CEDEAR: USD del subyacente USA (no CCL).">Precio USD compra</th>
                     <th>Precio ARS venta</th>
-                    <th>Precio USD venta</th>
+                    <th title="En CEDEAR: USD del subyacente USA al cierre (no CCL).">Precio USD venta</th>
                     <th>Score compra</th>
                     <th>Score venta</th>
                     <th>Señal compra</th>
                     <th>Señal venta</th>
                     <th>Retorno % (ARS)</th>
-                    <th>Retorno USD %</th>
+                    <th title="CEDEAR y USA: % en USD. CEDEAR = subyacente USA.">Retorno USD %</th>
                     <th>Días tenencia</th>
                     <th>Alerta</th>
                   </tr>
@@ -500,9 +551,9 @@ export function CarteraPage() {
                       <td className="nowrap">{r.buy_date ?? "—"}</td>
                       <td className="nowrap">{r.sell_date ?? "—"}</td>
                       <td>{fmtNum(r.buy_price_ars, 2)}</td>
-                      <td>{fmtNum(r.buy_price_usd, 4)}</td>
+                      <td title={r.asset_type === "CEDEAR" ? "Subyacente USA" : undefined}>{histUsdCell(r, r.buy_price_usd)}</td>
                       <td>{fmtNum(r.sell_price_ars, 2)}</td>
-                      <td>{fmtNum(r.sell_price_usd, 4)}</td>
+                      <td title={r.asset_type === "CEDEAR" ? "Subyacente USA al cierre" : undefined}>{histUsdCell(r, r.sell_price_usd)}</td>
                       <td>{fmtNum(r.score_at_buy, 2)}</td>
                       <td>{fmtNum(r.score_at_sell, 2)}</td>
                       <td>{r.signalstate_at_buy ?? "—"}</td>
@@ -514,7 +565,10 @@ export function CarteraPage() {
                             : `${fmtNum(r.realized_return_pct, 2)}%`
                           : "—"}
                       </td>
-                      <td className={classifyReturn(histRetUsdPct(r))}>
+                      <td
+                        className={classifyReturn(histRetUsdPct(r))}
+                        title={r.asset_type === "CEDEAR" ? "Retorno en USD del subyacente USA" : undefined}
+                      >
                         {histRetUsdPct(r) === null ? "—" : `${fmtNum(histRetUsdPct(r), 2)}%`}
                       </td>
                       <td>{r.holding_days ?? "—"}</td>
