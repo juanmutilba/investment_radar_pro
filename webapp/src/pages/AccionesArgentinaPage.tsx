@@ -1,8 +1,12 @@
 import { useSearchParams } from "react-router-dom";
+import { PortfolioRowTradeButtons } from "@/components/cartera/PortfolioRowTradeButtons";
 import { RadarMarketTablePage } from "@/components/radar/RadarMarketTablePage";
-import { formatEbitdaArs, formatPrecioDolarAr } from "@/components/radar/radarTableCore";
+import { formatEbitdaArs, formatPrecioDolarAr, getRaw, parseNumberLoose } from "@/components/radar/radarTableCore";
 import { COLUMNS_ARGENTINA } from "@/components/radar/radarTableModel";
-import { fetchLatestRadarArgentina } from "@/services/api";
+import { fetchLatestRadarArgentina, type RadarRow } from "@/services/api";
+
+const TICKER_KEYS = COLUMNS_ARGENTINA.find((c) => c.id === "ticker")!.keys;
+const PRECIO_KEYS = COLUMNS_ARGENTINA.find((c) => c.id === "precio")!.keys;
 
 export function AccionesArgentinaPage() {
   const [params] = useSearchParams();
@@ -25,6 +29,18 @@ export function AccionesArgentinaPage() {
         options: ["Merval", "General"],
       }}
       emptySheetMessage="El último export no contiene filas en Radar_Argentina_Completo."
+      renderRowActions={(row: RadarRow) => {
+        const tick = String(getRaw(row, TICKER_KEYS) ?? "").trim();
+        const px = parseNumberLoose(getRaw(row, PRECIO_KEYS));
+        return (
+          <PortfolioRowTradeButtons
+            assetType="Argentina"
+            ticker={tick}
+            suggestedBuyPriceArs={px}
+            suggestedSellPriceArs={px}
+          />
+        );
+      }}
     />
   );
 }

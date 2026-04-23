@@ -6,7 +6,7 @@ from pathlib import Path
 from persistence.sqlite.paths import default_db_path
 
 # Incrementar al aplicar migraciones DDL (ver bloque _apply_schema_if_needed).
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 def _schema_sql() -> str:
@@ -120,6 +120,19 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """TC MEP por operación (compra/venta) y retorno realizado en USD (Argentina vía MEP)."""
+    cols = _positions_column_names(conn)
+    additions: list[tuple[str, str]] = [
+        ("tc_mep_compra", "REAL"),
+        ("tc_mep_venta", "REAL"),
+        ("realized_return_usd_pct", "REAL"),
+    ]
+    for name, sql_type in additions:
+        if name not in cols:
+            conn.execute(f"ALTER TABLE positions ADD COLUMN {name} {sql_type}")
+
+
 def _apply_schema_if_needed(conn: sqlite3.Connection) -> None:
     row = conn.execute("PRAGMA user_version").fetchone()
     version = int(row[0]) if row else 0
@@ -137,6 +150,9 @@ def _apply_schema_if_needed(conn: sqlite3.Connection) -> None:
         elif version < 3:
             _migrate_v2_to_v3(conn)
             version = 3
+        elif version < 4:
+            _migrate_v3_to_v4(conn)
+            version = 4
         else:
             break
     conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")

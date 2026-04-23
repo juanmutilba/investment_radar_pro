@@ -569,6 +569,7 @@ export type PortfolioOpenRow = {
   buy_date: string;
   buy_price_ars: number | null;
   buy_price_usd: number | null;
+  tc_mep_compra?: number | null;
   notes: string | null;
   buy_price_cedear_usd?: number | null;
   buy_price_usa?: number | null;
@@ -582,8 +583,11 @@ export type PortfolioOpenRow = {
   current_signalstate: string | null;
   current_price_ars: number | null;
   current_price_usd: number | null;
+  /** CEDEAR: precio línea CCL (USD) auxiliar; el principal en cartera abierta es current_price_usd (USA). */
+  current_price_cedear_usd?: number | null;
   return_pct: number | null;
   days_in_position: number | null;
+  buy_alert_label?: string | null;
 };
 
 export type PortfolioHistoryRow = {
@@ -596,12 +600,16 @@ export type PortfolioHistoryRow = {
   buy_price_usd: number | null;
   sell_price_ars: number | null;
   sell_price_usd: number | null;
+  tc_mep_compra?: number | null;
+  tc_mep_venta?: number | null;
   score_at_buy: number | null;
   score_at_sell: number | null;
   signalstate_at_buy: string | null;
   signalstate_at_sell: string | null;
   realized_return_pct: number | null;
+  realized_return_usd_pct?: number | null;
   holding_days: number | null;
+  sell_alert_label?: string | null;
 };
 
 export type PortfolioCreatePayload = {
@@ -611,6 +619,7 @@ export type PortfolioCreatePayload = {
   buy_date: string;
   buy_price_ars?: number | null;
   buy_price_usd?: number | null;
+  tc_mep_compra?: number | null;
   notes?: string | null;
 };
 
@@ -619,6 +628,7 @@ export type PortfolioClosePayload = {
   sell_price_ars?: number | null;
   sell_price_usd?: number | null;
   sell_notes?: string | null;
+  tc_mep_venta?: number | null;
   sell_price_cedear_usd?: number | null;
   sell_price_usa?: number | null;
   sell_gap?: number | null;
@@ -673,4 +683,40 @@ export async function closePortfolioPosition(positionId: number, payload: Portfo
   if (!res.ok) {
     throw new Error(await readHttpErrorMessage(res));
   }
+}
+
+// --- Autocomplete ticker (Cartera) ---
+
+export type PortfolioTickersAutocompleteResponse = string[] | { items: string[] };
+
+function coerceStringArray(v: unknown): string[] | null {
+  if (!Array.isArray(v)) return null;
+  const out: string[] = [];
+  for (const it of v) {
+    if (typeof it === "string" && it.trim()) out.push(it);
+  }
+  return out;
+}
+
+export async function fetchPortfolioTickersAutocomplete(
+  assetType: PortfolioAssetType,
+  q: string,
+  opts?: { limit?: number; signal?: AbortSignal },
+): Promise<string[]> {
+  const query = q.trim();
+  if (!query) return [];
+  const limit = typeof opts?.limit === "number" && Number.isFinite(opts.limit) ? String(opts.limit) : "30";
+  const qs = new URLSearchParams({ asset_type: assetType, q: query, limit });
+  const res = await fetch(`${BASE}/portfolio/tickers/autocomplete?${qs.toString()}`, { signal: opts?.signal });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  const direct = coerceStringArray(data);
+  if (direct) return direct;
+  if (data !== null && typeof data === "object" && "items" in data) {
+    const items = coerceStringArray((data as { items?: unknown }).items);
+    if (items) return items;
+  }
+  return [];
 }

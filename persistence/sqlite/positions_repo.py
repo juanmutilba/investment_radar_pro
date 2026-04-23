@@ -20,6 +20,7 @@ def insert_open_position(
     buy_price_ars: float | None,
     buy_price_usd: float | None,
     notes: str | None,
+    tc_mep_compra: float | None = None,
     buy_price_cedear_usd: float | None = None,
     buy_price_usa: float | None = None,
     buy_gap: float | None = None,
@@ -36,10 +37,11 @@ def insert_open_position(
             INSERT INTO positions (
               ticker, asset_type, quantity, buy_date,
               buy_price_ars, buy_price_usd, notes,
+              tc_mep_compra,
               buy_price_cedear_usd, buy_price_usa, buy_gap,
               score_at_buy, signalstate_at_buy, techscore_at_buy, fundscore_at_buy, riskscore_at_buy,
               status, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
             """,
             (
                 ticker.strip().upper(),
@@ -49,6 +51,7 @@ def insert_open_position(
                 buy_price_ars,
                 buy_price_usd,
                 notes,
+                tc_mep_compra,
                 buy_price_cedear_usd,
                 buy_price_usa,
                 buy_gap,
@@ -87,6 +90,7 @@ def close_position_row(
     sell_price_ars: float | None,
     sell_price_usd: float | None,
     sell_notes: str | None,
+    tc_mep_venta: float | None,
     sell_price_cedear_usd: float | None,
     sell_price_usa: float | None,
     sell_gap: float | None,
@@ -96,6 +100,7 @@ def close_position_row(
     fundscore_at_sell: float | None,
     riskscore_at_sell: float | None,
     realized_return_pct: float | None,
+    realized_return_usd_pct: float | None,
     holding_days: int | None,
 ) -> bool:
     ts = _now_iso()
@@ -107,6 +112,7 @@ def close_position_row(
               sell_price_ars = ?,
               sell_price_usd = ?,
               sell_notes = ?,
+              tc_mep_venta = ?,
               sell_price_cedear_usd = ?,
               sell_price_usa = ?,
               sell_gap = ?,
@@ -117,6 +123,7 @@ def close_position_row(
               riskscore_at_sell = ?,
               status = 'closed',
               realized_return_pct = ?,
+              realized_return_usd_pct = ?,
               holding_days = ?,
               updated_at = ?
             WHERE id = ? AND status = 'open'
@@ -126,6 +133,7 @@ def close_position_row(
                 sell_price_ars,
                 sell_price_usd,
                 sell_notes,
+                tc_mep_venta,
                 sell_price_cedear_usd,
                 sell_price_usa,
                 sell_gap,
@@ -135,6 +143,7 @@ def close_position_row(
                 fundscore_at_sell,
                 riskscore_at_sell,
                 realized_return_pct,
+                realized_return_usd_pct,
                 holding_days,
                 ts,
                 position_id,

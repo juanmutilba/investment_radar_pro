@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { PortfolioRowTradeButtons } from "@/components/cartera/PortfolioRowTradeButtons";
 import { TickerRadarLink } from "@/components/navigation/radarLinks";
 import { fetchCedears, peekCedearsCache, type CedearRatioEstado, type CedearRow } from "@/services/api";
 
@@ -589,6 +590,13 @@ export function CedearsPage() {
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head">
                     <span className="radar-table__sort-label radar-table__sort-label--static">Estado ratio</span>
                   </th>
+                  <th
+                    scope="col"
+                    className="radar-table__th radar-table__th--sticky-head"
+                    style={{ width: 112, minWidth: 112 }}
+                  >
+                    <span className="radar-table__sort-label radar-table__sort-label--static">Cartera</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -644,6 +652,14 @@ export function CedearsPage() {
                       <span className={est.cls} title={est.title}>
                         {est.label}
                       </span>
+                    </td>
+                    <td className="table-cell--nowrap radar-table__actions-cell" style={{ verticalAlign: "middle" }}>
+                      <PortfolioRowTradeButtons
+                        assetType="CEDEAR"
+                        ticker={r.ticker_usa?.trim() ?? ""}
+                        suggestedBuyPriceUsd={r.precio_usa_real}
+                        suggestedSellCedearUsd={r.precio_usa_real}
+                      />
                     </td>
                   </tr>
                   );

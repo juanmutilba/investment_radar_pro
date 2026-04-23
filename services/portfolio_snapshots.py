@@ -179,8 +179,11 @@ def current_market_snapshot(ticker: str, asset_type: str) -> dict[str, Any]:
         if c:
             out["current_score"] = c.total_score
             out["current_signalstate"] = c.signal_state
+            # Base principal USA (misma referencia que buy_price_usd / módulo CEDEAR).
+            out["current_price_usd"] = c.precio_usa_real
+            # Auxiliar: mercado local (no usar como base de retorno vs compra USA).
             out["current_price_ars"] = c.precio_cedear_ars
-            out["current_price_usd"] = c.precio_cedear_usd
+            out["current_price_cedear_usd"] = c.precio_cedear_usd
         return out
 
     row = find_radar_row(ticker, asset_type)
@@ -198,6 +201,60 @@ def current_market_snapshot(ticker: str, asset_type: str) -> dict[str, Any]:
     return out
 
 
+def autocomplete_tickers(*, asset_type: str, q: str, limit: int = 30) -> list[str]:
+    """
+    Autocomplete best-effort usando el último export/snapshot disponible.
+    No consulta Yahoo ni DB; solo lee el export radar y/o snapshot CEDEAR.
+    """
+    query = _norm_ticker(q)
+    if not query:
+        return []
+    lim = max(1, min(int(limit or 30), 200))
+
+    candidates: list[str] = []
+
+    if asset_type == ASSET_USA:
+        for row in _load_usa_rows():
+            if not isinstance(row, dict):
+                continue
+            t = _row_get(row, "Ticker", "ticker")
+            if t is None:
+                continue
+            candidates.append(_norm_ticker(str(t)))
+    elif asset_type == ASSET_ARGENTINA:
+        for row in _load_arg_rows():
+            if not isinstance(row, dict):
+                continue
+            t = _row_get(row, "Ticker", "ticker")
+            if t is None:
+                continue
+            candidates.append(_norm_ticker(str(t)))
+    elif asset_type == ASSET_CEDEAR:
+        for c in _load_cedear_rows():
+            candidates.append(_norm_ticker(c.ticker_usa))
+            candidates.append(_norm_ticker(c.ticker_cedear_ars))
+            candidates.append(_norm_ticker(c.ticker_cedear_usd))
+    else:
+        return []
+
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for t in candidates:
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        uniq.append(t)
+
+    # Primero: prefix match; luego: contains match (por si pegan parte).
+    prefix = [t for t in uniq if t.startswith(query)]
+    if len(prefix) >= lim:
+        return sorted(prefix)[:lim]
+
+    contains = [t for t in uniq if query in t and not t.startswith(query)]
+    out = sorted(prefix) + sorted(contains)
+    return out[:lim]
+
+
 def compute_return_pct_open(
     *,
     asset_type: str,
@@ -206,6 +263,11 @@ def compute_return_pct_open(
     cur_ars: float | None,
     cur_usd: float | None,
 ) -> float | None:
+    # CEDEAR: siempre comparación en USD (no mezclar con ARS / CCL local).
+    if asset_type == ASSET_CEDEAR:
+        if buy_price_usd is not None and buy_price_usd > 0 and cur_usd is not None:
+            return round((cur_usd - buy_price_usd) / buy_price_usd * 100.0, 4)
+        return None
     if asset_type == ASSET_USA or (buy_price_usd is not None and buy_price_usd > 0 and cur_usd is not None):
         if buy_price_usd is not None and buy_price_usd > 0 and cur_usd is not None:
             return round((cur_usd - buy_price_usd) / buy_price_usd * 100.0, 4)
@@ -214,6 +276,42 @@ def compute_return_pct_open(
     if buy_price_usd is not None and buy_price_usd > 0 and cur_usd is not None:
         return round((cur_usd - buy_price_usd) / buy_price_usd * 100.0, 4)
     return None
+
+
+def compute_realized_return_cedear_usd(
+    *,
+    buy_price_usd: float | None,
+    sell_price_usd: float | None,
+) -> float | None:
+    """Retorno realizado CEDEAR: precio venta USA vs costo USA (misma base ref USA)."""
+    if buy_price_usd is None or sell_price_usd is None:
+        return None
+    if buy_price_usd <= 0:
+        return None
+    return round((sell_price_usd - buy_price_usd) / buy_price_usd * 100.0, 4)
+
+
+def compute_realized_return_argentina_usd_mep(
+    *,
+    buy_price_ars: float | None,
+    sell_price_ars: float | None,
+    tc_mep_compra: float | None,
+    tc_mep_venta: float | None,
+) -> float | None:
+    """
+    retorno_usd_pct = (((precio_venta_ars / tc_mep_venta) / (precio_compra_ars / tc_mep_compra)) - 1) * 100
+    """
+    if buy_price_ars is None or sell_price_ars is None:
+        return None
+    if tc_mep_compra is None or tc_mep_venta is None:
+        return None
+    if buy_price_ars <= 0 or tc_mep_compra <= 0 or tc_mep_venta <= 0:
+        return None
+    buy_usd = buy_price_ars / tc_mep_compra
+    sell_usd = sell_price_ars / tc_mep_venta
+    if buy_usd <= 0:
+        return None
+    return round((sell_usd / buy_usd - 1.0) * 100.0, 4)
 
 
 def compute_realized_return_pct(

@@ -5,9 +5,10 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 
-import { type LatestRadarResponse } from "@/services/api";
+import { type LatestRadarResponse, type RadarRow } from "@/services/api";
 
 import { renderCellInner, type RenderCellKeys } from "./radarTableCells";
 import {
@@ -32,6 +33,8 @@ export type RadarMarketTablePageProps = {
   initialSearch?: string;
   /** Si true (p. ej. <code>?exact=1</code>), el texto de búsqueda filtra solo por ticker exacto. */
   tickerSearchExact?: boolean;
+  /** Columna extra con acciones (p. ej. compra/venta desde cartera). */
+  renderRowActions?: (row: RadarRow) => ReactNode;
   universe?: {
     label: string;
     allLabel: string;
@@ -57,6 +60,7 @@ export function RadarMarketTablePage({
   universe,
   initialSearch,
   tickerSearchExact = false,
+  renderRowActions,
   emptySheetMessage,
 }: RadarMarketTablePageProps) {
   const cellOpts = useMemo<CellFormatOptions>(
@@ -600,6 +604,15 @@ export function RadarMarketTablePage({
                       </th>
                     );
                   })}
+                  {renderRowActions ? (
+                    <th
+                      scope="col"
+                      style={{ width: 112, minWidth: 112, maxWidth: 112 }}
+                      className="radar-table__th radar-table__th--sticky-head"
+                    >
+                      <span className="radar-table__sort-label radar-table__sort-label--static">Cartera</span>
+                    </th>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
@@ -631,6 +644,14 @@ export function RadarMarketTablePage({
                         </td>
                       );
                     })}
+                    {renderRowActions ? (
+                      <td
+                        style={{ width: 112, minWidth: 112, maxWidth: 112, verticalAlign: "middle" }}
+                        className="table-cell--nowrap radar-table__actions-cell"
+                      >
+                        {renderRowActions(row)}
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>

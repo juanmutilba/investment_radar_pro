@@ -835,6 +835,25 @@ table.radar-table thead .radar-table__sticky-col {
   grid-column: 1 / -1;
 }
 
+.cartera-field--invalid > span:first-child {
+  color: var(--danger);
+}
+
+.cartera-field--invalid input,
+.cartera-field--invalid select,
+.cartera-field--invalid textarea {
+  border-color: rgba(232, 93, 93, 0.7);
+  box-shadow: 0 0 0 1px rgba(232, 93, 93, 0.15);
+}
+
+.cartera-validation-hint {
+  font-size: 0.85rem;
+  color: var(--danger);
+  margin: 0 0 0.85rem;
+  max-width: 52rem;
+  line-height: 1.35;
+}
+
 .cartera-field input,
 .cartera-field select,
 .cartera-field textarea {
@@ -892,6 +911,66 @@ table.radar-table thead .radar-table__sticky-col {
   padding: 0.3rem 0.6rem;
 }
 
+.cartera-btn--sell {
+  border-color: rgba(46, 204, 113, 0.55);
+  background: rgba(46, 204, 113, 0.95);
+  color: #fff;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.6rem;
+}
+
+.cartera-btn--sell:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.radar-row-trade-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-start;
+}
+
+.radar-row-trade-btns .cartera-btn {
+  font-size: 0.72rem;
+  padding: 0.22rem 0.45rem;
+}
+
+.radar-row-trade-btns__sell-wrap {
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+.radar-row-trade-btns__sell-wrap--muted {
+  cursor: help;
+}
+
+.radar-row-trade-msg {
+  font-size: 0.68rem;
+  margin-top: 0.25rem;
+  max-width: 11rem;
+  line-height: 1.25;
+}
+
+.radar-table__actions-cell {
+  white-space: normal;
+}
+
+.cartera-ret--pos {
+  color: rgba(46, 204, 113, 0.98);
+  font-weight: 600;
+}
+
+.cartera-ret--neg {
+  color: rgba(232, 93, 93, 0.98);
+  font-weight: 600;
+}
+
+.cartera-alert--none {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
 .cartera-table-wrap {
   padding: 1.25rem;
 }
@@ -928,6 +1007,13 @@ table.radar-table thead .radar-table__sticky-col {
 
 .cartera-table .nowrap {
   white-space: nowrap;
+}
+
+.cartera-type-cell {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
 }
 
 .cartera-modal-backdrop {
