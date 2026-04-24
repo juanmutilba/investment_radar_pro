@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 RatioEstado = Literal["ok", "pendiente_validar", "revisar"]
 ModUsa = Literal["SI", "NO"]
-FuenteCedearLocal = Literal["Yahoo"]
+FuenteCedearLocal = Literal["IOL", "Yahoo", "IOL/Yahoo", "Sin datos"]
 _RATIO_STALE_DAYS = 180
 
 # Máximo de consultas HTTP IOL por build CEDEAR (ARS/CCL); el resto va directo a Yahoo / None.
@@ -133,9 +133,21 @@ class CedearRow(BaseModel):
         ...,
         description='SI: precio/score/señal desde el radar USA; NO: precio USA vía Yahoo (sin radar).',
     )
+    usa_radar_match: bool = Field(
+        default=False,
+        description="True si hubo fila en Radar_Completo para la clave de lookup USA normalizada.",
+    )
+    ticker_usa_lookup: str | None = Field(
+        None,
+        description="Clave usada para unir con el índice del radar USA (_norm_usa_ticker(ticker_usa)).",
+    )
+    usa_radar_match_reason: str | None = Field(
+        None,
+        description='Solo si no hay match; p. ej. "no_match_in_radar".',
+    )
     fuente_cedear: FuenteCedearLocal = Field(
         ...,
-        description="Precios locales CEDEAR (ARS y cable) vía Yahoo.",
+        description="Origen precios locales ARS/CCL: IOL, Yahoo, mixto, o Sin datos.",
     )
     cobertura_usa_mensaje: str | None = Field(
         None,
@@ -200,6 +212,33 @@ def _to_float(v: Any) -> float | None:
     if math.isnan(x) or math.isinf(x):
         return None
     return x
+
+
+def _cedear_radar_total_score(row: dict[str, Any]) -> float | None:
+    raw = _radar_get(
+        row,
+        "TotalScore",
+        "total_score",
+        "totalScore",
+        "Score",
+        "score",
+    )
+    return _to_float(raw)
+
+
+def _cedear_radar_signal_state(row: dict[str, Any]) -> str | None:
+    sig = _radar_get(
+        row,
+        "SignalState",
+        "signal_state",
+        "signalState",
+        "EstadoSenal",
+        "estado_senal",
+    )
+    if sig is None:
+        return None
+    s = str(sig).strip()
+    return s if s else None
 
 
 def _usa_price_from_radar_row(row: dict[str, Any]) -> float | None:
@@ -381,83 +420,107 @@ def _is_probably_cedear_c_variant(symbol: str) -> bool:
     return True
 
 
-def _try_local_iol_price(symbol: str, stats: dict[str, int]) -> tuple[float | None, bool]:
-    """
-    Intenta precio local (ARS/CCL) vía IOL. Retorna (precio, allow_yahoo_fallback).
+def _fuente_cedear_local(
+    p_ars: float | None,
+    p_ccl: float | None,
+    ars_from_iol: bool,
+    ccl_from_iol: bool,
+) -> FuenteCedearLocal:
+    """Resume fuente real de precios locales (ARS y línea CCL) sin mirar valores numéricos."""
+    has_ars = p_ars is not None
+    has_ccl = p_ccl is not None
+    if not has_ars and not has_ccl:
+        return "Sin datos"
+    ars_src = "iol" if has_ars and ars_from_iol else ("yahoo" if has_ars else None)
+    ccl_src = "iol" if has_ccl and ccl_from_iol else ("yahoo" if has_ccl else None)
+    kinds = {s for s in (ars_src, ccl_src) if s is not None}
+    if kinds == {"iol"}:
+        return "IOL"
+    if kinds == {"yahoo"}:
+        return "Yahoo"
+    if kinds == {"iol", "yahoo"}:
+        return "IOL/Yahoo"
+    return "Sin datos"
 
+
+def _try_local_iol_price(symbol: str, stats: dict[str, int]) -> tuple[float | None, bool, bool]:
+    """
+    Intenta precio local (ARS/CCL) vía IOL. Retorna (precio, allow_yahoo_fallback, from_iol).
+
+    ``from_iol`` es True solo si ``precio`` no es None y proviene de IOL (RAM o red).
     ``allow_yahoo_fallback`` es False solo cuando IOL está habilitado pero se omitió la red
     por ``IOL_MAX_CALLS`` (no disparar Yahoo masivo en ese caso). Si IOL está deshabilitado,
     hubo miss rápido (caché negativa, etc.) o error, es True para conservar IOL → Yahoo → None.
     """
     sym = (symbol or "").strip()
     if not sym:
-        return None, True
+        return None, True, False
     try:
         from services.market_data.providers.iol import get_iol_quote, is_iol_enabled, read_iol_quote_ram_only
 
         if not is_iol_enabled():
-            return None, True
+            return None, True, False
         iol_sym = _normalize_iol_ticker(sym)
         if not iol_sym:
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True
+            return None, True, False
         if iol_sym != sym.strip().upper():
             stats["local_iol_normalized_symbols"] = int(stats.get("local_iol_normalized_symbols", 0)) + 1
 
         ram = read_iol_quote_ram_only(iol_sym)
         if ram == "negative":
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True
+            return None, True, False
         if ram is not None:
             q = ram
             if not getattr(q, "is_valid", False):
                 stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-                return None, True
+                return None, True, False
             if getattr(q, "source", None) != "iol":
                 stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-                return None, True
+                return None, True, False
             v = q.value
             if v is None:
                 stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-                return None, True
+                return None, True, False
             try:
                 x = float(v)
             except (TypeError, ValueError):
                 stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-                return None, True
+                return None, True, False
             if x != x or x <= 0:
                 stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-                return None, True
+                return None, True, False
             stats["local_iol_hits"] = int(stats.get("local_iol_hits", 0)) + 1
-            return round(x, 6), False
+            return round(x, 6), False, True
 
         if int(stats.get("local_iol_calls", 0)) >= IOL_MAX_CALLS:
             stats["local_iol_skipped_by_limit"] = int(stats.get("local_iol_skipped_by_limit", 0)) + 1
-            return None, False
+            return None, False, False
         stats["local_iol_calls"] = int(stats.get("local_iol_calls", 0)) + 1
         q = get_iol_quote(iol_sym)
         if q is None or not getattr(q, "is_valid", False):
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True
+            return None, True, False
         if getattr(q, "source", None) != "iol":
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True
+            return None, True, False
         v = q.value
         if v is None:
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True
+            return None, True, False
         try:
             x = float(v)
         except (TypeError, ValueError):
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True
+            return None, True, False
         if x != x or x <= 0:
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True
+            return None, True, False
         stats["local_iol_hits"] = int(stats.get("local_iol_hits", 0)) + 1
-        return round(x, 6), False
+        return round(x, 6), False, True
     except Exception:
-        return None, True
+        return None, True, False
 
 
 def _usa_price_spot_cached(ticker_usa: str, cache: dict[str, float | None], stats: dict[str, int]) -> float | None:
@@ -597,17 +660,34 @@ def _cedear_audit_log(
     )
 
 
+def _norm_usa_ticker(ticker: Any) -> str | None:
+    """
+    Clave estable para unir maestro CEDEAR (ticker_usa) con Radar_Completo.
+    Corrige ticker_usa con sufijo .BA por error; alinea BRK.B con BRK-B.
+    """
+    if not ticker:
+        return None
+    t = str(ticker).strip().upper()
+    if not t:
+        return None
+    if t.endswith(".BA"):
+        t = t[:-3]
+    t = t.replace(".", "-")
+    return t if t else None
+
+
 def _usa_row_index(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for r in rows:
         if not isinstance(r, dict):
             continue
-        raw = _radar_get(r, "Ticker", "ticker")
-        if raw is None:
+        raw_symbol = _radar_get(r, "Ticker", "ticker", "Symbol", "symbol")
+        if raw_symbol is None:
             continue
-        key = str(raw).strip().upper()
-        if key:
-            out[key] = r
+        key = _norm_usa_ticker(raw_symbol)
+        if not key:
+            continue
+        out[key] = r
     return out
 
 
@@ -625,6 +705,8 @@ def _log_cedear_timing_breakdown(
     usa_price_fallback_calls: int,
     usa_price_fallback_failures: int,
     usa_price_fallback_known_bad_skips: int,
+    usa_enrichment_hits_total_score: int,
+    usa_enrichment_hits_signal_state: int,
     local_iol_ms: float,
     local_yahoo_ms: float,
     row_other_ms: float,
@@ -661,6 +743,7 @@ def _log_cedear_timing_breakdown(
         "  maestro_scan_ms=%.1f (entries=%s active=%s; tupla ya en RAM al import)\n"
         "  radar_usa_ms=%s\n"
         "  usa_price_resolve_ms=%.1f usa_price_from_radar_hits=%s usa_price_fallback_calls=%s usa_price_fallback_failures=%s usa_price_fallback_known_bad_skips=%s\n"
+        "  usa_enrichment_hits_total_score=%s usa_enrichment_hits_signal_state=%s\n"
         "  local_iol_ms=%.1f\n"
         "  local_yahoo_ars_ccl_ms=%.1f\n"
         "  row_other_ms=%.1f"
@@ -691,6 +774,8 @@ def _log_cedear_timing_breakdown(
             usa_price_fallback_calls,
             usa_price_fallback_failures,
             usa_price_fallback_known_bad_skips,
+            usa_enrichment_hits_total_score,
+            usa_enrichment_hits_signal_state,
             local_iol_ms,
             local_yahoo_ms,
             row_other_ms,
@@ -704,8 +789,8 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     """
     None si no hay export radar_*.xlsx.
     Incluye todos los mapeos activos. precio_usa_real: columna Precio de la fila radar USA si existe;
-    si no, market_data.get_usa_price (export + Yahoo). Si ticker_usa no está en el radar, TotalScore y
-    SignalState en null; mod_usa=NO.
+    si no, market_data.get_usa_price (export + Yahoo). TotalScore / SignalState desde fila radar USA
+    (Radar_Completo) cuando existe; si no hay fila o dato, null. mod_usa=NO si el ticker no está en el radar.
 
     Cobertura USA vs pricing local: `cobertura_usa_mensaje` y `pricing_cedear_local_mensaje` separan
     ambos mundos sin ocultar filas ni cambiar fórmulas (precios/implícitos siguen en null si faltan datos).
@@ -750,6 +835,8 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         "usa_price_fallback_calls": 0,
         "usa_price_fallback_failures": 0,
         "usa_price_fallback_known_bad_skips": 0,
+        "usa_enrichment_hits_total_score": 0,
+        "usa_enrichment_hits_signal_state": 0,
     }
 
     t_maestro0 = time.perf_counter()
@@ -779,6 +866,8 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             usa_price_fallback_calls=0,
             usa_price_fallback_failures=0,
             usa_price_fallback_known_bad_skips=0,
+            usa_enrichment_hits_total_score=0,
+            usa_enrichment_hits_signal_state=0,
             local_iol_ms=0.0,
             local_yahoo_ms=0.0,
             row_other_ms=0.0,
@@ -820,6 +909,8 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             usa_price_fallback_calls=0,
             usa_price_fallback_failures=0,
             usa_price_fallback_known_bad_skips=0,
+            usa_enrichment_hits_total_score=0,
+            usa_enrichment_hits_signal_state=0,
             local_iol_ms=0.0,
             local_yahoo_ms=0.0,
             row_other_ms=0.0,
@@ -854,17 +945,37 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     acc_local_iol_ms = 0.0
     acc_local_yahoo_ms = 0.0
     acc_row_other_ms = 0.0
+    usa_matches = 0
+    usa_misses = 0
 
     for m in CEDEAR_MAPPINGS:
         if not m.activo:
             continue
         t_row0 = time.perf_counter()
-        usa_key = m.ticker_usa.strip().upper()
-        row = by_ticker.get(usa_key)
+        ticker_usa_disp = m.ticker_usa.strip().upper()
+        usa_key = _norm_usa_ticker(m.ticker_usa)
+        row = by_ticker.get(usa_key) if usa_key is not None else None
         if row is not None:
-            total_score = _to_float(_radar_get(row, "TotalScore", "total_score"))
-            sig = _radar_get(row, "SignalState", "signal_state")
-            signal_state = str(sig).strip() if sig is not None else None
+            usa_matches += 1
+            usa_radar_match = True
+            ticker_usa_lookup = usa_key
+            usa_radar_match_reason: str | None = None
+        else:
+            usa_misses += 1
+            usa_radar_match = False
+            ticker_usa_lookup = usa_key
+            usa_radar_match_reason = "no_match_in_radar"
+        if row is not None:
+            total_score = _cedear_radar_total_score(row)
+            if total_score is not None:
+                yahoo_stats["usa_enrichment_hits_total_score"] = int(
+                    yahoo_stats.get("usa_enrichment_hits_total_score", 0)
+                ) + 1
+            signal_state = _cedear_radar_signal_state(row)
+            if signal_state is not None:
+                yahoo_stats["usa_enrichment_hits_signal_state"] = int(
+                    yahoo_stats.get("usa_enrichment_hits_signal_state", 0)
+                ) + 1
             mod_usa: ModUsa = "SI"
         else:
             total_score = None
@@ -878,15 +989,20 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             if pr_usa is not None:
                 yahoo_stats["usa_price_from_radar_hits"] = int(yahoo_stats.get("usa_price_from_radar_hits", 0)) + 1
                 precio_usa = pr_usa
-                usa_price_cache[usa_key] = pr_usa
+                if usa_key is not None:
+                    usa_price_cache[usa_key] = pr_usa
         if precio_usa is None:
-            if usa_key in _USA_PRICE_KNOWN_BAD:
+            if ticker_usa_disp in _USA_PRICE_KNOWN_BAD:
                 yahoo_stats["usa_price_fallback_known_bad_skips"] = int(
                     yahoo_stats.get("usa_price_fallback_known_bad_skips", 0)
                 ) + 1
             else:
                 yahoo_stats["usa_price_fallback_calls"] = int(yahoo_stats.get("usa_price_fallback_calls", 0)) + 1
-                precio_usa = _usa_price_spot_cached(usa_key, usa_price_cache, yahoo_stats)
+                precio_usa = _usa_price_spot_cached(
+                    usa_key if usa_key is not None else ticker_usa_disp,
+                    usa_price_cache,
+                    yahoo_stats,
+                )
                 if precio_usa is None:
                     yahoo_stats["usa_price_fallback_failures"] = int(
                         yahoo_stats.get("usa_price_fallback_failures", 0)
@@ -900,7 +1016,7 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
 
         # Precios locales: IOL primero; Yahoo solo si allow_yahoo (no tras omitir IOL por cuota).
         t_iol0 = time.perf_counter()
-        p_ars, yahoo_ok_ars = _try_local_iol_price(sym_ars, yahoo_stats)
+        p_ars, yahoo_ok_ars, ars_from_iol = _try_local_iol_price(sym_ars, yahoo_stats)
         t_iol1 = time.perf_counter()
         acc_local_iol_ms += (t_iol1 - t_iol0) * 1000.0
         if p_ars is None and yahoo_ok_ars:
@@ -909,13 +1025,14 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             p_ars = _yahoo_spot_cached_local_fallback(sym_ars, yahoo_cache, yahoo_stats, yahoo_negative_local)
             t_loc1 = time.perf_counter()
             loc_yahoo_ms_spent += (t_loc1 - t_loc0) * 1000.0
+            ars_from_iol = False
         elif p_ars is None and not yahoo_ok_ars:
             yahoo_stats["local_yahoo_skipped_due_iol_limit"] = int(
                 yahoo_stats.get("local_yahoo_skipped_due_iol_limit", 0)
             ) + 1
 
         t_iol0 = time.perf_counter()
-        p_ccl, yahoo_ok_ccl = _try_local_iol_price(sym_ccl, yahoo_stats)
+        p_ccl, yahoo_ok_ccl, ccl_from_iol = _try_local_iol_price(sym_ccl, yahoo_stats)
         t_iol1 = time.perf_counter()
         acc_local_iol_ms += (t_iol1 - t_iol0) * 1000.0
         if p_ccl is None and yahoo_ok_ccl:
@@ -924,6 +1041,7 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             p_ccl = _yahoo_spot_cached_local_fallback(sym_ccl, yahoo_cache, yahoo_stats, yahoo_negative_local)
             t_loc1 = time.perf_counter()
             loc_yahoo_ms_spent += (t_loc1 - t_loc0) * 1000.0
+            ccl_from_iol = False
         elif p_ccl is None and not yahoo_ok_ccl:
             yahoo_stats["local_yahoo_skipped_due_iol_limit"] = int(
                 yahoo_stats.get("local_yahoo_skipped_due_iol_limit", 0)
@@ -931,10 +1049,10 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
 
         acc_local_yahoo_ms += loc_yahoo_ms_spent
 
-        fuente_cedear: FuenteCedearLocal = "Yahoo"
+        fuente_cedear: FuenteCedearLocal = _fuente_cedear_local(p_ars, p_ccl, ars_from_iol, ccl_from_iol)
 
         cedears_por = float(m.cedears_por_accion_usa)
-        _cedear_debug_line(usa_key, sym_ars, sym_ccl, cedears_por, p_ars, p_ccl)
+        _cedear_debug_line(ticker_usa_disp, sym_ars, sym_ccl, cedears_por, p_ars, p_ccl)
 
         ccl_impl: float | None = None
         if p_ars is not None and p_ccl is not None and p_ccl > 0:
@@ -949,7 +1067,7 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             gap = round((precio_impl / precio_usa - 1.0) * 100.0, 4)
 
         _cedear_audit_log(
-            ticker_usa=usa_key,
+            ticker_usa=ticker_usa_disp,
             sym_ars=sym_ars,
             sym_ccl=sym_ccl,
             usa_hit=row is not None,
@@ -969,7 +1087,7 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
 
         out.append(
             CedearRow(
-                ticker_usa=m.ticker_usa.strip().upper(),
+                ticker_usa=ticker_usa_disp,
                 ticker_cedear_ars=sym_ars,
                 ticker_cedear_usd=sym_ccl,
                 ratio=cedears_por,
@@ -986,6 +1104,9 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
                 total_score=total_score,
                 signal_state=signal_state,
                 mod_usa=mod_usa,
+                usa_radar_match=usa_radar_match,
+                ticker_usa_lookup=ticker_usa_lookup,
+                usa_radar_match_reason=usa_radar_match_reason,
                 fuente_cedear=fuente_cedear,
                 cobertura_usa_mensaje=cob_msg,
                 pricing_cedear_local_mensaje=loc_msg,
@@ -993,6 +1114,12 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         )
         t_row1 = time.perf_counter()
         acc_row_other_ms += (t_row1 - t_row0) * 1000.0 - (t_usa1 - t_usa0) * 1000.0 - loc_yahoo_ms_spent
+
+    logger.info(
+        "[CEDEAR_ENRICH] usa_matches=%s usa_misses=%s",
+        usa_matches,
+        usa_misses,
+    )
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     logger.info(
@@ -1024,6 +1151,8 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         usa_price_fallback_calls=yahoo_stats.get("usa_price_fallback_calls", 0),
         usa_price_fallback_failures=yahoo_stats.get("usa_price_fallback_failures", 0),
         usa_price_fallback_known_bad_skips=yahoo_stats.get("usa_price_fallback_known_bad_skips", 0),
+        usa_enrichment_hits_total_score=yahoo_stats.get("usa_enrichment_hits_total_score", 0),
+        usa_enrichment_hits_signal_state=yahoo_stats.get("usa_enrichment_hits_signal_state", 0),
         local_iol_ms=acc_local_iol_ms,
         local_yahoo_ms=acc_local_yahoo_ms,
         row_other_ms=acc_row_other_ms,
@@ -1044,3 +1173,14 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         phase_note=None,
     )
     return out
+
+
+def _self_test_fuente_cedear_local() -> None:
+    """Prueba rápida de etiquetas fuente_cedear (ejecutar desde raíz del repo)."""
+    assert _fuente_cedear_local(1.0, 2.0, True, True) == "IOL"
+    assert _fuente_cedear_local(1.0, 2.0, False, False) == "Yahoo"
+    assert _fuente_cedear_local(1.0, 2.0, True, False) == "IOL/Yahoo"
+    assert _fuente_cedear_local(1.0, None, False, False) == "Yahoo"
+    assert _fuente_cedear_local(None, 2.0, False, True) == "IOL"
+    assert _fuente_cedear_local(None, None, False, False) == "Sin datos"
+    assert _fuente_cedear_local(1.0, None, True, False) == "IOL"
