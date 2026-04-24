@@ -203,6 +203,9 @@ export type ScanMetrics = {
 
 export type CedearRatioEstado = "ok" | "pendiente_validar" | "revisar";
 
+/** Origen precios locales ARS/CCL en CEDEAR (backend). */
+export type CedearFuenteLocal = "Yahoo" | "IOL" | "IOL/Yahoo" | "Sin datos";
+
 /**
  * Fila GET /cedears (alias JSON TotalScore / SignalState desde el backend).
  */
@@ -227,7 +230,7 @@ export type CedearRow = {
   /** SI: datos USA desde el radar; NO: precio USA spot (sin score/señal del radar). */
   mod_usa: "SI" | "NO";
   /** Origen de los precios locales CEDEAR ($ y USD). */
-  fuente_cedear: "Yahoo";
+  fuente_cedear?: CedearFuenteLocal | null;
 };
 
 function isNullableNumber(v: unknown): v is number | null {
@@ -246,6 +249,17 @@ function isNullableInt(v: unknown): v is number | null {
 
 function isCedearRatioEstado(v: unknown): v is CedearRatioEstado {
   return v === "ok" || v === "pendiente_validar" || v === "revisar";
+}
+
+function isCedearFuenteLocal(v: unknown): v is CedearFuenteLocal | null | undefined {
+  return (
+    v === null ||
+    v === undefined ||
+    v === "Yahoo" ||
+    v === "IOL" ||
+    v === "IOL/Yahoo" ||
+    v === "Sin datos"
+  );
 }
 
 function isCedearRow(x: unknown): x is CedearRow {
@@ -277,7 +291,7 @@ function isCedearRow(x: unknown): x is CedearRow {
     isNullableNumber(o.TotalScore) &&
     (o.SignalState === null || typeof o.SignalState === "string") &&
     (o.mod_usa === "SI" || o.mod_usa === "NO") &&
-    o.fuente_cedear === "Yahoo"
+    isCedearFuenteLocal(o.fuente_cedear)
   );
 }
 
