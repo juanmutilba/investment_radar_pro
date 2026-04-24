@@ -4,6 +4,7 @@ from services.market_data.providers.export_prices import (
     get_export_argentina_price,
     get_export_usa_price,
 )
+from services.market_data.providers.iol import get_iol_quote, is_iol_enabled
 from services.market_data.providers.yahoo_spot import yahoo_last_price
 from services.market_data.types import PriceQuote
 
@@ -54,6 +55,17 @@ def get_argentina_price(ticker: str, prefer_export: bool = True) -> PriceQuote:
             if t:
                 _resolved_argentina[(t, prefer_export)] = q
             return q
+
+    # Provider opcional: IOL (si hay credenciales en memoria).
+    if is_iol_enabled():
+        try:
+            iq = get_iol_quote(ticker)
+            if iq is not None and iq.is_valid:
+                if t:
+                    _resolved_argentina[(t, prefer_export)] = iq
+                return iq
+        except Exception:
+            pass
     try:
         out = yahoo_last_price(ticker, "ARS")
     except Exception:

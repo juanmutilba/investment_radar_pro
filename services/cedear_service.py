@@ -21,6 +21,23 @@ ModUsa = Literal["SI", "NO"]
 FuenteCedearLocal = Literal["Yahoo"]
 _RATIO_STALE_DAYS = 180
 
+# Máximo de consultas HTTP IOL por build CEDEAR (ARS/CCL); el resto va directo a Yahoo / None.
+IOL_MAX_CALLS = 30
+
+# Fallback get_usa_price/Yahoo en CEDEAR: tickers USA que no resuelven y solo suman latencia.
+_USA_PRICE_KNOWN_BAD: frozenset[str] = frozenset({"AUY", "DISN", "MMC"})
+
+# Cache global (por proceso) para precios Yahoo locales CEDEAR (ARS/CCL).
+# Evita repetir consultas entre corridas cercanas (p. ej. scan + requests API).
+# TTL corto para minimizar staleness: configurar con CEDEAR_LOCAL_YAHOO_CACHE_TTL_S.
+_LOCAL_YAHOO_CACHE: dict[str, tuple[float, float | None]] = {}
+_LOCAL_YAHOO_CACHE_TTL_S_DEFAULT = 60.0
+
+# Fallback Yahoo local: símbolos que yfinance no resuelve (ruido / latencia). Claves en UPPER.
+_LOCAL_YAHOO_KNOWN_BAD: frozenset[str] = frozenset(
+    {"GOOGLC.BA", "AUY", "AUYC.BA", "BBC.BA", "BKC.BA"}
+)
+
 # Tickers para marcar focus=1 en líneas [CEDEAR_AUDIT] (grep: focus=1).
 _CEDEAR_AUDIT_FOCUS = frozenset(
     {
@@ -185,6 +202,27 @@ def _to_float(v: Any) -> float | None:
     return x
 
 
+def _usa_price_from_radar_row(row: dict[str, Any]) -> float | None:
+    """
+    Precio spot USA ya presente en la fila del radar export (evita get_usa_price/Yahoo por fila).
+    """
+    raw = _radar_get(
+        row,
+        "Precio",
+        "precio",
+        "Price",
+        "price",
+        "LastPrice",
+        "lastPrice",
+        "Close",
+        "close",
+    )
+    x = _to_float(raw)
+    if x is None or x <= 0:
+        return None
+    return round(x, 6)
+
+
 def _fetch_last_price(symbol: str) -> float | None:
     """
     Ultimo precio operable via Yahoo (fast_info o ultimo cierre corto).
@@ -230,21 +268,201 @@ def _yahoo_spot_cached(symbol: str, cache: dict[str, float | None], stats: dict[
     if not sym:
         return None
     key = sym.upper()
+
+    # Cache local (por corrida/build) - dedupe intra-build
     if key in cache:
         stats["yahoo_cache_hits"] += 1
         return cache[key]
+
+    # Cache global (por proceso) - dedupe inter-build (TTL corto)
+    try:
+        ttl_s = float(os.environ.get("CEDEAR_LOCAL_YAHOO_CACHE_TTL_S", str(_LOCAL_YAHOO_CACHE_TTL_S_DEFAULT)))
+    except (TypeError, ValueError):
+        ttl_s = _LOCAL_YAHOO_CACHE_TTL_S_DEFAULT
+    ttl_s = max(0.0, min(ttl_s, 3600.0))
+    if ttl_s > 0:
+        now = time.monotonic()
+        prev = _LOCAL_YAHOO_CACHE.get(key)
+        if prev is not None:
+            ts, val = prev
+            if now - ts <= ttl_s:
+                # También cachea None para evitar hammering cuando Yahoo no trae datos.
+                stats["yahoo_cache_hits"] += 1
+                cache[key] = val
+                return val
+
     stats["yahoo_queries"] += 1
     p: float | None = None
     try:
         p = _fetch_last_price(sym)
     finally:
         cache[key] = p
+        if ttl_s > 0:
+            try:
+                _LOCAL_YAHOO_CACHE[key] = (time.monotonic(), p)
+            except Exception:
+                pass
     return p
+
+
+def _yahoo_spot_cached_local_fallback(
+    symbol: str,
+    cache: dict[str, float | None],
+    stats: dict[str, int],
+    yahoo_negative: set[str],
+) -> float | None:
+    """
+    Envuelve _yahoo_spot_cached sin modificarlo: cache negativa por corrida para símbolos
+    locales que ya fallaron en Yahoo (evita reintentos costosos en la misma build).
+    Además, `_LOCAL_YAHOO_KNOWN_BAD` evita llamar yfinance para tickers que no existen en Yahoo.
+    Tickers que parecen variante CEDEAR C (`_is_probably_cedear_c_variant`) no llaman Yahoo si llegaron aquí
+    (IOL ya se intentó antes en el caller).
+    """
+    sym = (symbol or "").strip()
+    if not sym:
+        return None
+    key = sym.upper()
+    if key in yahoo_negative or key in _LOCAL_YAHOO_KNOWN_BAD:
+        stats["local_yahoo_negative_cache_hits"] = int(stats.get("local_yahoo_negative_cache_hits", 0)) + 1
+        if key in _LOCAL_YAHOO_KNOWN_BAD:
+            stats["local_yahoo_known_bad_skips"] = int(stats.get("local_yahoo_known_bad_skips", 0)) + 1
+        return None
+    if _is_probably_cedear_c_variant(sym):
+        stats["local_yahoo_c_variant_skips"] = int(stats.get("local_yahoo_c_variant_skips", 0)) + 1
+        yahoo_negative.add(key)
+        return None
+    queries_before = int(stats.get("yahoo_queries", 0))
+    p = _yahoo_spot_cached(sym, cache, stats)
+    if p is None:
+        yahoo_negative.add(key)
+        if int(stats.get("yahoo_queries", 0)) > queries_before:
+            stats["local_yahoo_failures"] = int(stats.get("local_yahoo_failures", 0)) + 1
+    return p
+
+
+def _normalize_iol_ticker(symbol: str) -> str:
+    """
+    Normaliza el símbolo solo para IOL (sin tocar el usado para Yahoo fallback):
+    - quita prefijo '$' si aparece (logs/formatos antiguos)
+    - quita sufijo '.BA' (símbolo Yahoo ByMA)
+    """
+    s = (symbol or "").strip()
+    if not s:
+        return ""
+    if s.startswith("$"):
+        s = s[1:].strip()
+    su = s.upper()
+    if su.endswith(".BA"):
+        s = s[: -len(".BA")].strip()
+    return s.strip().upper()
+
+
+# Local tickers tipo XXXC (ratio C) suelen no existir en Yahoo; INTC es NYSE real (termina en C sin ser variante C).
+_LOCAL_YAHOO_C_SUFFIX_EXCEPTIONS: frozenset[str] = frozenset({"INTC"})
+
+
+def _is_probably_cedear_c_variant(symbol: str) -> bool:
+    """
+    Heurística para CEDEAR "variante C" (sufijo C en ByMA). Normaliza ($, .BA, upper).
+    Base: >= 3 letras, solo alfabético, termina en C (excepción INTC).
+    Tickers base de 3 letras (p. ej. BBC): solo si el original termina en .BA (evita falsos positivos).
+    Con base de 4+ letras, basta el sufijo C (p. ej. ADIC / ADIC.BA).
+    """
+    raw = (symbol or "").strip().upper()
+    base = _normalize_iol_ticker(symbol)
+    if len(base) < 3 or not base.isalpha():
+        return False
+    if base in _LOCAL_YAHOO_C_SUFFIX_EXCEPTIONS:
+        return False
+    if not base.endswith("C"):
+        return False
+    if len(base) == 3:
+        return raw.endswith(".BA")
+    return True
+
+
+def _try_local_iol_price(symbol: str, stats: dict[str, int]) -> tuple[float | None, bool]:
+    """
+    Intenta precio local (ARS/CCL) vía IOL. Retorna (precio, allow_yahoo_fallback).
+
+    ``allow_yahoo_fallback`` es False solo cuando IOL está habilitado pero se omitió la red
+    por ``IOL_MAX_CALLS`` (no disparar Yahoo masivo en ese caso). Si IOL está deshabilitado,
+    hubo miss rápido (caché negativa, etc.) o error, es True para conservar IOL → Yahoo → None.
+    """
+    sym = (symbol or "").strip()
+    if not sym:
+        return None, True
+    try:
+        from services.market_data.providers.iol import get_iol_quote, is_iol_enabled, read_iol_quote_ram_only
+
+        if not is_iol_enabled():
+            return None, True
+        iol_sym = _normalize_iol_ticker(sym)
+        if not iol_sym:
+            stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+            return None, True
+        if iol_sym != sym.strip().upper():
+            stats["local_iol_normalized_symbols"] = int(stats.get("local_iol_normalized_symbols", 0)) + 1
+
+        ram = read_iol_quote_ram_only(iol_sym)
+        if ram == "negative":
+            stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+            return None, True
+        if ram is not None:
+            q = ram
+            if not getattr(q, "is_valid", False):
+                stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+                return None, True
+            if getattr(q, "source", None) != "iol":
+                stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+                return None, True
+            v = q.value
+            if v is None:
+                stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+                return None, True
+            try:
+                x = float(v)
+            except (TypeError, ValueError):
+                stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+                return None, True
+            if x != x or x <= 0:
+                stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+                return None, True
+            stats["local_iol_hits"] = int(stats.get("local_iol_hits", 0)) + 1
+            return round(x, 6), False
+
+        if int(stats.get("local_iol_calls", 0)) >= IOL_MAX_CALLS:
+            stats["local_iol_skipped_by_limit"] = int(stats.get("local_iol_skipped_by_limit", 0)) + 1
+            return None, False
+        stats["local_iol_calls"] = int(stats.get("local_iol_calls", 0)) + 1
+        q = get_iol_quote(iol_sym)
+        if q is None or not getattr(q, "is_valid", False):
+            stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+            return None, True
+        if getattr(q, "source", None) != "iol":
+            stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+            return None, True
+        v = q.value
+        if v is None:
+            stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+            return None, True
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+            return None, True
+        if x != x or x <= 0:
+            stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+            return None, True
+        stats["local_iol_hits"] = int(stats.get("local_iol_hits", 0)) + 1
+        return round(x, 6), False
+    except Exception:
+        return None, True
 
 
 def _usa_price_spot_cached(ticker_usa: str, cache: dict[str, float | None], stats: dict[str, int]) -> float | None:
     """
-    precio_usa_real siempre vía services.market_data.get_usa_price (export preferido, Yahoo fallback).
+    precio_usa_real vía services.market_data.get_usa_price cuando no hay precio usable en la fila radar.
     Cache dedicado (no compartir con _yahoo_spot_cached de ARS/CCL) para evitar colisiones de ticker.
     """
     sym = (ticker_usa or "").strip()
@@ -403,17 +621,34 @@ def _log_cedear_timing_breakdown(
     usa_rows_indexed: int | None,
     loop_rows: int,
     usa_price_ms: float,
+    usa_price_from_radar_hits: int,
+    usa_price_fallback_calls: int,
+    usa_price_fallback_failures: int,
+    usa_price_fallback_known_bad_skips: int,
+    local_iol_ms: float,
     local_yahoo_ms: float,
     row_other_ms: float,
     yahoo_queries: int,
     yahoo_cache_hits: int,
+    local_iol_calls: int,
+    local_iol_hits: int,
+    local_iol_misses: int,
+    local_iol_cache_hits: int,
+    local_iol_skipped_by_limit: int,
+    local_yahoo_fallback_calls: int,
+    local_iol_normalized_symbols: int,
+    local_yahoo_failures: int,
+    local_yahoo_negative_cache_hits: int,
+    local_yahoo_known_bad_skips: int,
+    local_yahoo_c_variant_skips: int,
+    local_yahoo_skipped_due_iol_limit: int,
     phase_note: str | None = None,
 ) -> None:
     """
     Resumen de performance por fase (grep: CEDEAR_TIMING).
     maestro: tupla CEDEAR_MAPPINGS ya cargada al import; maestro_scan_ms es recorrido en memoria.
     radar_usa: lectura radar_*.xlsx (USA) + índice por ticker.
-    usa_price: suma wall-clock de _usa_price_spot_cached (market_data / Yahoo).
+    usa_price: suma wall-clock de resolución precio USA (columna radar si existe, si no _usa_price_spot_cached).
     local_yahoo: suma wall-clock de _yahoo_spot_cached ARS + CCL por fila activa.
     row_other: lookup fila USA, gap, debug/audit, mensajes cobertura, CedearRow y append (sin red).
     """
@@ -421,9 +656,12 @@ def _log_cedear_timing_breakdown(
     extra = f" note={phase_note}" if phase_note else ""
     msg = (
         "[CEDEAR_TIMING] total_ms=%.1f rows_out=%s yahoo_queries=%s yahoo_cache_hits=%s%s\n"
+        "  local_iol_calls=%s local_iol_hits=%s local_iol_misses=%s local_iol_cache_hits=%s local_iol_skipped_by_limit=%s local_yahoo_fallback_calls=%s local_iol_normalized_symbols=%s\n"
+        "  local_yahoo_failures=%s local_yahoo_negative_cache_hits=%s local_yahoo_known_bad_skips=%s local_yahoo_c_variant_skips=%s local_yahoo_skipped_due_iol_limit=%s\n"
         "  maestro_scan_ms=%.1f (entries=%s active=%s; tupla ya en RAM al import)\n"
         "  radar_usa_ms=%s\n"
-        "  usa_price_resolve_ms=%.1f\n"
+        "  usa_price_resolve_ms=%.1f usa_price_from_radar_hits=%s usa_price_fallback_calls=%s usa_price_fallback_failures=%s usa_price_fallback_known_bad_skips=%s\n"
+        "  local_iol_ms=%.1f\n"
         "  local_yahoo_ars_ccl_ms=%.1f\n"
         "  row_other_ms=%.1f"
         % (
@@ -432,11 +670,28 @@ def _log_cedear_timing_breakdown(
             yahoo_queries,
             yahoo_cache_hits,
             extra,
+            local_iol_calls,
+            local_iol_hits,
+            local_iol_misses,
+            local_iol_cache_hits,
+            local_iol_skipped_by_limit,
+            local_yahoo_fallback_calls,
+            local_iol_normalized_symbols,
+            local_yahoo_failures,
+            local_yahoo_negative_cache_hits,
+            local_yahoo_known_bad_skips,
+            local_yahoo_c_variant_skips,
+            local_yahoo_skipped_due_iol_limit,
             maestro_scan_ms,
             maestro_entries,
             maestro_active,
             radar_s,
             usa_price_ms,
+            usa_price_from_radar_hits,
+            usa_price_fallback_calls,
+            usa_price_fallback_failures,
+            usa_price_fallback_known_bad_skips,
+            local_iol_ms,
             local_yahoo_ms,
             row_other_ms,
         )
@@ -448,8 +703,9 @@ def _log_cedear_timing_breakdown(
 def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     """
     None si no hay export radar_*.xlsx.
-    Incluye todos los mapeos activos. precio_usa_real siempre desde market_data (export + Yahoo);
-    si ticker_usa no está en el radar, TotalScore y SignalState en null; mod_usa=NO.
+    Incluye todos los mapeos activos. precio_usa_real: columna Precio de la fila radar USA si existe;
+    si no, market_data.get_usa_price (export + Yahoo). Si ticker_usa no está en el radar, TotalScore y
+    SignalState en null; mod_usa=NO.
 
     Cobertura USA vs pricing local: `cobertura_usa_mensaje` y `pricing_cedear_local_mensaje` separan
     ambos mundos sin ocultar filas ni cambiar fórmulas (precios/implícitos siguen en null si faltan datos).
@@ -470,7 +726,31 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         Siempre: una línea INFO [CEDEAR_TIMING] con desglose de ms por fase (grep CEDEAR_TIMING).
     """
     t0 = time.perf_counter()
-    yahoo_stats = {"yahoo_queries": 0, "yahoo_cache_hits": 0}
+    try:
+        from services.market_data.providers.iol import reset_iol_quote_usage_stats
+
+        reset_iol_quote_usage_stats()
+    except Exception:
+        pass
+    yahoo_stats: dict[str, int] = {
+        "yahoo_queries": 0,
+        "yahoo_cache_hits": 0,
+        "local_iol_calls": 0,
+        "local_iol_hits": 0,
+        "local_iol_misses": 0,
+        "local_iol_skipped_by_limit": 0,
+        "local_yahoo_fallback_calls": 0,
+        "local_iol_normalized_symbols": 0,
+        "local_yahoo_failures": 0,
+        "local_yahoo_negative_cache_hits": 0,
+        "local_yahoo_known_bad_skips": 0,
+        "local_yahoo_c_variant_skips": 0,
+        "local_yahoo_skipped_due_iol_limit": 0,
+        "usa_price_from_radar_hits": 0,
+        "usa_price_fallback_calls": 0,
+        "usa_price_fallback_failures": 0,
+        "usa_price_fallback_known_bad_skips": 0,
+    }
 
     t_maestro0 = time.perf_counter()
     maestro_entries = len(CEDEAR_MAPPINGS)
@@ -495,10 +775,27 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             usa_rows_indexed=None,
             loop_rows=0,
             usa_price_ms=0.0,
+            usa_price_from_radar_hits=0,
+            usa_price_fallback_calls=0,
+            usa_price_fallback_failures=0,
+            usa_price_fallback_known_bad_skips=0,
+            local_iol_ms=0.0,
             local_yahoo_ms=0.0,
             row_other_ms=0.0,
             yahoo_queries=0,
             yahoo_cache_hits=0,
+            local_iol_calls=0,
+            local_iol_hits=0,
+            local_iol_misses=0,
+            local_iol_cache_hits=0,
+            local_iol_skipped_by_limit=0,
+            local_yahoo_fallback_calls=0,
+            local_iol_normalized_symbols=0,
+            local_yahoo_failures=0,
+            local_yahoo_negative_cache_hits=0,
+            local_yahoo_known_bad_skips=0,
+            local_yahoo_c_variant_skips=0,
+            local_yahoo_skipped_due_iol_limit=0,
             phase_note="no_export",
         )
         return None
@@ -519,10 +816,27 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             usa_rows_indexed=None,
             loop_rows=0,
             usa_price_ms=0.0,
+            usa_price_from_radar_hits=0,
+            usa_price_fallback_calls=0,
+            usa_price_fallback_failures=0,
+            usa_price_fallback_known_bad_skips=0,
+            local_iol_ms=0.0,
             local_yahoo_ms=0.0,
             row_other_ms=0.0,
             yahoo_queries=0,
             yahoo_cache_hits=0,
+            local_iol_calls=0,
+            local_iol_hits=0,
+            local_iol_misses=0,
+            local_iol_cache_hits=0,
+            local_iol_skipped_by_limit=0,
+            local_yahoo_fallback_calls=0,
+            local_iol_normalized_symbols=0,
+            local_yahoo_failures=0,
+            local_yahoo_negative_cache_hits=0,
+            local_yahoo_known_bad_skips=0,
+            local_yahoo_c_variant_skips=0,
+            local_yahoo_skipped_due_iol_limit=0,
             phase_note="invalid_rows",
         )
         return []
@@ -534,8 +848,10 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     out: list[CedearRow] = []
     yahoo_cache: dict[str, float | None] = {}
     usa_price_cache: dict[str, float | None] = {}
+    yahoo_negative_local: set[str] = set()
 
     acc_usa_price_ms = 0.0
+    acc_local_iol_ms = 0.0
     acc_local_yahoo_ms = 0.0
     acc_row_other_ms = 0.0
 
@@ -556,17 +872,64 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             mod_usa = "NO"
 
         t_usa0 = time.perf_counter()
-        precio_usa = _usa_price_spot_cached(usa_key, usa_price_cache, yahoo_stats)
+        precio_usa: float | None = None
+        if row is not None:
+            pr_usa = _usa_price_from_radar_row(row)
+            if pr_usa is not None:
+                yahoo_stats["usa_price_from_radar_hits"] = int(yahoo_stats.get("usa_price_from_radar_hits", 0)) + 1
+                precio_usa = pr_usa
+                usa_price_cache[usa_key] = pr_usa
+        if precio_usa is None:
+            if usa_key in _USA_PRICE_KNOWN_BAD:
+                yahoo_stats["usa_price_fallback_known_bad_skips"] = int(
+                    yahoo_stats.get("usa_price_fallback_known_bad_skips", 0)
+                ) + 1
+            else:
+                yahoo_stats["usa_price_fallback_calls"] = int(yahoo_stats.get("usa_price_fallback_calls", 0)) + 1
+                precio_usa = _usa_price_spot_cached(usa_key, usa_price_cache, yahoo_stats)
+                if precio_usa is None:
+                    yahoo_stats["usa_price_fallback_failures"] = int(
+                        yahoo_stats.get("usa_price_fallback_failures", 0)
+                    ) + 1
         t_usa1 = time.perf_counter()
         acc_usa_price_ms += (t_usa1 - t_usa0) * 1000.0
 
         sym_ars = m.ticker_cedear_ars.strip()
         sym_ccl = m.ticker_cedear_ccl.strip()
-        t_loc0 = time.perf_counter()
-        p_ars = _yahoo_spot_cached(sym_ars, yahoo_cache, yahoo_stats)
-        p_ccl = _yahoo_spot_cached(sym_ccl, yahoo_cache, yahoo_stats)
-        t_loc1 = time.perf_counter()
-        acc_local_yahoo_ms += (t_loc1 - t_loc0) * 1000.0
+        loc_yahoo_ms_spent = 0.0
+
+        # Precios locales: IOL primero; Yahoo solo si allow_yahoo (no tras omitir IOL por cuota).
+        t_iol0 = time.perf_counter()
+        p_ars, yahoo_ok_ars = _try_local_iol_price(sym_ars, yahoo_stats)
+        t_iol1 = time.perf_counter()
+        acc_local_iol_ms += (t_iol1 - t_iol0) * 1000.0
+        if p_ars is None and yahoo_ok_ars:
+            yahoo_stats["local_yahoo_fallback_calls"] += 1
+            t_loc0 = time.perf_counter()
+            p_ars = _yahoo_spot_cached_local_fallback(sym_ars, yahoo_cache, yahoo_stats, yahoo_negative_local)
+            t_loc1 = time.perf_counter()
+            loc_yahoo_ms_spent += (t_loc1 - t_loc0) * 1000.0
+        elif p_ars is None and not yahoo_ok_ars:
+            yahoo_stats["local_yahoo_skipped_due_iol_limit"] = int(
+                yahoo_stats.get("local_yahoo_skipped_due_iol_limit", 0)
+            ) + 1
+
+        t_iol0 = time.perf_counter()
+        p_ccl, yahoo_ok_ccl = _try_local_iol_price(sym_ccl, yahoo_stats)
+        t_iol1 = time.perf_counter()
+        acc_local_iol_ms += (t_iol1 - t_iol0) * 1000.0
+        if p_ccl is None and yahoo_ok_ccl:
+            yahoo_stats["local_yahoo_fallback_calls"] += 1
+            t_loc0 = time.perf_counter()
+            p_ccl = _yahoo_spot_cached_local_fallback(sym_ccl, yahoo_cache, yahoo_stats, yahoo_negative_local)
+            t_loc1 = time.perf_counter()
+            loc_yahoo_ms_spent += (t_loc1 - t_loc0) * 1000.0
+        elif p_ccl is None and not yahoo_ok_ccl:
+            yahoo_stats["local_yahoo_skipped_due_iol_limit"] = int(
+                yahoo_stats.get("local_yahoo_skipped_due_iol_limit", 0)
+            ) + 1
+
+        acc_local_yahoo_ms += loc_yahoo_ms_spent
 
         fuente_cedear: FuenteCedearLocal = "Yahoo"
 
@@ -629,7 +992,7 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             )
         )
         t_row1 = time.perf_counter()
-        acc_row_other_ms += (t_row1 - t_row0) * 1000.0 - (t_usa1 - t_usa0) * 1000.0 - (t_loc1 - t_loc0) * 1000.0
+        acc_row_other_ms += (t_row1 - t_row0) * 1000.0 - (t_usa1 - t_usa0) * 1000.0 - loc_yahoo_ms_spent
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     logger.info(
@@ -639,6 +1002,15 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         yahoo_stats["yahoo_queries"],
         yahoo_stats["yahoo_cache_hits"],
     )
+    try:
+        from services.market_data.providers.iol import get_iol_quote_usage_stats
+
+        _iol_st = get_iol_quote_usage_stats()
+        _iol_cache_hits = int(_iol_st.get("iol_cache_positive_hits", 0)) + int(
+            _iol_st.get("iol_cache_negative_hits", 0)
+        )
+    except Exception:
+        _iol_cache_hits = 0
     _log_cedear_timing_breakdown(
         total_ms=elapsed_ms,
         maestro_scan_ms=maestro_scan_ms,
@@ -648,10 +1020,27 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         usa_rows_indexed=usa_rows_indexed,
         loop_rows=len(out),
         usa_price_ms=acc_usa_price_ms,
+        usa_price_from_radar_hits=yahoo_stats.get("usa_price_from_radar_hits", 0),
+        usa_price_fallback_calls=yahoo_stats.get("usa_price_fallback_calls", 0),
+        usa_price_fallback_failures=yahoo_stats.get("usa_price_fallback_failures", 0),
+        usa_price_fallback_known_bad_skips=yahoo_stats.get("usa_price_fallback_known_bad_skips", 0),
+        local_iol_ms=acc_local_iol_ms,
         local_yahoo_ms=acc_local_yahoo_ms,
         row_other_ms=acc_row_other_ms,
         yahoo_queries=yahoo_stats["yahoo_queries"],
         yahoo_cache_hits=yahoo_stats["yahoo_cache_hits"],
+        local_iol_calls=yahoo_stats.get("local_iol_calls", 0),
+        local_iol_hits=yahoo_stats.get("local_iol_hits", 0),
+        local_iol_misses=yahoo_stats.get("local_iol_misses", 0),
+        local_iol_cache_hits=_iol_cache_hits,
+        local_iol_skipped_by_limit=yahoo_stats.get("local_iol_skipped_by_limit", 0),
+        local_yahoo_fallback_calls=yahoo_stats.get("local_yahoo_fallback_calls", 0),
+        local_iol_normalized_symbols=yahoo_stats.get("local_iol_normalized_symbols", 0),
+        local_yahoo_failures=yahoo_stats.get("local_yahoo_failures", 0),
+        local_yahoo_negative_cache_hits=yahoo_stats.get("local_yahoo_negative_cache_hits", 0),
+        local_yahoo_known_bad_skips=yahoo_stats.get("local_yahoo_known_bad_skips", 0),
+        local_yahoo_c_variant_skips=yahoo_stats.get("local_yahoo_c_variant_skips", 0),
+        local_yahoo_skipped_due_iol_limit=yahoo_stats.get("local_yahoo_skipped_due_iol_limit", 0),
         phase_note=None,
     )
     return out

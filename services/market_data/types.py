@@ -9,7 +9,7 @@ from typing import Literal
 class PriceQuote:
     value: float | None
     currency: Literal["ARS", "USD"]
-    source: Literal["export", "yahoo", "snapshot", "unknown"]
+    source: Literal["export", "yahoo", "iol", "snapshot", "unknown"]
     as_of: datetime | None
     symbol_used: str
     notes: str | None = None
