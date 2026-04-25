@@ -918,6 +918,7 @@ export function AlertasPage() {
                     <th>Score</th>
                     <th>Score ant.</th>
                     <th>Δ</th>
+                    <th>CEDEAR</th>
                     <th>Mercado</th>
                   </tr>
                 </thead>
@@ -938,6 +939,20 @@ export function AlertasPage() {
                       <td>{a.score ?? "—"}</td>
                       <td>{a.score_anterior ?? "—"}</td>
                       <td>{a.cambio_score ?? "—"}</td>
+                      <td>
+                        {String(a.CEDEAR ?? a.cedear ?? "—").toUpperCase() === "SI" ? (
+                          <span style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}>
+                            <span className="radar-badge radar-badge--macd-yes">SI</span>
+                            <a className="radar-chip" href="/cedears" title="Abrir módulo CEDEAR">
+                              Ver CEDEAR
+                            </a>
+                          </span>
+                        ) : String(a.CEDEAR ?? a.cedear ?? "—").toUpperCase() === "NO" ? (
+                          <span className="radar-badge radar-badge--macd-no">NO</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td>{a.mercado ?? "—"}</td>
                     </tr>
                   ))}
@@ -1161,6 +1176,7 @@ export function AlertasPage() {
                       <th>Novedad</th>
                       <th>Régimen</th>
                       <th>Tendencia</th>
+                      <th style={{ textAlign: "center" }}>CEDEAR</th>
                       <th title={RANKING_COLUMN_TOOLTIP}>Ranking</th>
                       <th>Recencia</th>
                     </tr>
@@ -1208,6 +1224,33 @@ export function AlertasPage() {
                           <span className={classForTendencia(r.tendencia)} title={tooltipTendenciaRanking(r.tendencia)}>
                             {tendenciaLabel(r.tendencia)}
                           </span>
+                        </td>
+                        <td style={{ textAlign: "center" }}>
+                          {String(r.CEDEAR ?? (r as any).cedear ?? "—").toUpperCase() === "SI" ? (
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: "0.25rem",
+                              }}
+                            >
+                              <span className="radar-badge radar-badge--macd-yes">SI</span>
+                              <a
+                                className="radar-chip"
+                                href={`/cedears?ticker_usa=${encodeURIComponent(r.ticker)}`}
+                                title="Abrir módulo CEDEAR"
+                                style={{ padding: "0.15rem 0.5rem", fontSize: "0.72rem", lineHeight: 1.2 }}
+                              >
+                                CEDEAR
+                              </a>
+                            </div>
+                          ) : String(r.CEDEAR ?? (r as any).cedear ?? "—").toUpperCase() === "NO" ? (
+                            <span className="radar-badge radar-badge--macd-no">NO</span>
+                          ) : (
+                            <span className="msg-muted">—</span>
+                          )}
                         </td>
                         <td title={RANKING_CELL_TOOLTIP}>{fmt1(r.ranking_score)}</td>
                         <td>{fmtHaceSegundos(r.recencia_segundos)}</td>
@@ -1443,6 +1486,7 @@ export function AlertasPage() {
                       <th>Total</th>
                       <th>RSI</th>
                       <th>Precio</th>
+                      <th>CEDEAR</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1487,6 +1531,20 @@ export function AlertasPage() {
                         <td>{String(h.total_score ?? "—")}</td>
                         <td>{String(h.rsi ?? "—")}</td>
                         <td>{String(h.precio ?? "—")}</td>
+                        <td>
+                          {String(h.CEDEAR ?? h.cedear ?? "—").toUpperCase() === "SI" ? (
+                            <span style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}>
+                              <span className="radar-badge radar-badge--macd-yes">SI</span>
+                              <a className="radar-chip" href="/cedears" title="Abrir módulo CEDEAR">
+                                Ver CEDEAR
+                              </a>
+                            </span>
+                          ) : String(h.CEDEAR ?? h.cedear ?? "—").toUpperCase() === "NO" ? (
+                            <span className="radar-badge radar-badge--macd-no">NO</span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
                       </tr>
                     );
                   })}

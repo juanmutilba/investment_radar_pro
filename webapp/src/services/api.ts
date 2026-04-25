@@ -4,6 +4,8 @@
  */
 const BASE = "/api";
 
+export type CedearFlag = "SI" | "NO";
+
 export type LatestAlert = {
   ticker: string | null;
   /** Etiqueta legible (hoja Alertas / TipoAlerta). */
@@ -14,6 +16,8 @@ export type LatestAlert = {
   score_anterior: number | null;
   cambio_score: number | null;
   mercado: string | null;
+  CEDEAR?: CedearFlag | null;
+  cedear?: CedearFlag | null;
 };
 
 export async function fetchLatestAlerts(): Promise<LatestAlert[]> {
@@ -37,6 +41,8 @@ export type AlertHistoryEvent = {
   scan_at: string;
   ticker: string | null;
   mercado: string | null;
+  CEDEAR?: CedearFlag | null;
+  cedear?: CedearFlag | null;
   universo?: unknown;
   panel?: unknown;
   tipo_alerta?: string | null;
@@ -75,6 +81,8 @@ export async function fetchAlertHistory(limit = ALERT_HISTORY_DEFAULT_LIMIT): Pr
 
 export type AlertAnalysisRow = {
   ticker: string;
+  CEDEAR?: CedearFlag | null;
+  cedear?: CedearFlag | null;
   score_actual: number;
   tipo_actual: string | null;
   cantidad_eventos: number;

@@ -138,6 +138,7 @@ def _alert_row_to_dict(row: pd.Series, mercado_fallback: str) -> dict[str, Any]:
         "score_anterior": _cell(row, "score_anterior", "ScoreAnterior"),
         "cambio_score": _cell(row, "cambio_score", "CambioScore"),
         "mercado": mercado,
+        "CEDEAR": _cell(row, "CEDEAR", "cedear"),
     }
 
 

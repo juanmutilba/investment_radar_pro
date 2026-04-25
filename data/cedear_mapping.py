@@ -193,6 +193,26 @@ CEDEAR_BY_LOCAL: dict[str, CedearMapping]
 CEDEAR_BY_USA, CEDEAR_BY_LOCAL = _validate_and_build_indexes(CEDEAR_MAPPINGS)
 
 
+def normalize_usa_ticker_for_cedear_lookup(ticker):
+    if not ticker:
+        return None
+    t = str(ticker).strip().upper()
+    if t.endswith(".BA"):
+        t = t[:-3]
+    t = t.replace(".", "-")
+    return t
+
+
+def get_active_cedear_usa_tickers():
+    out = set()
+    for m in CEDEAR_MAPPINGS:
+        if m.activo:
+            k = normalize_usa_ticker_for_cedear_lookup(m.ticker_usa)
+            if k:
+                out.add(k)
+    return out
+
+
 def ticker_usa_list_for_universe_merge() -> list[str]:
     """
     tickers USA (limpios) de filas CEDEAR activas, en orden del maestro, sin duplicados.
@@ -277,4 +297,9 @@ def enrich_usa_radar_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     cut = int(loc) + 1
     left = out.iloc[:, :cut]
     right = out.iloc[:, cut:]
-    return pd.concat([left, extra, right], axis=1)
+    result = pd.concat([left, extra, right], axis=1)
+    cedear_set = get_active_cedear_usa_tickers()
+    result["CEDEAR"] = result["Ticker"].apply(
+        lambda t: "SI" if normalize_usa_ticker_for_cedear_lookup(t) in cedear_set else "NO"
+    )
+    return result

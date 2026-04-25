@@ -21,6 +21,7 @@ export const SCORE_HELP = {
 
 export const COLUMNS_USA: ColumnDef[] = [
   { id: "ticker", header: "Ticker", keys: ["Ticker", "ticker"], minWidth: 92, nowrap: true, sortKind: "string" },
+  { id: "cedear", header: "CEDEAR", keys: ["CEDEAR", "cedear"], minWidth: 92, align: "center", nowrap: true, sortKind: "string" },
   { id: "empresa", header: "Empresa", keys: ["Empresa", "empresa"], minWidth: 160, sortKind: "string" },
   { id: "sector", header: "Sector", keys: ["Sector", "sector"], minWidth: 120, sortKind: "string" },
   { id: "precio", header: "Precio", keys: ["Precio", "precio"], minWidth: 84, align: "right", nowrap: true, sortKind: "number" },

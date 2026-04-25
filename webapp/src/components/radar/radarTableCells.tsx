@@ -47,6 +47,31 @@ export function renderCellInner(
   if (missing) {
     return text;
   }
+  if (c.id === "cedear") {
+    const v = text.trim().toUpperCase();
+    const si = v === "SI";
+    const tick = String((row as any).Ticker ?? (row as any).ticker ?? "").trim();
+    const href = tick ? `/cedears?ticker_usa=${encodeURIComponent(tick)}` : "/cedears";
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "0.25rem" }}>
+        {v ? (
+          <span className={si ? "radar-badge radar-badge--macd-yes" : "radar-badge radar-badge--macd-no"}>{v}</span>
+        ) : (
+          <span className="msg-muted">—</span>
+        )}
+        {si ? (
+          <a
+            className="radar-chip"
+            href={href}
+            title="Abrir módulo CEDEAR"
+            style={{ padding: "0.15rem 0.5rem", fontSize: "0.72rem", lineHeight: 1.2 }}
+          >
+            CEDEAR
+          </a>
+        ) : null}
+      </div>
+    );
+  }
   if (c.id === "trend") {
     return <span className={trendBadgeClass(text)}>{text}</span>;
   }

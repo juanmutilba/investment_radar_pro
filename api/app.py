@@ -19,6 +19,7 @@ from services.alert_event_log import read_alert_events
 from services.alerts_analysis import AlertsAnalysisRow, build_alerts_analysis
 from datetime import datetime, timezone
 
+from data.cedear_mapping import get_active_cedear_usa_tickers, normalize_usa_ticker_for_cedear_lookup
 from services.cedear_service import CedearRow, build_cedear_rows_from_latest_radar
 from services.cedear_scan_cache import (
     persist_cedear_snapshot_from_models,
@@ -157,7 +158,23 @@ def get_alert_history(limit: int = Query(default=500, ge=1, le=50_000)):
     """
     Historial append-only de alertas detectadas por scan (JSONL en disco).
     """
-    return read_alert_events(limit=limit)
+    events = read_alert_events(limit=limit)
+    if not events:
+        return events
+
+    cedear_set = get_active_cedear_usa_tickers()
+    for ev in events:
+        try:
+            mercado = str(ev.get("mercado") or "").strip().upper()
+        except Exception:
+            mercado = ""
+        if mercado != "USA":
+            ev["CEDEAR"] = None
+            continue
+        t = ev.get("ticker")
+        k = normalize_usa_ticker_for_cedear_lookup(t)
+        ev["CEDEAR"] = "SI" if k and k in cedear_set else "NO"
+    return events
 
 
 @app.get("/alerts-analysis", response_model=list[AlertsAnalysisRow])

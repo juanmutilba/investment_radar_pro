@@ -87,6 +87,10 @@ export function RadarMarketTablePage({
     const c = columns.find((x) => x.id === "tieneCedear");
     return c?.keys ?? ["TieneCedear", "tieneCedear"];
   }, [columns]);
+  const cedearFlagKeys = useMemo(() => {
+    const c = columns.find((x) => x.id === "cedear");
+    return c?.keys ?? ["CEDEAR", "cedear"];
+  }, [columns]);
 
   const renderKeys = useMemo<RenderCellKeys>(
     () => ({ totalKeys, rsiKeys }),
@@ -105,6 +109,7 @@ export function RadarMarketTablePage({
   const [sector, setSector] = useState<string>("");
   const [minTotalScore, setMinTotalScore] = useState<string>("");
   const [quickFilter, setQuickFilter] = useState<QuickFilterId | null>(null);
+  const [cedearFilter, setCedearFilter] = useState<"TODOS" | "SI" | "NO">("TODOS");
   const [sortCriteria, setSortCriteria] = useState<SortCriterion[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -156,6 +161,7 @@ export function RadarMarketTablePage({
       setMinTotalScore("");
       setSearch((initialSearch ?? "").trim());
       setQuickFilter(null);
+      setCedearFilter("TODOS");
       setSortCriteria([]);
       setUniverseValue("");
     }
@@ -173,6 +179,7 @@ export function RadarMarketTablePage({
     setUniverseValue("");
     setSector("");
     setMinTotalScore("");
+    setCedearFilter("TODOS");
     setSortCriteria([]);
   }, [initialSearch]);
 
@@ -189,6 +196,17 @@ export function RadarMarketTablePage({
           typeof r === "object" &&
           r !== null &&
           Object.prototype.hasOwnProperty.call(r, "TieneCedear"),
+      ),
+    [rows],
+  );
+
+  const radarHasCedearFlag = useMemo(
+    () =>
+      rows.some(
+        (r) =>
+          typeof r === "object" &&
+          r !== null &&
+          (Object.prototype.hasOwnProperty.call(r, "CEDEAR") || Object.prototype.hasOwnProperty.call(r, "cedear")),
       ),
     [rows],
   );
@@ -270,6 +288,28 @@ export function RadarMarketTablePage({
         return false;
       });
     }
+    if (cedearFilter !== "TODOS") {
+      out = out.filter((r) => {
+        const raw = radarHasCedearFlag ? getRaw(r, cedearFlagKeys) : null;
+        const v = String(raw ?? "").trim().toUpperCase();
+        if (radarHasCedearFlag) {
+          return cedearFilter === "SI" ? v === "SI" : v === "NO";
+        }
+        // Fallback (exports viejos): usar TieneCedear si existe.
+        if (!radarHasTieneCedear) {
+          return true;
+        }
+        const tc = getRaw(r, cedearKeys);
+        const has =
+          tc === true ||
+          tc === 1 ||
+          (typeof tc === "string" && (() => {
+            const s = tc.trim().toLowerCase();
+            return s === "true" || s === "1" || s === "sí" || s === "si";
+          })());
+        return cedearFilter === "SI" ? has : !has;
+      });
+    }
     return out;
   }, [
     rows,
@@ -289,6 +329,9 @@ export function RadarMarketTablePage({
     debtEbitdaKeys,
     cedearKeys,
     radarHasTieneCedear,
+    cedearFlagKeys,
+    radarHasCedearFlag,
+    cedearFilter,
     universe?.keys,
   ]);
 
@@ -517,11 +560,30 @@ export function RadarMarketTablePage({
                   Solo CEDEAR
                 </button>
               ) : null}
+              <div style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+                <span className="radar-toolbar__label" style={{ marginLeft: "0.25rem" }}>
+                  CEDEAR
+                </span>
+                <select
+                  className="radar-toolbar__select"
+                  value={cedearFilter}
+                  onChange={(ev) => setCedearFilter(ev.target.value as "TODOS" | "SI" | "NO")}
+                  style={{ paddingTop: "0.25rem", paddingBottom: "0.25rem" }}
+                  aria-label="Filtro CEDEAR"
+                >
+                  <option value="TODOS">Todos</option>
+                  <option value="SI">Con CEDEAR</option>
+                  <option value="NO">Sin CEDEAR</option>
+                </select>
+              </div>
               <button
                 type="button"
                 className="radar-chip radar-chip--ghost"
                 title="Quitar filtro rápido (no borra búsqueda ni sector)"
-                onClick={() => setQuickFilter(null)}
+                onClick={() => {
+                  setQuickFilter(null);
+                  setCedearFilter("TODOS");
+                }}
               >
                 Limpiar
               </button>
@@ -548,7 +610,7 @@ export function RadarMarketTablePage({
                       <th
                         key={c.id}
                         scope="col"
-                        style={{ width: w, minWidth: w, maxWidth: w }}
+                        style={{ width: w, minWidth: w, maxWidth: w, textAlign: c.align ?? "left" }}
                         className={
                           c.id === "ticker"
                             ? "radar-table__sticky-col radar-table__th radar-table__th--sticky-head"
@@ -557,7 +619,13 @@ export function RadarMarketTablePage({
                               : "radar-table__th radar-table__th--sticky-head"
                         }
                       >
-                        <div className="radar-table__th-inner">
+                        <div
+                          className="radar-table__th-inner"
+                          style={{
+                            justifyContent:
+                              c.align === "center" ? "center" : c.align === "right" ? "flex-end" : "flex-start",
+                          }}
+                        >
                           {sortable ? (
                             <button
                               type="button"

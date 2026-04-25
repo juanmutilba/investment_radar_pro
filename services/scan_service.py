@@ -8,6 +8,7 @@ from core.alerts_engine import collect_detected_alerts, generate_alerts
 from core.config import EXPORT_FOLDER, OUTPUT_EXCEL
 from core.history import find_previous_export, merge_history
 from core.signals import classify_priority
+from data.cedear_mapping import get_active_cedear_usa_tickers, normalize_usa_ticker_for_cedear_lookup
 from engines.argentina_engine import run_argentina_engine
 from engines.usa_engine import run_usa_engine
 from services.alert_event_log import append_scan_alert_events
@@ -74,6 +75,12 @@ def run_full_scan(*, verbose: bool = True) -> dict:
 
     usa_alerts = generate_alerts(usa_df)
     arg_alerts = generate_alerts(arg_df)
+
+    if usa_alerts is not None and not usa_alerts.empty:
+        cedear_set = get_active_cedear_usa_tickers()
+        usa_alerts["CEDEAR"] = usa_alerts["Ticker"].apply(
+            lambda t: "SI" if normalize_usa_ticker_for_cedear_lookup(t) in cedear_set else "NO"
+        )
 
     # Historial append-only: todas las alertas detectadas por fila en este scan (sin cooldown).
     usa_detected = collect_detected_alerts(usa_df)
@@ -150,6 +157,12 @@ def run_full_scan_timed(*, verbose: bool = True) -> tuple[dict, dict]:
     t0 = time.perf_counter()
     usa_alerts = generate_alerts(usa_df)
     arg_alerts = generate_alerts(arg_df)
+
+    if usa_alerts is not None and not usa_alerts.empty:
+        cedear_set = get_active_cedear_usa_tickers()
+        usa_alerts["CEDEAR"] = usa_alerts["Ticker"].apply(
+            lambda t: "SI" if normalize_usa_ticker_for_cedear_lookup(t) in cedear_set else "NO"
+        )
 
     usa_detected = collect_detected_alerts(usa_df)
     arg_detected = collect_detected_alerts(arg_df)

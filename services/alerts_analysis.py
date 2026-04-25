@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from data.cedear_mapping import get_active_cedear_usa_tickers, normalize_usa_ticker_for_cedear_lookup
 
 Tendencia = Literal["subiendo", "bajando", "plano"]
 DireccionRegimen = Literal["mejora", "deterioro", "sin_cambio"]
@@ -12,6 +13,10 @@ DireccionRegimen = Literal["mejora", "deterioro", "sin_cambio"]
 
 class AlertsAnalysisRow(BaseModel):
     ticker: str
+    CEDEAR: Literal["SI", "NO"] | None = Field(
+        None,
+        description="SI si el ticker (USA) tiene CEDEAR activo según el maestro; NO si no; null si no aplica.",
+    )
     score_actual: float = Field(..., description="Score del evento más reciente del ticker")
     tipo_actual: str | None = Field(None, description="tipo_alerta del evento más reciente del ticker")
     cantidad_eventos: int
@@ -154,6 +159,7 @@ def build_alerts_analysis(
         by_ticker.setdefault(t, []).append(ev)
 
     out: list[AlertsAnalysisRow] = []
+    cedear_set = get_active_cedear_usa_tickers()
 
     for ticker, rows in by_ticker.items():
         if not rows:
@@ -249,6 +255,7 @@ def build_alerts_analysis(
         out.append(
             AlertsAnalysisRow(
                 ticker=ticker,
+                CEDEAR=("SI" if normalize_usa_ticker_for_cedear_lookup(ticker) in cedear_set else "NO"),
                 score_actual=float(score_actual),
                 tipo_actual=tipo_actual,
                 cantidad_eventos=int(cantidad_eventos),

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { PortfolioRowTradeButtons } from "@/components/cartera/PortfolioRowTradeButtons";
 import { TickerRadarLink } from "@/components/navigation/radarLinks";
@@ -10,7 +11,6 @@ type SortDir = "asc" | "desc";
 type SortKey =
   | "ticker_usa"
   | "gap_pct"
-  | "TotalScore"
   | "precio_cedear_ars"
   | "precio_cedear_usd"
   | "ccl_implicito"
@@ -150,9 +150,6 @@ function sortRows(rows: CedearRow[], key: SortKey, dir: SortDir): CedearRow[] {
       case "gap_pct":
         c = compareNullableNum(ra.gap_pct, rb.gap_pct, sdir);
         break;
-      case "TotalScore":
-        c = compareNullableNum(ra.TotalScore, rb.TotalScore, sdir);
-        break;
       case "precio_cedear_ars":
         c = compareNullableNum(ra.precio_cedear_ars, rb.precio_cedear_ars, sdir);
         break;
@@ -181,36 +178,16 @@ function sortRows(rows: CedearRow[], key: SortKey, dir: SortDir): CedearRow[] {
   return copy;
 }
 
-function sortTopOportunidades(rows: CedearRow[]): CedearRow[] {
-  const copy = [...rows];
-  copy.sort((ra, rb) => {
-    const ga = ra.gap_pct!;
-    const gb = rb.gap_pct!;
-    if (ga !== gb) {
-      // ambos son number (filtro previo), gap asc = más negativo primero
-      return ga - gb;
-    }
-    const sa = ra.TotalScore!;
-    const sb = rb.TotalScore!;
-    if (sa !== sb) {
-      // ambos son number (filtro previo), TotalScore desc
-      return sb - sa;
-    }
-    return ra.ticker_usa.localeCompare(rb.ticker_usa, "en", { sensitivity: "base" });
-  });
-  return copy;
-}
-
 export function CedearsPage() {
   const [rows, setRows] = useState<CedearRow[] | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [minScore, setMinScore] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("gap_pct");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const [top10Open, setTop10Open] = useState(false);
+  const [searchParams] = useSearchParams();
+  const tickerFilter = searchParams.get("ticker_usa")?.trim().toUpperCase() || "";
 
   const applyCedearsResult = useCallback((r: Awaited<ReturnType<typeof fetchCedears>>) => {
     if (r.kind === "no_export") {
@@ -262,6 +239,9 @@ export function CedearsPage() {
   const filtered = useMemo(() => {
     const list = rows ?? [];
     let out = list;
+    if (tickerFilter) {
+      out = out.filter((r) => String(r.ticker_usa ?? "").trim().toUpperCase() === tickerFilter);
+    }
     const q = search.trim().toLowerCase();
     if (q) {
       out = out.filter((r) => {
@@ -276,24 +256,13 @@ export function CedearsPage() {
         return hay.includes(q);
       });
     }
-    const minRaw = minScore.trim();
-    if (minRaw !== "" && Number.isFinite(Number(minRaw))) {
-      const m = Number(minRaw);
-      out = out.filter((r) => r.TotalScore !== null && r.TotalScore >= m);
-    }
     return out;
-  }, [rows, search, minScore]);
-
-  const top10 = useMemo(() => {
-    const base = rows ?? [];
-    return sortTopOportunidades(base.filter((r) => r.gap_pct !== null && r.gap_pct < 0 && r.TotalScore !== null)).slice(0, 10);
-  }, [rows]);
+  }, [rows, search, tickerFilter]);
 
   const displayRows = useMemo(() => sortRows(filtered, sortKey, sortDir), [filtered, sortKey, sortDir]);
 
   const loading = rows === undefined && error === null;
-  const filtersActive =
-    search.trim() !== "" || (minScore.trim() !== "" && Number.isFinite(Number(minScore.trim())));
+  const filtersActive = search.trim() !== "";
 
   const headerBtnStyle: React.CSSProperties = {
     background: "none",
@@ -325,6 +294,11 @@ export function CedearsPage() {
   return (
     <>
       <h1 className="page-title">CEDEARs</h1>
+      {tickerFilter ? (
+        <div className="msg-muted" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+          Mostrando CEDEAR de <strong>{tickerFilter}</strong>
+        </div>
+      ) : null}
       <p className="msg-muted" style={{ marginTop: 0, marginBottom: "1rem", maxWidth: "48rem" }}>
         Equivalencias locales sobre el último radar USA: CCL implícito (precio en pesos / precio en
         dólares del CEDEAR), precio implícito en USD y gap frente al precio USA del export. Scores y
@@ -373,66 +347,6 @@ export function CedearsPage() {
 
       {!loading && !error && rows !== null && rows !== undefined && rows.length > 0 && (
         <div className="card" style={{ marginBottom: "1rem" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
-            <h2 style={{ marginTop: 0, marginBottom: 0 }}>Top 10 oportunidades CEDEAR</h2>
-            <button
-              type="button"
-              className="radar-refresh-btn"
-              onClick={() => setTop10Open((v) => !v)}
-              aria-expanded={top10Open}
-            >
-              {top10Open ? "Contraer" : "Expandir"}
-            </button>
-          </div>
-          {top10Open ? (
-            top10.length > 0 ? (
-              <div className="radar-table-wrap" style={{ marginTop: "0.75rem" }}>
-                <table className="radar-table">
-                  <thead>
-                    <tr>
-                      <th scope="col" className="radar-table__th radar-table__th--sticky-head">
-                        <span className="radar-table__sort-label radar-table__sort-label--static">USA</span>
-                      </th>
-                      <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                        <span className="radar-table__sort-label radar-table__sort-label--static" title={GAP_TOOLTIP}>
-                          Gap %
-                        </span>
-                      </th>
-                      <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                        <span className="radar-table__sort-label radar-table__sort-label--static">TotalScore</span>
-                      </th>
-                      <th scope="col" className="radar-table__th radar-table__th--sticky-head">
-                        <span className="radar-table__sort-label radar-table__sort-label--static">SignalState</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {top10.map((r) => (
-                      <tr key={r.ticker_usa}>
-                        <td className="radar-table__sticky-col table-cell--nowrap">
-                          <TickerRadarLink ticker={r.ticker_usa} mercado="USA" />
-                        </td>
-                        <td style={{ textAlign: "right" }} className={`table-cell--nowrap ${gapPctCellClass(r.gap_pct)}`}>
-                          {fmtPct(r.gap_pct)}
-                        </td>
-                        <td style={{ textAlign: "right" }}>{fmtFixed(r.TotalScore, 1)}</td>
-                        <td className="table-cell--nowrap">{r.SignalState?.trim() ? r.SignalState : EMPTY}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="msg-muted" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
-                En este export no hay filas con gap % negativo y TotalScore definido; el ranking se aplicará cuando existan.
-              </p>
-            )
-          ) : null}
-        </div>
-      )}
-
-      {!loading && !error && rows !== null && rows !== undefined && rows.length > 0 && (
-        <div className="card" style={{ marginBottom: "1rem" }}>
           <div className="radar-toolbar" aria-label="Filtros CEDEAR">
             <label className="radar-toolbar__field">
               <span className="radar-toolbar__label">Buscar ticker</span>
@@ -443,17 +357,6 @@ export function CedearsPage() {
                 value={search}
                 onChange={(ev) => setSearch(ev.target.value)}
                 autoComplete="off"
-              />
-            </label>
-            <label className="radar-toolbar__field">
-              <span className="radar-toolbar__label">TotalScore mín.</span>
-              <input
-                type="number"
-                className="radar-toolbar__input radar-toolbar__input--narrow"
-                placeholder="Ej. 5"
-                value={minScore}
-                onChange={(ev) => setMinScore(ev.target.value)}
-                step="any"
               />
             </label>
             <p className="radar-toolbar__hint msg-muted">
@@ -548,20 +451,6 @@ export function CedearsPage() {
                       Gap %{sortIndicator("gap_pct")}
                     </button>
                   </th>
-                  <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "right" }}>
-                    <button
-                      type="button"
-                      style={{ ...headerBtnStyle, width: "100%" }}
-                      className="radar-table__sort-label radar-table__sort-label--static"
-                      onClick={() => toggleSort("TotalScore", "desc")}
-                      title="Ordenar por TotalScore"
-                    >
-                      TotalScore{sortIndicator("TotalScore")}
-                    </button>
-                  </th>
-                  <th scope="col" className="radar-table__th radar-table__th--sticky-head">
-                    <span className="radar-table__sort-label radar-table__sort-label--static">SignalState</span>
-                  </th>
                   <th scope="col" className="radar-table__th radar-table__th--sticky-head" style={{ textAlign: "center" }}>
                     <span
                       className="radar-table__sort-label radar-table__sort-label--static"
@@ -625,12 +514,6 @@ export function CedearsPage() {
                     </td>
                     <td style={{ textAlign: "right" }} className={`table-cell--nowrap ${gapPctCellClass(r.gap_pct)}`}>
                       {fmtPct(r.gap_pct)}
-                    </td>
-                    <td style={{ textAlign: "right" }} className={r.TotalScore === null ? "table-cell--empty" : ""}>
-                      {fmtFixed(r.TotalScore, 1)}
-                    </td>
-                    <td className="table-cell--nowrap">
-                      {r.SignalState?.trim() ? r.SignalState : EMPTY}
                     </td>
                     <td style={{ textAlign: "center" }} className="table-cell--nowrap" title={r.mod_usa === "SI" ? "Radar USA" : "Precio spot (no en radar)"}>
                       {r.mod_usa}
