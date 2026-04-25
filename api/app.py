@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
@@ -35,6 +36,14 @@ import time
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    try:
+        from services.market_data.providers.iol import configure_iol_credentials
+
+        iol_user = os.getenv("IOL_USERNAME", "").strip()
+        iol_pass = os.getenv("IOL_PASSWORD", "").strip()
+        configure_iol_credentials(iol_user, iol_pass)
+    except Exception:
+        pass
     init_database()
     yield
 

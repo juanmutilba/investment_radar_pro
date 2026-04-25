@@ -469,6 +469,7 @@ def _try_local_iol_price(symbol: str, stats: dict[str, int]) -> tuple[float | No
 
         ram = read_iol_quote_ram_only(iol_sym)
         if ram == "negative":
+            print("[IOL_NEGATIVE_CACHE] symbol_raw=%s iol_symbol=%s" % (sym, iol_sym))
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
             return None, True, False
         if ram is not None:
@@ -947,6 +948,7 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     acc_row_other_ms = 0.0
     usa_matches = 0
     usa_misses = 0
+    ccl_debug_count = 0
 
     for m in CEDEAR_MAPPINGS:
         if not m.activo:
@@ -1057,6 +1059,31 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         ccl_impl: float | None = None
         if p_ars is not None and p_ccl is not None and p_ccl > 0:
             ccl_impl = round(p_ars / p_ccl, 6)
+
+        # TEMP LOG (safe): limitar a los primeros 20 CEDEAR activos
+        if ccl_debug_count < 20:
+            if p_ars is None:
+                reason = "missing_ars"
+            elif p_ccl is None:
+                reason = "missing_usd_line"
+            elif p_ccl <= 0:
+                reason = "usd_line_nonpositive"
+            else:
+                reason = "ok"
+            print(
+                "[CEDEAR_CCL_DEBUG] ticker_usa=%s ars_symbol=%s usd_symbol=%s precio_ars=%r precio_usd=%r ccl=%r fuente=%s reason=%s"
+                % (
+                    ticker_usa_disp,
+                    sym_ars,
+                    sym_ccl,
+                    p_ars,
+                    p_ccl,
+                    ccl_impl,
+                    fuente_cedear,
+                    reason,
+                )
+            )
+            ccl_debug_count += 1
 
         precio_impl: float | None = None
         if p_ccl is not None and cedears_por > 0:

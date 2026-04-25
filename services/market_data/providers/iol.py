@@ -8,6 +8,9 @@ from typing import Any, Literal
 import requests
 
 from services.market_data.types import PriceQuote
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 IOL_API_BASE = "https://api.invertironline.com"
@@ -58,12 +61,28 @@ def configure_iol_credentials(username: str, password: str) -> None:
         _token_expires_at_monotonic = 0.0
         _iol_quote_cache.clear()
         _iol_quote_negative_cache.clear()
+        logger.info(
+            "[IOL_CONFIG] enabled=%s username_present=%s password_present=%s client_id_present=%s client_secret_present=%s",
+            is_iol_enabled(),
+            bool(u),
+            bool(p),
+            False,
+            False,
+        )
         return
     _creds = _IolCreds(username=u, password=p)
     _token = None
     _token_expires_at_monotonic = 0.0
     _iol_quote_cache.clear()
     _iol_quote_negative_cache.clear()
+    logger.info(
+        "[IOL_CONFIG] enabled=%s username_present=%s password_present=%s client_id_present=%s client_secret_present=%s",
+        is_iol_enabled(),
+        bool(u),
+        bool(p),
+        False,
+        False,
+    )
 
 
 def is_iol_enabled() -> bool:
@@ -184,6 +203,7 @@ def get_iol_quote(ticker: str) -> PriceQuote | None:
         headers = {"Authorization": f"Bearer {tok}"}
         r = requests.get(url, headers=headers, timeout=3)
         if not r.ok:
+            print("[IOL_QUOTE_MISS] ticker=%s http_status=%s" % (t, getattr(r, "status_code", None)))
             _iol_quote_negative_cache.add(t)
             return None
         obj: Any = r.json()
