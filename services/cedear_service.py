@@ -11,7 +11,7 @@ from typing import Any, Literal
 import yfinance as yf
 from pydantic import BaseModel, ConfigDict, Field
 
-from data.cedear_mapping import CEDEAR_MAPPINGS
+from data.cedear_mapping import CEDEAR_MAPPINGS, CedearMapping
 from services import latest_export
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,24 @@ _RATIO_STALE_DAYS = 180
 
 # Máximo de consultas HTTP IOL por build CEDEAR (ARS/CCL); el resto va directo a Yahoo / None.
 IOL_MAX_CALLS = 300
+
+# TEMP: diagnóstico IOL (primeros N intentos por build); quitar cuando cierre el incidente.
+_IOL_PATH_DEBUG_PRINTS_MAX = 20
+_iol_path_debug_prints: int = 0
+
+
+def _iol_path_debug_reset() -> None:
+    global _iol_path_debug_prints
+    _iol_path_debug_prints = 0
+
+
+def _iol_path_debug_emit(raw: str, iol_sym: str, *, action: str) -> None:
+    global _iol_path_debug_prints
+    if _iol_path_debug_prints >= _IOL_PATH_DEBUG_PRINTS_MAX:
+        return
+    _iol_path_debug_prints += 1
+    print("[IOL_PATH_DEBUG] raw=%r iol_sym=%r action=%s" % (raw, iol_sym, action), flush=True)
+
 
 # Fallback get_usa_price/Yahoo en CEDEAR: tickers USA que no resuelven y solo suman latencia.
 _USA_PRICE_KNOWN_BAD: frozenset[str] = frozenset({"AUY", "DISN", "MMC"})
@@ -448,21 +466,26 @@ def _try_local_iol_price(symbol: str, stats: dict[str, int]) -> tuple[float | No
     Intenta precio local (ARS/CCL) vía IOL. Retorna (precio, allow_yahoo_fallback, from_iol).
 
     ``from_iol`` es True solo si ``precio`` no es None y proviene de IOL (RAM o red).
-    ``allow_yahoo_fallback`` es False solo cuando IOL está habilitado pero se omitió la red
-    por ``IOL_MAX_CALLS`` (no disparar Yahoo masivo en ese caso). Si IOL está deshabilitado,
-    hubo miss rápido (caché negativa, etc.) o error, es True para conservar IOL → Yahoo → None.
+    ``allow_yahoo_fallback`` es False si se omitió la red por ``IOL_MAX_CALLS``, o si IOL
+    dejó el símbolo en caché negativa (404 / sin precio conocido): no insistir con Yahoo local.
+    En otros fallos (IOL deshabilitado, token, caché RAM inválida, excepción local), se mantiene
+    True para conservar IOL → Yahoo → None donde aplique.
     """
     sym = (symbol or "").strip()
     if not sym:
+        _iol_path_debug_emit("", "", action="empty_symbol")
         return None, True, False
     try:
         from services.market_data.providers.iol import get_iol_quote, is_iol_enabled, read_iol_quote_ram_only
 
         if not is_iol_enabled():
+            iol_sym0 = _normalize_iol_ticker(sym)
+            _iol_path_debug_emit(sym, iol_sym0, action="disabled")
             return None, True, False
         iol_sym = _normalize_iol_ticker(sym)
         if not iol_sym:
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+            _iol_path_debug_emit(sym, "", action="empty_symbol")
             return None, True, False
         if iol_sym != sym.strip().upper():
             stats["local_iol_normalized_symbols"] = int(stats.get("local_iol_normalized_symbols", 0)) + 1
@@ -471,57 +494,294 @@ def _try_local_iol_price(symbol: str, stats: dict[str, int]) -> tuple[float | No
         if ram == "negative":
             print("[IOL_NEGATIVE_CACHE] symbol_raw=%s iol_symbol=%s" % (sym, iol_sym))
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True, False
+            _iol_path_debug_emit(sym, iol_sym, action="ram_negative")
+            return None, False, False
         if ram is not None:
             q = ram
             if not getattr(q, "is_valid", False):
                 stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+                _iol_path_debug_emit(sym, iol_sym, action="http_none")
                 return None, True, False
             if getattr(q, "source", None) != "iol":
                 stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+                _iol_path_debug_emit(sym, iol_sym, action="http_none")
                 return None, True, False
             v = q.value
             if v is None:
                 stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+                _iol_path_debug_emit(sym, iol_sym, action="http_none")
                 return None, True, False
             try:
                 x = float(v)
             except (TypeError, ValueError):
                 stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+                _iol_path_debug_emit(sym, iol_sym, action="http_none")
                 return None, True, False
             if x != x or x <= 0:
                 stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
+                _iol_path_debug_emit(sym, iol_sym, action="http_none")
                 return None, True, False
             stats["local_iol_hits"] = int(stats.get("local_iol_hits", 0)) + 1
+            _iol_path_debug_emit(sym, iol_sym, action="ram_positive")
             return round(x, 6), False, True
 
         if int(stats.get("local_iol_calls", 0)) >= IOL_MAX_CALLS:
             stats["local_iol_skipped_by_limit"] = int(stats.get("local_iol_skipped_by_limit", 0)) + 1
+            _iol_path_debug_emit(sym, iol_sym, action="limit_skip")
             return None, False, False
+        _iol_path_debug_emit(sym, iol_sym, action="http_call")
         stats["local_iol_calls"] = int(stats.get("local_iol_calls", 0)) + 1
         q = get_iol_quote(iol_sym)
+
+        def _allow_yahoo_after_iol_miss() -> bool:
+            return read_iol_quote_ram_only(iol_sym) != "negative"
+
         if q is None or not getattr(q, "is_valid", False):
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True, False
+            _iol_path_debug_emit(sym, iol_sym, action="http_none")
+            return None, _allow_yahoo_after_iol_miss(), False
         if getattr(q, "source", None) != "iol":
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True, False
+            _iol_path_debug_emit(sym, iol_sym, action="http_none")
+            return None, _allow_yahoo_after_iol_miss(), False
         v = q.value
         if v is None:
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True, False
+            _iol_path_debug_emit(sym, iol_sym, action="http_none")
+            return None, _allow_yahoo_after_iol_miss(), False
         try:
             x = float(v)
         except (TypeError, ValueError):
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True, False
+            _iol_path_debug_emit(sym, iol_sym, action="http_none")
+            return None, _allow_yahoo_after_iol_miss(), False
         if x != x or x <= 0:
             stats["local_iol_misses"] = int(stats.get("local_iol_misses", 0)) + 1
-            return None, True, False
+            _iol_path_debug_emit(sym, iol_sym, action="http_none")
+            return None, _allow_yahoo_after_iol_miss(), False
         stats["local_iol_hits"] = int(stats.get("local_iol_hits", 0)) + 1
+        _iol_path_debug_emit(sym, iol_sym, action="http_ok")
         return round(x, 6), False, True
     except Exception:
+        try:
+            iol_sym_e = _normalize_iol_ticker(sym)
+        except Exception:
+            iol_sym_e = ""
+        _iol_path_debug_emit(sym, iol_sym_e, action="exception")
         return None, True, False
+
+
+def _build_single_cedear_row(
+    m: CedearMapping,
+    *,
+    by_ticker: dict[str, dict[str, Any]],
+    yahoo_stats: dict[str, int],
+    yahoo_cache: dict[str, float | None],
+    usa_price_cache: dict[str, float | None],
+    yahoo_negative_local: set[str],
+    ccl_debug_count_holder: list[int],
+) -> tuple[CedearRow, float, float, float, float, int, int]:
+    """
+    Una fila CEDEAR activa. Devuelve
+    (row, usa_price_ms, local_iol_ms, loc_yahoo_ms, row_total_ms, usa_matches_inc, usa_misses_inc).
+    """
+    t_row0 = time.perf_counter()
+    ticker_usa_disp = m.ticker_usa.strip().upper()
+    usa_key = _norm_usa_ticker(m.ticker_usa)
+    row = by_ticker.get(usa_key) if usa_key is not None else None
+    if row is not None:
+        usa_matches_inc = 1
+        usa_misses_inc = 0
+        usa_radar_match = True
+        ticker_usa_lookup = usa_key
+        usa_radar_match_reason: str | None = None
+    else:
+        usa_matches_inc = 0
+        usa_misses_inc = 1
+        usa_radar_match = False
+        ticker_usa_lookup = usa_key
+        usa_radar_match_reason = "no_match_in_radar"
+    if row is not None:
+        total_score = _cedear_radar_total_score(row)
+        if total_score is not None:
+            yahoo_stats["usa_enrichment_hits_total_score"] = int(
+                yahoo_stats.get("usa_enrichment_hits_total_score", 0)
+            ) + 1
+        signal_state = _cedear_radar_signal_state(row)
+        if signal_state is not None:
+            yahoo_stats["usa_enrichment_hits_signal_state"] = int(
+                yahoo_stats.get("usa_enrichment_hits_signal_state", 0)
+            ) + 1
+        mod_usa: ModUsa = "SI"
+    else:
+        total_score = None
+        signal_state = None
+        mod_usa = "NO"
+
+    t_usa0 = time.perf_counter()
+    precio_usa: float | None = None
+    if row is not None:
+        pr_usa = _usa_price_from_radar_row(row)
+        if pr_usa is not None:
+            yahoo_stats["usa_price_from_radar_hits"] = int(yahoo_stats.get("usa_price_from_radar_hits", 0)) + 1
+            precio_usa = pr_usa
+            if usa_key is not None:
+                usa_price_cache[usa_key] = pr_usa
+    if precio_usa is None:
+        if ticker_usa_disp in _USA_PRICE_KNOWN_BAD:
+            yahoo_stats["usa_price_fallback_known_bad_skips"] = int(
+                yahoo_stats.get("usa_price_fallback_known_bad_skips", 0)
+            ) + 1
+        else:
+            yahoo_stats["usa_price_fallback_calls"] = int(yahoo_stats.get("usa_price_fallback_calls", 0)) + 1
+            precio_usa = _usa_price_spot_cached(
+                usa_key if usa_key is not None else ticker_usa_disp,
+                usa_price_cache,
+                yahoo_stats,
+            )
+            if precio_usa is None:
+                yahoo_stats["usa_price_fallback_failures"] = int(
+                    yahoo_stats.get("usa_price_fallback_failures", 0)
+                ) + 1
+    t_usa1 = time.perf_counter()
+    usa_price_ms = (t_usa1 - t_usa0) * 1000.0
+
+    sym_ars = m.ticker_cedear_ars.strip()
+    sym_ccl = m.ticker_cedear_ccl.strip()
+    loc_yahoo_ms_spent = 0.0
+    acc_iol_row_ms = 0.0
+
+    t_iol0 = time.perf_counter()
+    p_ars, yahoo_ok_ars, ars_from_iol = _try_local_iol_price(sym_ars, yahoo_stats)
+    t_iol1 = time.perf_counter()
+    acc_iol_row_ms += (t_iol1 - t_iol0) * 1000.0
+    if p_ars is None and yahoo_ok_ars:
+        yahoo_stats["local_yahoo_fallback_calls"] += 1
+        t_loc0 = time.perf_counter()
+        p_ars = _yahoo_spot_cached_local_fallback(sym_ars, yahoo_cache, yahoo_stats, yahoo_negative_local)
+        t_loc1 = time.perf_counter()
+        loc_yahoo_ms_spent += (t_loc1 - t_loc0) * 1000.0
+        ars_from_iol = False
+    elif p_ars is None and not yahoo_ok_ars:
+        yahoo_stats["local_yahoo_skipped_due_iol_limit"] = int(
+            yahoo_stats.get("local_yahoo_skipped_due_iol_limit", 0)
+        ) + 1
+
+    t_iol0 = time.perf_counter()
+    p_ccl, yahoo_ok_ccl, ccl_from_iol = _try_local_iol_price(sym_ccl, yahoo_stats)
+    t_iol1 = time.perf_counter()
+    acc_iol_row_ms += (t_iol1 - t_iol0) * 1000.0
+    if p_ccl is None and yahoo_ok_ccl:
+        yahoo_stats["local_yahoo_fallback_calls"] += 1
+        t_loc0 = time.perf_counter()
+        p_ccl = _yahoo_spot_cached_local_fallback(sym_ccl, yahoo_cache, yahoo_stats, yahoo_negative_local)
+        t_loc1 = time.perf_counter()
+        loc_yahoo_ms_spent += (t_loc1 - t_loc0) * 1000.0
+        ccl_from_iol = False
+    elif p_ccl is None and not yahoo_ok_ccl:
+        yahoo_stats["local_yahoo_skipped_due_iol_limit"] = int(
+            yahoo_stats.get("local_yahoo_skipped_due_iol_limit", 0)
+        ) + 1
+
+    fuente_cedear: FuenteCedearLocal = _fuente_cedear_local(p_ars, p_ccl, ars_from_iol, ccl_from_iol)
+    if p_ccl is None:
+        fuente_cedear = "IOL (sin CCL)"
+
+    cedears_por = float(m.cedears_por_accion_usa)
+    _cedear_debug_line(ticker_usa_disp, sym_ars, sym_ccl, cedears_por, p_ars, p_ccl)
+
+    ccl_impl: float | None = None
+    if p_ars is not None and p_ccl is not None and p_ccl > 0:
+        ccl_impl = round(p_ars / p_ccl, 6)
+
+    ccl_debug_count = ccl_debug_count_holder[0]
+    if ccl_debug_count < 20:
+        if p_ars is None:
+            reason = "missing_ars"
+        elif p_ccl is None:
+            reason = "missing_usd_line"
+        elif p_ccl <= 0:
+            reason = "usd_line_nonpositive"
+        else:
+            reason = "ok"
+        print(
+            "[CEDEAR_CCL_DEBUG] ticker_usa=%s ars_symbol=%s usd_symbol=%s precio_ars=%r precio_usd=%r ccl=%r fuente=%s reason=%s"
+            % (
+                ticker_usa_disp,
+                sym_ars,
+                sym_ccl,
+                p_ars,
+                p_ccl,
+                ccl_impl,
+                fuente_cedear,
+                reason,
+            )
+        )
+        ccl_debug_count_holder[0] = ccl_debug_count + 1
+
+    precio_impl: float | None = None
+    if p_ccl is not None and p_ccl > 0 and cedears_por > 0:
+        precio_impl = round(p_ccl * cedears_por, 6)
+
+    gap: float | None = None
+    if precio_impl is not None and precio_usa is not None and precio_usa > 0:
+        gap = round((precio_impl / precio_usa - 1.0) * 100.0, 4)
+
+    _cedear_audit_log(
+        ticker_usa=ticker_usa_disp,
+        sym_ars=sym_ars,
+        sym_ccl=sym_ccl,
+        usa_hit=row is not None,
+        mod_usa=mod_usa,
+        p_ars=p_ars,
+        p_ccl=p_ccl,
+        ccl_impl=ccl_impl,
+        precio_impl=precio_impl,
+        precio_usa=precio_usa,
+        ratio=cedears_por,
+    )
+
+    estado_r, dias_val = _derive_ratio_audit(m.fecha_validacion_ratio)
+
+    cob_msg = _cobertura_usa_mensaje(row, precio_usa)
+    loc_msg = _pricing_cedear_local_mensaje(p_ars, p_ccl, ccl_impl, precio_impl)
+
+    built = CedearRow(
+        ticker_usa=ticker_usa_disp,
+        ticker_cedear_ars=sym_ars,
+        ticker_cedear_usd=sym_ccl,
+        ratio=cedears_por,
+        fuente_ratio=m.fuente_ratio,
+        fecha_validacion_ratio=m.fecha_validacion_ratio,
+        estado_ratio=estado_r,
+        dias_desde_validacion=dias_val,
+        precio_cedear_ars=p_ars,
+        precio_cedear_usd=p_ccl,
+        ccl_implicito=ccl_impl,
+        precio_usa_real=precio_usa,
+        precio_implicito_usd=precio_impl,
+        gap_pct=gap,
+        total_score=total_score,
+        signal_state=signal_state,
+        mod_usa=mod_usa,
+        usa_radar_match=usa_radar_match,
+        ticker_usa_lookup=ticker_usa_lookup,
+        usa_radar_match_reason=usa_radar_match_reason,
+        fuente_cedear=fuente_cedear,
+        cobertura_usa_mensaje=cob_msg,
+        pricing_cedear_local_mensaje=loc_msg,
+    )
+    t_row1 = time.perf_counter()
+    row_total_ms = (t_row1 - t_row0) * 1000.0
+    return (
+        built,
+        usa_price_ms,
+        acc_iol_row_ms,
+        loc_yahoo_ms_spent,
+        row_total_ms,
+        usa_matches_inc,
+        usa_misses_inc,
+    )
 
 
 def _usa_price_spot_cached(ticker_usa: str, cache: dict[str, float | None], stats: dict[str, int]) -> float | None:
@@ -819,6 +1079,7 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         clear_iol_negative_cache()
     except Exception:
         pass
+    _iol_path_debug_reset()
     yahoo_stats: dict[str, int] = {
         "yahoo_queries": 0,
         "yahoo_cache_hits": 0,
@@ -949,201 +1210,27 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     acc_row_other_ms = 0.0
     usa_matches = 0
     usa_misses = 0
-    ccl_debug_count = 0
+    ccl_debug_count_holder = [0]
 
     for m in CEDEAR_MAPPINGS:
         if not m.activo:
             continue
-        t_row0 = time.perf_counter()
-        ticker_usa_disp = m.ticker_usa.strip().upper()
-        usa_key = _norm_usa_ticker(m.ticker_usa)
-        row = by_ticker.get(usa_key) if usa_key is not None else None
-        if row is not None:
-            usa_matches += 1
-            usa_radar_match = True
-            ticker_usa_lookup = usa_key
-            usa_radar_match_reason: str | None = None
-        else:
-            usa_misses += 1
-            usa_radar_match = False
-            ticker_usa_lookup = usa_key
-            usa_radar_match_reason = "no_match_in_radar"
-        if row is not None:
-            total_score = _cedear_radar_total_score(row)
-            if total_score is not None:
-                yahoo_stats["usa_enrichment_hits_total_score"] = int(
-                    yahoo_stats.get("usa_enrichment_hits_total_score", 0)
-                ) + 1
-            signal_state = _cedear_radar_signal_state(row)
-            if signal_state is not None:
-                yahoo_stats["usa_enrichment_hits_signal_state"] = int(
-                    yahoo_stats.get("usa_enrichment_hits_signal_state", 0)
-                ) + 1
-            mod_usa: ModUsa = "SI"
-        else:
-            total_score = None
-            signal_state = None
-            mod_usa = "NO"
-
-        t_usa0 = time.perf_counter()
-        precio_usa: float | None = None
-        if row is not None:
-            pr_usa = _usa_price_from_radar_row(row)
-            if pr_usa is not None:
-                yahoo_stats["usa_price_from_radar_hits"] = int(yahoo_stats.get("usa_price_from_radar_hits", 0)) + 1
-                precio_usa = pr_usa
-                if usa_key is not None:
-                    usa_price_cache[usa_key] = pr_usa
-        if precio_usa is None:
-            if ticker_usa_disp in _USA_PRICE_KNOWN_BAD:
-                yahoo_stats["usa_price_fallback_known_bad_skips"] = int(
-                    yahoo_stats.get("usa_price_fallback_known_bad_skips", 0)
-                ) + 1
-            else:
-                yahoo_stats["usa_price_fallback_calls"] = int(yahoo_stats.get("usa_price_fallback_calls", 0)) + 1
-                precio_usa = _usa_price_spot_cached(
-                    usa_key if usa_key is not None else ticker_usa_disp,
-                    usa_price_cache,
-                    yahoo_stats,
-                )
-                if precio_usa is None:
-                    yahoo_stats["usa_price_fallback_failures"] = int(
-                        yahoo_stats.get("usa_price_fallback_failures", 0)
-                    ) + 1
-        t_usa1 = time.perf_counter()
-        acc_usa_price_ms += (t_usa1 - t_usa0) * 1000.0
-
-        sym_ars = m.ticker_cedear_ars.strip()
-        sym_ccl = m.ticker_cedear_ccl.strip()
-        loc_yahoo_ms_spent = 0.0
-
-        # Precios locales: IOL primero; Yahoo solo si allow_yahoo (no tras omitir IOL por cuota).
-        t_iol0 = time.perf_counter()
-        p_ars, yahoo_ok_ars, ars_from_iol = _try_local_iol_price(sym_ars, yahoo_stats)
-        t_iol1 = time.perf_counter()
-        acc_local_iol_ms += (t_iol1 - t_iol0) * 1000.0
-        if p_ars is None and yahoo_ok_ars:
-            yahoo_stats["local_yahoo_fallback_calls"] += 1
-            t_loc0 = time.perf_counter()
-            p_ars = _yahoo_spot_cached_local_fallback(sym_ars, yahoo_cache, yahoo_stats, yahoo_negative_local)
-            t_loc1 = time.perf_counter()
-            loc_yahoo_ms_spent += (t_loc1 - t_loc0) * 1000.0
-            ars_from_iol = False
-        elif p_ars is None and not yahoo_ok_ars:
-            yahoo_stats["local_yahoo_skipped_due_iol_limit"] = int(
-                yahoo_stats.get("local_yahoo_skipped_due_iol_limit", 0)
-            ) + 1
-
-        t_iol0 = time.perf_counter()
-        p_ccl, yahoo_ok_ccl, ccl_from_iol = _try_local_iol_price(sym_ccl, yahoo_stats)
-        t_iol1 = time.perf_counter()
-        acc_local_iol_ms += (t_iol1 - t_iol0) * 1000.0
-        if p_ccl is None and yahoo_ok_ccl:
-            yahoo_stats["local_yahoo_fallback_calls"] += 1
-            t_loc0 = time.perf_counter()
-            p_ccl = _yahoo_spot_cached_local_fallback(sym_ccl, yahoo_cache, yahoo_stats, yahoo_negative_local)
-            t_loc1 = time.perf_counter()
-            loc_yahoo_ms_spent += (t_loc1 - t_loc0) * 1000.0
-            ccl_from_iol = False
-        elif p_ccl is None and not yahoo_ok_ccl:
-            yahoo_stats["local_yahoo_skipped_due_iol_limit"] = int(
-                yahoo_stats.get("local_yahoo_skipped_due_iol_limit", 0)
-            ) + 1
-
-        acc_local_yahoo_ms += loc_yahoo_ms_spent
-
-        fuente_cedear: FuenteCedearLocal = _fuente_cedear_local(p_ars, p_ccl, ars_from_iol, ccl_from_iol)
-        if p_ccl is None:
-            fuente_cedear = "IOL (sin CCL)"
-
-        cedears_por = float(m.cedears_por_accion_usa)
-        _cedear_debug_line(ticker_usa_disp, sym_ars, sym_ccl, cedears_por, p_ars, p_ccl)
-
-        ccl_impl: float | None = None
-        if p_ars is not None and p_ccl is not None and p_ccl > 0:
-            ccl_impl = round(p_ars / p_ccl, 6)
-
-        # TEMP LOG (safe): limitar a los primeros 20 CEDEAR activos
-        if ccl_debug_count < 20:
-            if p_ars is None:
-                reason = "missing_ars"
-            elif p_ccl is None:
-                reason = "missing_usd_line"
-            elif p_ccl <= 0:
-                reason = "usd_line_nonpositive"
-            else:
-                reason = "ok"
-            print(
-                "[CEDEAR_CCL_DEBUG] ticker_usa=%s ars_symbol=%s usd_symbol=%s precio_ars=%r precio_usd=%r ccl=%r fuente=%s reason=%s"
-                % (
-                    ticker_usa_disp,
-                    sym_ars,
-                    sym_ccl,
-                    p_ars,
-                    p_ccl,
-                    ccl_impl,
-                    fuente_cedear,
-                    reason,
-                )
-            )
-            ccl_debug_count += 1
-
-        precio_impl: float | None = None
-        if p_ccl is not None and p_ccl > 0 and cedears_por > 0:
-            precio_impl = round(p_ccl * cedears_por, 6)
-
-        gap: float | None = None
-        if precio_impl is not None and precio_usa is not None and precio_usa > 0:
-            gap = round((precio_impl / precio_usa - 1.0) * 100.0, 4)
-
-        _cedear_audit_log(
-            ticker_usa=ticker_usa_disp,
-            sym_ars=sym_ars,
-            sym_ccl=sym_ccl,
-            usa_hit=row is not None,
-            mod_usa=mod_usa,
-            p_ars=p_ars,
-            p_ccl=p_ccl,
-            ccl_impl=ccl_impl,
-            precio_impl=precio_impl,
-            precio_usa=precio_usa,
-            ratio=cedears_por,
+        built, usa_m, iol_m, ly_m, rt_m, um_inc, uM_inc = _build_single_cedear_row(
+            m,
+            by_ticker=by_ticker,
+            yahoo_stats=yahoo_stats,
+            yahoo_cache=yahoo_cache,
+            usa_price_cache=usa_price_cache,
+            yahoo_negative_local=yahoo_negative_local,
+            ccl_debug_count_holder=ccl_debug_count_holder,
         )
-
-        estado_r, dias_val = _derive_ratio_audit(m.fecha_validacion_ratio)
-
-        cob_msg = _cobertura_usa_mensaje(row, precio_usa)
-        loc_msg = _pricing_cedear_local_mensaje(p_ars, p_ccl, ccl_impl, precio_impl)
-
-        out.append(
-            CedearRow(
-                ticker_usa=ticker_usa_disp,
-                ticker_cedear_ars=sym_ars,
-                ticker_cedear_usd=sym_ccl,
-                ratio=cedears_por,
-                fuente_ratio=m.fuente_ratio,
-                fecha_validacion_ratio=m.fecha_validacion_ratio,
-                estado_ratio=estado_r,
-                dias_desde_validacion=dias_val,
-                precio_cedear_ars=p_ars,
-                precio_cedear_usd=p_ccl,
-                ccl_implicito=ccl_impl,
-                precio_usa_real=precio_usa,
-                precio_implicito_usd=precio_impl,
-                gap_pct=gap,
-                total_score=total_score,
-                signal_state=signal_state,
-                mod_usa=mod_usa,
-                usa_radar_match=usa_radar_match,
-                ticker_usa_lookup=ticker_usa_lookup,
-                usa_radar_match_reason=usa_radar_match_reason,
-                fuente_cedear=fuente_cedear,
-                cobertura_usa_mensaje=cob_msg,
-                pricing_cedear_local_mensaje=loc_msg,
-            )
-        )
-        t_row1 = time.perf_counter()
-        acc_row_other_ms += (t_row1 - t_row0) * 1000.0 - (t_usa1 - t_usa0) * 1000.0 - loc_yahoo_ms_spent
+        out.append(built)
+        usa_matches += um_inc
+        usa_misses += uM_inc
+        acc_usa_price_ms += usa_m
+        acc_local_iol_ms += iol_m
+        acc_local_yahoo_ms += ly_m
+        acc_row_other_ms += rt_m - usa_m - ly_m
 
     logger.info(
         "[CEDEAR_ENRICH] usa_matches=%s usa_misses=%s",

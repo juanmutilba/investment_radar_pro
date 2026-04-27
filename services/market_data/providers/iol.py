@@ -186,6 +186,13 @@ def get_iol_quote(ticker: str) -> PriceQuote | None:
     Retorna PriceQuote válido (precio > 0) si IOL está habilitado y responde; None en caso contrario.
     Caché en memoria por proceso: aciertos reutilizan quote; fallos reutilizan None sin HTTP.
     """
+    t0 = time.perf_counter()
+
+    def _iol_slow_quote_log(sym: str, status: str) -> None:
+        ms = (time.perf_counter() - t0) * 1000.0
+        if ms > 1500.0:
+            print("[IOL_SLOW_QUOTE] ticker=%s ms=%s status=%s" % (sym, int(round(ms)), status), flush=True)
+
     if not is_iol_enabled():
         return None
 
@@ -207,13 +214,16 @@ def get_iol_quote(ticker: str) -> PriceQuote | None:
         url = IOL_COTIZACION_URL.format(ticker=t)
         headers = {"Authorization": f"Bearer {tok}"}
         r = requests.get(url, headers=headers, timeout=3)
+        http_st = "http_%s" % getattr(r, "status_code", "?")
         if not r.ok:
             print("[IOL_QUOTE_MISS] ticker=%s http_status=%s" % (t, getattr(r, "status_code", None)))
             _iol_quote_negative_cache.add(t)
+            _iol_slow_quote_log(t, http_st)
             return None
         obj: Any = r.json()
         if not isinstance(obj, dict):
             _iol_quote_negative_cache.add(t)
+            _iol_slow_quote_log(t, http_st)
             return None
         moneda_raw = obj.get("moneda")
         cur = _map_iol_moneda(moneda_raw) or "ARS"
@@ -227,6 +237,7 @@ def get_iol_quote(ticker: str) -> PriceQuote | None:
             value = None
         if value is None:
             _iol_quote_negative_cache.add(t)
+            _iol_slow_quote_log(t, http_st)
             return None
         q = PriceQuote(
             value=value,
@@ -237,8 +248,10 @@ def get_iol_quote(ticker: str) -> PriceQuote | None:
             notes=f"moneda={moneda_raw!s}" if moneda_raw is not None else None,
         )
         _iol_quote_cache[t] = q
+        _iol_slow_quote_log(t, "ok")
         return q
     except Exception:
         _iol_quote_negative_cache.add(t)
+        _iol_slow_quote_log(t, "exception")
         return None
 

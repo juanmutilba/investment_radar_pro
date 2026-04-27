@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import os
+from pathlib import Path
 from typing import Any
+
+from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException, Query
 
@@ -36,14 +39,26 @@ import time
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # .env en la raíz del repo (api/ -> padre); no depender solo del CWD de uvicorn.
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+    iol_u_present = bool(os.getenv("IOL_USERNAME", "").strip())
+    iol_p_present = bool(os.getenv("IOL_PASSWORD", "").strip())
+    iol_enabled_after = False
     try:
-        from services.market_data.providers.iol import configure_iol_credentials
+        from services.market_data.providers.iol import configure_iol_credentials, is_iol_enabled
 
         iol_user = os.getenv("IOL_USERNAME", "").strip()
         iol_pass = os.getenv("IOL_PASSWORD", "").strip()
         configure_iol_credentials(iol_user, iol_pass)
+        iol_enabled_after = is_iol_enabled()
     except Exception:
         pass
+    print(
+        "[IOL_STARTUP_DEBUG] username_present=%s password_present=%s enabled_after_config=%s"
+        % (iol_u_present, iol_p_present, iol_enabled_after),
+        flush=True,
+    )
     init_database()
     yield
 
