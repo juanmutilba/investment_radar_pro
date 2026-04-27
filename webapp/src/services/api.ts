@@ -212,7 +212,7 @@ export type ScanMetrics = {
 export type CedearRatioEstado = "ok" | "pendiente_validar" | "revisar";
 
 /** Origen precios locales ARS/CCL en CEDEAR (backend). */
-export type CedearFuenteLocal = "Yahoo" | "IOL" | "IOL/Yahoo" | "Sin datos";
+export type CedearFuenteLocal = "Yahoo" | "IOL" | "IOL/Yahoo" | "Sin datos" | "IOL (sin CCL)";
 
 /**
  * Fila GET /cedears (alias JSON TotalScore / SignalState desde el backend).
@@ -266,7 +266,8 @@ function isCedearFuenteLocal(v: unknown): v is CedearFuenteLocal | null | undefi
     v === "Yahoo" ||
     v === "IOL" ||
     v === "IOL/Yahoo" ||
-    v === "Sin datos"
+    v === "Sin datos" ||
+    v === "IOL (sin CCL)"
   );
 }
 

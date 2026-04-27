@@ -18,11 +18,11 @@ logger = logging.getLogger(__name__)
 
 RatioEstado = Literal["ok", "pendiente_validar", "revisar"]
 ModUsa = Literal["SI", "NO"]
-FuenteCedearLocal = Literal["IOL", "Yahoo", "IOL/Yahoo", "Sin datos"]
+FuenteCedearLocal = Literal["IOL", "Yahoo", "IOL/Yahoo", "Sin datos", "IOL (sin CCL)"]
 _RATIO_STALE_DAYS = 180
 
 # Máximo de consultas HTTP IOL por build CEDEAR (ARS/CCL); el resto va directo a Yahoo / None.
-IOL_MAX_CALLS = 30
+IOL_MAX_CALLS = 300
 
 # Fallback get_usa_price/Yahoo en CEDEAR: tickers USA que no resuelven y solo suman latencia.
 _USA_PRICE_KNOWN_BAD: frozenset[str] = frozenset({"AUY", "DISN", "MMC"})
@@ -147,7 +147,7 @@ class CedearRow(BaseModel):
     )
     fuente_cedear: FuenteCedearLocal = Field(
         ...,
-        description="Origen precios locales ARS/CCL: IOL, Yahoo, mixto, o Sin datos.",
+        description="Origen precios locales ARS/CCL: IOL, Yahoo, mixto, Sin datos, o IOL (sin CCL) si falta línea USD.",
     )
     cobertura_usa_mensaje: str | None = Field(
         None,
@@ -813,9 +813,10 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     """
     t0 = time.perf_counter()
     try:
-        from services.market_data.providers.iol import reset_iol_quote_usage_stats
+        from services.market_data.providers.iol import clear_iol_negative_cache, reset_iol_quote_usage_stats
 
         reset_iol_quote_usage_stats()
+        clear_iol_negative_cache()
     except Exception:
         pass
     yahoo_stats: dict[str, int] = {
@@ -1052,6 +1053,8 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
         acc_local_yahoo_ms += loc_yahoo_ms_spent
 
         fuente_cedear: FuenteCedearLocal = _fuente_cedear_local(p_ars, p_ccl, ars_from_iol, ccl_from_iol)
+        if p_ccl is None:
+            fuente_cedear = "IOL (sin CCL)"
 
         cedears_por = float(m.cedears_por_accion_usa)
         _cedear_debug_line(ticker_usa_disp, sym_ars, sym_ccl, cedears_por, p_ars, p_ccl)
@@ -1086,7 +1089,7 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
             ccl_debug_count += 1
 
         precio_impl: float | None = None
-        if p_ccl is not None and cedears_por > 0:
+        if p_ccl is not None and p_ccl > 0 and cedears_por > 0:
             precio_impl = round(p_ccl * cedears_por, 6)
 
         gap: float | None = None

@@ -8,6 +8,9 @@ import { fetchCedears, peekCedearsCache, type CedearRatioEstado, type CedearRow 
 const EMPTY = "-";
 
 type SortDir = "asc" | "desc";
+
+type CclFilter = "todos" | "con_ccl" | "sin_ccl";
+
 type SortKey =
   | "ticker_usa"
   | "gap_pct"
@@ -182,6 +185,7 @@ export function CedearsPage() {
   const [rows, setRows] = useState<CedearRow[] | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [cclFilter, setCclFilter] = useState<CclFilter>("todos");
   const [sortKey, setSortKey] = useState<SortKey>("gap_pct");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [refreshing, setRefreshing] = useState(false);
@@ -242,6 +246,11 @@ export function CedearsPage() {
     if (tickerFilter) {
       out = out.filter((r) => String(r.ticker_usa ?? "").trim().toUpperCase() === tickerFilter);
     }
+    if (cclFilter === "con_ccl") {
+      out = out.filter((r) => r.precio_cedear_usd !== null);
+    } else if (cclFilter === "sin_ccl") {
+      out = out.filter((r) => r.precio_cedear_usd === null);
+    }
     const q = search.trim().toLowerCase();
     if (q) {
       out = out.filter((r) => {
@@ -257,12 +266,12 @@ export function CedearsPage() {
       });
     }
     return out;
-  }, [rows, search, tickerFilter]);
+  }, [rows, search, tickerFilter, cclFilter]);
 
   const displayRows = useMemo(() => sortRows(filtered, sortKey, sortDir), [filtered, sortKey, sortDir]);
 
   const loading = rows === undefined && error === null;
-  const filtersActive = search.trim() !== "";
+  const filtersActive = search.trim() !== "" || cclFilter !== "todos";
 
   const headerBtnStyle: React.CSSProperties = {
     background: "none",
@@ -358,6 +367,19 @@ export function CedearsPage() {
                 onChange={(ev) => setSearch(ev.target.value)}
                 autoComplete="off"
               />
+            </label>
+            <label className="radar-toolbar__field">
+              <span className="radar-toolbar__label">CCL</span>
+              <select
+                className="radar-toolbar__select"
+                value={cclFilter}
+                onChange={(ev) => setCclFilter(ev.target.value as CclFilter)}
+                aria-label="Filtrar por precio CCL disponible"
+              >
+                <option value="todos">Todos</option>
+                <option value="con_ccl">Con CCL</option>
+                <option value="sin_ccl">Sin CCL</option>
+              </select>
             </label>
             <p className="radar-toolbar__hint msg-muted">
               CEDEAR totales: {rows.length}
@@ -500,8 +522,12 @@ export function CedearsPage() {
                     <td style={{ textAlign: "right" }} className={r.precio_cedear_ars === null ? "table-cell--empty" : ""}>
                       {fmtArsConSigno(r.precio_cedear_ars)}
                     </td>
-                    <td style={{ textAlign: "right" }} className={r.precio_cedear_usd === null ? "table-cell--empty" : ""}>
-                      {fmtUsdPrefijo2to4(r.precio_cedear_usd)}
+                    <td style={{ textAlign: "right" }} className="table-cell--nowrap">
+                      {r.precio_cedear_usd === null ? (
+                        <span style={{ color: "var(--text-muted)" }}>Sin datos CCL</span>
+                      ) : (
+                        fmtUsdPrefijo2to4(r.precio_cedear_usd)
+                      )}
                     </td>
                     <td style={{ textAlign: "right" }} className={r.ccl_implicito === null ? "table-cell--empty" : ""}>
                       {fmtArsConSigno(r.ccl_implicito)}

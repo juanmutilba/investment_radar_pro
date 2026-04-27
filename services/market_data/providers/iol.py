@@ -39,6 +39,11 @@ def reset_iol_quote_usage_stats() -> None:
     _iol_quote_usage_stats = {"iol_cache_positive_hits": 0, "iol_cache_negative_hits": 0}
 
 
+def clear_iol_negative_cache() -> None:
+    global _iol_quote_negative_cache
+    _iol_quote_negative_cache.clear()
+
+
 def get_iol_quote_usage_stats() -> dict[str, int]:
     return dict(_iol_quote_usage_stats)
 
