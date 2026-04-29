@@ -5,6 +5,7 @@ import math
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Any, Literal
 
@@ -23,6 +24,9 @@ _RATIO_STALE_DAYS = 180
 
 # Máximo de consultas HTTP IOL por build CEDEAR (ARS/CCL); el resto va directo a Yahoo / None.
 IOL_MAX_CALLS = 300
+
+# Paralelización por fila (IOL ARS+CCL adentro de cada fila). Mantener chico para no saturar IOL/red.
+CEDEAR_IOL_MAX_WORKERS = 5
 
 # TEMP: diagnóstico IOL (primeros N intentos por build); quitar cuando cierre el incidente.
 _IOL_PATH_DEBUG_PRINTS_MAX = 20
@@ -1212,25 +1216,42 @@ def build_cedear_rows_from_latest_radar() -> list[CedearRow] | None:
     usa_misses = 0
     ccl_debug_count_holder = [0]
 
-    for m in CEDEAR_MAPPINGS:
-        if not m.activo:
+    active_entries = [m for m in CEDEAR_MAPPINGS if m.activo]
+    ordered_rows: list[tuple[CedearRow, float, float, float, float, int, int] | None] = [None] * len(
+        active_entries
+    )
+    with ThreadPoolExecutor(max_workers=CEDEAR_IOL_MAX_WORKERS) as executor:
+        future_to_idx = {
+            executor.submit(
+                _build_single_cedear_row,
+                m,
+                by_ticker=by_ticker,
+                yahoo_stats=yahoo_stats,
+                yahoo_cache=yahoo_cache,
+                usa_price_cache=usa_price_cache,
+                yahoo_negative_local=yahoo_negative_local,
+                ccl_debug_count_holder=ccl_debug_count_holder,
+            ): idx
+            for idx, m in enumerate(active_entries)
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                ordered_rows[idx] = future.result()
+            except Exception as e:
+                print(f"[CEDEAR_THREAD_ERROR] idx={idx} error={type(e).__name__}: {e}", flush=True)
+
+    for item in ordered_rows:
+        if item is None:
             continue
-        built, usa_m, iol_m, ly_m, rt_m, um_inc, uM_inc = _build_single_cedear_row(
-            m,
-            by_ticker=by_ticker,
-            yahoo_stats=yahoo_stats,
-            yahoo_cache=yahoo_cache,
-            usa_price_cache=usa_price_cache,
-            yahoo_negative_local=yahoo_negative_local,
-            ccl_debug_count_holder=ccl_debug_count_holder,
-        )
+        built, usa_m, iol_m, ly_m, rt_m, um_inc, uM_inc = item
         out.append(built)
         usa_matches += um_inc
         usa_misses += uM_inc
         acc_usa_price_ms += usa_m
         acc_local_iol_ms += iol_m
         acc_local_yahoo_ms += ly_m
-        acc_row_other_ms += rt_m - usa_m - ly_m
+        acc_row_other_ms += rt_m - usa_m - iol_m - ly_m
 
     logger.info(
         "[CEDEAR_ENRICH] usa_matches=%s usa_misses=%s",
