@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import time
 import yfinance as yf
@@ -13,6 +14,9 @@ from data.universe_arg import ARGENTINA_UNIVERSE
 from services.engine_run_metrics import format_delta_line, load_previous_engine, save_engine_metrics
 from services.fundamentals_cache import FundamentalsCache
 from services.yfinance_helpers import fetch_info_with_timeout, precio_valido, try_apply_fast_info_price
+
+
+ARG_MAX_WORKERS = 4
 
 
 def format_number(value):
@@ -62,23 +66,82 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     # Diagnóstico: tickers sospechosos de símbolo Yahoo incorrecto / no soportado
     suspected_bad_yahoo: list[tuple[str, str, str]] = []
 
-    for item in ARGENTINA_UNIVERSE:
-        yahoo_ticker = item['ticker']
-        local_ticker = item['local_ticker']
+    tickers_total = len(ARGENTINA_UNIVERSE)
+    # Accumulados (suma por ticker). En secuencial coinciden con wall-clock aproximado,
+    # pero mantener nombres consistentes con USA para comparar.
+    acc_yahoo_history_ms = 0.0
+    acc_yahoo_info_ms = 0.0
+    acc_scoring_ms = 0.0
+    history_phase_wall_ms = 0.0
+    processing_phase_wall_ms = 0.0
+
+    items = list(ARGENTINA_UNIVERSE)
+
+    ordered_history: list[tuple[pd.DataFrame | None, float, str | None, str | None] | None] = [None] * len(items)
+
+    def _fetch_history_only(yahoo_ticker: str) -> tuple[pd.DataFrame | None, float, str | None, str | None]:
+        t_hist0 = time.perf_counter()
+        try:
+            asset0 = yf.Ticker(yahoo_ticker)
+            # repair=True puede requerir scipy en algunas instalaciones de yfinance; evitarlo para robustez.
+            data0 = asset0.history(period=PRICE_HISTORY_PERIOD, auto_adjust=False, actions=False, repair=False)
+            return data0, (time.perf_counter() - t_hist0) * 1000.0, None, None
+        except Exception as e:
+            return None, (time.perf_counter() - t_hist0) * 1000.0, type(e).__name__, str(e)
+
+    t_hist_phase0 = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=ARG_MAX_WORKERS) as executor:
+        future_to_idx = {
+            executor.submit(_fetch_history_only, str(item.get("ticker") or "")): idx for idx, item in enumerate(items)
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            yahoo_ticker = str(items[idx].get("ticker") or "")
+            try:
+                ordered_history[idx] = future.result()
+            except Exception as e:
+                print(f"[ARG_HISTORY_THREAD_ERROR] ticker={yahoo_ticker} error={type(e).__name__}: {e}")
+                ordered_history[idx] = (None, 0.0, type(e).__name__, str(e))
+    history_phase_wall_ms = (time.perf_counter() - t_hist_phase0) * 1000.0
+
+    # Pre-validación + INFO secuencial (FundamentalsCache); construir tareas de processing.
+    t_proc_phase0 = time.perf_counter()
+    process_tasks: list[tuple[int, dict, pd.Series, dict]] = []
+    t_started_by_idx: list[float | None] = [None] * len(items)
+    t_finished_by_idx: list[float | None] = [None] * len(items)
+    status_by_idx: list[str | None] = [None] * len(items)  # ok | fail | skipped
+    stage_by_idx: list[str | None] = [None] * len(items)
+    ctx_by_idx: list[dict | None] = [None] * len(items)
+
+    for idx, item in enumerate(items):
+        yahoo_ticker = item["ticker"]
+        local_ticker = item["local_ticker"]
         panel = item.get("panel") or "Merval"
-        mercado = item.get("mercado") or ("General" if str(panel).strip().lower() in ("general", "panel general") else "Merval")
-        t_ticker0 = time.perf_counter()
+        mercado = item.get("mercado") or (
+            "General" if str(panel).strip().lower() in ("general", "panel general") else "Merval"
+        )
         _arg_log("INFO", yahoo_ticker, local_ticker, panel, "start")
+        t_started_by_idx[idx] = time.perf_counter()
         stage = "init"
         try:
-            asset = yf.Ticker(yahoo_ticker)
+            pack = ordered_history[idx]
             stage = "history"
-            # repair=True puede requerir scipy en algunas instalaciones de yfinance; evitarlo para robustez.
-            data = asset.history(period=PRICE_HISTORY_PERIOD, auto_adjust=False, actions=False, repair=False)
-            if data.empty:
+            stage_by_idx[idx] = stage
+            if pack is None:
+                print(f"[ARG_HISTORY_THREAD_ERROR] ticker={yahoo_ticker} error=MissingHistoryResult")
+                raise RuntimeError("MissingHistoryResult")
+            data, hist_ms, err_type, err_msg = pack
+            acc_yahoo_history_ms += float(hist_ms or 0.0)
+            if err_type is not None:
+                print(f"[ARG_HISTORY_THREAD_ERROR] ticker={yahoo_ticker} error={err_type}: {err_msg}")
+                raise RuntimeError(f"history_thread_error:{err_type}")
+            if data is None or getattr(data, "empty", False):
                 n_hist_empty += 1
                 _arg_log("WARN", yahoo_ticker, local_ticker, panel, "omitido: history vacío (sin velas)")
                 suspected_bad_yahoo.append((local_ticker, yahoo_ticker, "history_empty"))
+                status_by_idx[idx] = "skipped"
+                stage_by_idx[idx] = "history"
+                t_finished_by_idx[idx] = time.perf_counter()
                 continue
 
             required_cols = {"Close"}
@@ -93,13 +156,19 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
                     f"omitido: history sin columnas requeridas missing={missing_cols} cols={list(data.columns)}",
                 )
                 suspected_bad_yahoo.append((local_ticker, yahoo_ticker, f"missing_cols:{','.join(missing_cols)}"))
+                status_by_idx[idx] = "skipped"
+                stage_by_idx[idx] = "history"
+                t_finished_by_idx[idx] = time.perf_counter()
                 continue
 
-            close = pd.to_numeric(data['Close'], errors='coerce').dropna()
+            close = pd.to_numeric(data["Close"], errors="coerce").dropna()
             if close.empty:
                 n_hist_empty += 1
                 _arg_log("WARN", yahoo_ticker, local_ticker, panel, "omitido: Close vacío/NaN tras coerción")
                 suspected_bad_yahoo.append((local_ticker, yahoo_ticker, "close_all_nan"))
+                status_by_idx[idx] = "skipped"
+                stage_by_idx[idx] = "history"
+                t_finished_by_idx[idx] = time.perf_counter()
                 continue
             if len(close) < 200:
                 n_hist_short += 1
@@ -110,87 +179,168 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
                     panel,
                     f"omitido: history insuficiente ({len(close)} velas válidas < 200)",
                 )
+                status_by_idx[idx] = "skipped"
+                stage_by_idx[idx] = "history"
+                t_finished_by_idx[idx] = time.perf_counter()
                 continue
 
             stage = "info"
+            stage_by_idx[idx] = stage
+            asset_info = yf.Ticker(yahoo_ticker)
+            t_info0 = time.perf_counter()
             info = cache.get_or_fetch_info(
                 ticker=yahoo_ticker,
-                fetcher=lambda: fetch_info_with_timeout(asset, timeout_s=YFINANCE_INFO_TIMEOUT_S),
+                fetcher=lambda: fetch_info_with_timeout(asset_info, timeout_s=YFINANCE_INFO_TIMEOUT_S),
             )
+            acc_yahoo_info_ms += (time.perf_counter() - t_info0) * 1000.0
             if not isinstance(info, dict) or not info:
                 _arg_log("WARN", yahoo_ticker, local_ticker, panel, "info vacío/no dict (se sigue con defaults)")
                 info = info if isinstance(info, dict) else {}
-            company = info.get('longName') or info.get('shortName') or local_ticker
-            sector = info.get('sector')
-            industry = info.get('industry')
-            market_cap = format_number(info.get('marketCap'))
-            beta = format_number(info.get('beta'))
-            roe = format_number(info.get('returnOnEquity'))
+
+            item_ctx = {
+                "yahoo_ticker": yahoo_ticker,
+                "local_ticker": local_ticker,
+                "panel": panel,
+                "mercado": mercado,
+            }
+            ctx_by_idx[idx] = item_ctx
+            process_tasks.append((idx, item_ctx, close, info))
+        except Exception as e:
+            n_fail += 1
+            if stage == "history":
+                fail_history_exc += 1
+                suspected_bad_yahoo.append((local_ticker, yahoo_ticker, f"history_exc:{type(e).__name__}"))
+            elif stage == "info":
+                fail_info_exc += 1
+            else:
+                fail_other += 1
+            status_by_idx[idx] = "fail"
+            stage_by_idx[idx] = stage
+            t_finished_by_idx[idx] = time.perf_counter()
+            started = t_started_by_idx[idx] or t_finished_by_idx[idx] or time.perf_counter()
+            elapsed_ms = (float(t_finished_by_idx[idx] or time.perf_counter()) - float(started)) * 1000.0
+            _arg_log(
+                "ERROR",
+                yahoo_ticker,
+                local_ticker,
+                panel,
+                f"FAIL stage={stage} err={type(e).__name__}: {e} elapsed_ms={elapsed_ms:.0f}",
+            )
+
+    ordered_results: list[list | None] = [None] * len(items)
+    ordered_universe: list[list | None] = [None] * len(items)
+
+    def _process_arg_ticker_from_history(
+        idx: int,
+        item_ctx: dict,
+        close: pd.Series,
+        info: dict,
+    ) -> tuple[int, list | None, list | None, int, int, float, str | None, str | None]:
+        """
+        Devuelve: (idx, row, universe_row, fast_price_used_inc, sin_precio_inc, scoring_ms, err_type, err_msg)
+        """
+        t_sc0 = time.perf_counter()
+        try:
+            yahoo_ticker = str(item_ctx.get("yahoo_ticker") or "")
+            local_ticker = str(item_ctx.get("local_ticker") or "")
+            panel = str(item_ctx.get("panel") or "Merval")
+            mercado = str(item_ctx.get("mercado") or "")
+
+            company = info.get("longName") or info.get("shortName") or local_ticker
+            sector = info.get("sector")
+            industry = info.get("industry")
+            market_cap = format_number(info.get("marketCap"))
+            beta = format_number(info.get("beta"))
+            roe = format_number(info.get("returnOnEquity"))
             risk_profile = classify_risk_profile(beta)
             risk_score = calculate_risk_score(beta)
 
-            stage = "technicals"
             technicals = compute_technical_metrics(close)
-            # Diagnóstico: llaves mínimas que el engine espera de technicals
-            missing_tech_keys = [k for k in ("Precio", "RSI", "MA50", "MA200", "MACD_Bull", "Pullback", "Trend") if k not in technicals]
+            missing_tech_keys = [
+                k
+                for k in ("Precio", "RSI", "MA50", "MA200", "MACD_Bull", "Pullback", "Trend")
+                if k not in technicals
+            ]
             if missing_tech_keys:
                 _arg_log("WARN", yahoo_ticker, local_ticker, panel, f"technicals incompleto missing_keys={missing_tech_keys}")
-            if try_apply_fast_info_price(asset, technicals, format_number):
-                n_fast_price_used += 1
-            pe = format_number(info.get('trailingPE'))
-            price_to_book = format_number(info.get('priceToBook'))
-            ebitda = format_number(info.get('ebitda'))
-            net_income = format_number(info.get('netIncomeToCommon'))
-            total_debt = format_number(info.get('totalDebt'))
-            debt_to_equity = format_number(info.get('debtToEquity'))
-            target_price = format_number(info.get('targetMeanPrice'))
+
+            asset = yf.Ticker(yahoo_ticker)
+            fast_used = 1 if try_apply_fast_info_price(asset, technicals, format_number) else 0
+
+            pe = format_number(info.get("trailingPE"))
+            price_to_book = format_number(info.get("priceToBook"))
+            ebitda = format_number(info.get("ebitda"))
+            net_income = format_number(info.get("netIncomeToCommon"))
+            total_debt = format_number(info.get("totalDebt"))
+            debt_to_equity = format_number(info.get("debtToEquity"))
+            target_price = format_number(info.get("targetMeanPrice"))
 
             debt_to_ebitda = None
             if total_debt is not None and ebitda is not None and ebitda > 0:
                 debt_to_ebitda = round(total_debt / ebitda, 2)
 
             upside = None
-            if target_price is not None and technicals['Precio']:
-                upside = (target_price - technicals['Precio']) / technicals['Precio']
+            if target_price is not None and technicals["Precio"]:
+                upside = (target_price - technicals["Precio"]) / technicals["Precio"]
 
-            # Diagnóstico: datos críticos ausentes (no cambia cálculos; solo informa)
             if not precio_valido(technicals.get("Precio")):
-                _arg_log("WARN", yahoo_ticker, local_ticker, panel, f"precio no válido para scoring: Precio={technicals.get('Precio')!r}")
+                _arg_log(
+                    "WARN",
+                    yahoo_ticker,
+                    local_ticker,
+                    panel,
+                    f"precio no válido para scoring: Precio={technicals.get('Precio')!r}",
+                )
             if technicals.get("RSI") is None:
                 _arg_log("WARN", yahoo_ticker, local_ticker, panel, "RSI=None (puede afectar score técnico)")
 
             tech_score = calculate_tech_score(
-                rsi=technicals['RSI'],
-                pullback=technicals['Pullback'],
-                trend_positive=technicals['Trend'],
-                macd_bullish=technicals['MACD_Bull'],
+                rsi=technicals["RSI"],
+                pullback=technicals["Pullback"],
+                trend_positive=technicals["Trend"],
+                macd_bullish=technicals["MACD_Bull"],
             )
             fund_score = calculate_fund_score(net_income, ebitda, debt_to_equity, pe, upside)
             total_score = tech_score + fund_score + risk_score
 
             setup = classify_setup(
-                rsi=technicals['RSI'],
-                pullback=technicals['Pullback'],
-                trend_positive=technicals['Trend'],
-                macd_bullish=technicals['MACD_Bull'],
+                rsi=technicals["RSI"],
+                pullback=technicals["Pullback"],
+                trend_positive=technicals["Trend"],
+                macd_bullish=technicals["MACD_Bull"],
             )
             signal_state = classify_signal_state(
                 total_score=total_score,
                 upside=upside,
-                price=technicals['Precio'],
+                price=technicals["Precio"],
                 target_price=target_price,
-                rsi=technicals['RSI'],
-                macd_bullish=technicals['MACD_Bull'],
-                trend_positive=technicals['Trend'],
+                rsi=technicals["RSI"],
+                macd_bullish=technicals["MACD_Bull"],
+                trend_positive=technicals["Trend"],
             )
             conviction = classify_conviction(total_score)
             capital = suggested_capital(total_score)
 
-            results.append([
-                local_ticker, company, sector, industry, 'ARGENTINA', panel, mercado,
-                market_cap, beta, roe, risk_profile, risk_score,
-                technicals['Precio'], technicals['RSI'], technicals['MA50'], technicals['MA200'],
-                technicals['MACD_Bull'], technicals['Pullback'], technicals['Trend'],
+            row = [
+                local_ticker,
+                company,
+                sector,
+                industry,
+                "ARGENTINA",
+                panel,
+                mercado,
+                market_cap,
+                beta,
+                roe,
+                risk_profile,
+                risk_score,
+                technicals["Precio"],
+                technicals["RSI"],
+                technicals["MA50"],
+                technicals["MA200"],
+                technicals["MACD_Bull"],
+                technicals["Pullback"],
+                technicals["Trend"],
                 round(pe, 2) if pe is not None else None,
                 round(price_to_book, 2) if price_to_book is not None else None,
                 ebitda,
@@ -199,40 +349,110 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
                 debt_to_ebitda,
                 round(target_price, 2) if target_price is not None else None,
                 round(upside * 100, 2) if upside is not None else None,
-                tech_score, fund_score, total_score,
-                setup, signal_state, conviction, capital,
-            ])
+                tech_score,
+                fund_score,
+                total_score,
+                setup,
+                signal_state,
+                conviction,
+                capital,
+            ]
+            universe_row = [
+                local_ticker,
+                company,
+                sector,
+                industry,
+                "ARGENTINA",
+                panel,
+                mercado,
+                market_cap,
+                beta,
+                roe,
+                risk_profile,
+            ]
+            sin_precio_inc = 0 if precio_valido(technicals.get("Precio")) else 1
+            scoring_ms = (time.perf_counter() - t_sc0) * 1000.0
+            return idx, row, universe_row, fast_used, sin_precio_inc, scoring_ms, None, None
+        except Exception as e:
+            scoring_ms = (time.perf_counter() - t_sc0) * 1000.0
+            return idx, None, None, 0, 0, scoring_ms, type(e).__name__, str(e)
 
-            universe_rows.append([
-                local_ticker, company, sector, industry, 'ARGENTINA', panel, mercado,
-                market_cap, beta, roe, risk_profile,
-            ])
-            if not precio_valido(technicals.get("Precio")):
-                n_sin_precio += 1
+    with ThreadPoolExecutor(max_workers=ARG_MAX_WORKERS) as executor:
+        future_to_meta = {
+            executor.submit(_process_arg_ticker_from_history, idx, item_ctx, close, info): (
+                idx,
+                str(item_ctx.get("yahoo_ticker") or ""),
+            )
+            for (idx, item_ctx, close, info) in process_tasks
+        }
+        for future in as_completed(future_to_meta):
+            idx, yahoo_ticker = future_to_meta[future]
+            try:
+                out_idx, row, univ_row, fast_inc, sin_precio_inc, scoring_ms, err_type, err_msg = future.result()
+            except Exception as e:
+                print(f"[ARG_PROCESS_THREAD_ERROR] ticker={yahoo_ticker} error={type(e).__name__}: {e}")
+                n_fail += 1
+                fail_tech_exc += 1
+                status_by_idx[idx] = "fail"
+                stage_by_idx[idx] = "technicals"
+                t_finished_by_idx[idx] = time.perf_counter()
+                continue
+
+            acc_scoring_ms += float(scoring_ms or 0.0)
+            if err_type is not None:
+                print(f"[ARG_PROCESS_THREAD_ERROR] ticker={yahoo_ticker} error={err_type}: {err_msg}")
+                n_fail += 1
+                fail_tech_exc += 1
+                status_by_idx[out_idx] = "fail"
+                stage_by_idx[out_idx] = "technicals"
+                t_finished_by_idx[out_idx] = time.perf_counter()
+                continue
+
+            ordered_results[out_idx] = row
+            ordered_universe[out_idx] = univ_row
+            n_fast_price_used += int(fast_inc or 0)
+            if int(sin_precio_inc or 0) > 0:
+                n_sin_precio += int(sin_precio_inc or 0)
+                # Mantener WARN original en el hilo principal (mismo prefijo [ARG]).
+                try:
+                    local_ticker = str(items[out_idx].get("local_ticker") or "")
+                    panel = str(items[out_idx].get("panel") or "Merval")
+                except Exception:
+                    local_ticker = ""
+                    panel = "?"
                 _arg_log(
                     "WARN",
                     yahoo_ticker,
                     local_ticker,
                     panel,
-                    f"precio inválido tras history/fast_info: {technicals.get('Precio')!r}",
+                    f"precio inválido tras history/fast_info: {row[12] if row else None!r}",
                 )
-
             n_ok += 1
-            elapsed_ms = (time.perf_counter() - t_ticker0) * 1000.0
-            _arg_log("INFO", yahoo_ticker, local_ticker, panel, f"ok elapsed_ms={elapsed_ms:.0f}")
-        except Exception as e:
-            n_fail += 1
-            if stage == "history":
-                fail_history_exc += 1
-                suspected_bad_yahoo.append((local_ticker, yahoo_ticker, f"history_exc:{type(e).__name__}"))
-            elif stage == "info":
-                fail_info_exc += 1
-            elif stage == "technicals":
-                fail_tech_exc += 1
-            else:
-                fail_other += 1
-            elapsed_ms = (time.perf_counter() - t_ticker0) * 1000.0
-            _arg_log("ERROR", yahoo_ticker, local_ticker, panel, f"FAIL stage={stage} err={type(e).__name__}: {e} elapsed_ms={elapsed_ms:.0f}")
+            status_by_idx[out_idx] = "ok"
+            stage_by_idx[out_idx] = "technicals"
+            t_finished_by_idx[out_idx] = time.perf_counter()
+
+    for i, item in enumerate(items):
+        # Emitir logs finales en orden para mantener salida estable.
+        try:
+            yt = str(item.get("ticker") or "")
+            lt = str(item.get("local_ticker") or "")
+            pn = str(item.get("panel") or "Merval")
+        except Exception:
+            yt, lt, pn = "", "", "?"
+        started = t_started_by_idx[i] or time.perf_counter()
+        finished = t_finished_by_idx[i] or time.perf_counter()
+        elapsed_ms = (float(finished) - float(started)) * 1000.0
+
+        if status_by_idx[i] == "fail" and stage_by_idx[i] == "technicals":
+            _arg_log("ERROR", yt, lt, pn, f"FAIL stage=technicals elapsed_ms={elapsed_ms:.0f}")
+
+        if ordered_results[i] is not None:
+            results.append(ordered_results[i])
+            universe_rows.append(ordered_universe[i])  # type: ignore[arg-type]
+            _arg_log("INFO", yt, lt, pn, f"ok elapsed_ms={elapsed_ms:.0f}")
+
+    processing_phase_wall_ms = (time.perf_counter() - t_proc_phase0) * 1000.0
 
     if suspected_bad_yahoo:
         # Log simple para ayudar a detectar símbolos Yahoo incorrectos sin rehacer mapping ahora.
@@ -288,6 +508,28 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         f"fast_price_used={n_fast_price_used} | "
         f"fail_breakdown=(history_exc={fail_history_exc} info_exc={fail_info_exc} tech_exc={fail_tech_exc} other={fail_other}) | "
         f"t={elapsed:.1f}s"
+    )
+    print(
+        "[ARG_TIMING] total_ms=%.1f tickers=%s ok=%s fail=%s skipped_no_history=%s\n"
+        "  history_phase_wall_ms=%.1f\n"
+        "  processing_phase_wall_ms=%.1f\n"
+        "  yahoo_history_accum_ms=%.1f\n"
+        "  yahoo_info_ms=%.1f\n"
+        "  scoring_accum_ms=%.1f\n"
+        "  failures=%s"
+        % (
+            elapsed * 1000.0,
+            tickers_total,
+            n_ok,
+            n_fail,
+            sin_hist_total,
+            history_phase_wall_ms,
+            processing_phase_wall_ms,
+            acc_yahoo_history_ms,
+            acc_yahoo_info_ms,
+            acc_scoring_ms,
+            n_fail,
+        )
     )
 
     save_engine_metrics(
