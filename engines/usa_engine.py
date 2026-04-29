@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
+from pathlib import Path
 import pandas as pd
 import time
 import yfinance as yf
@@ -17,9 +19,73 @@ from services.fundamentals_cache import FundamentalsCache
 from services.yfinance_helpers import fetch_info_with_timeout, precio_valido, try_apply_fast_info_price
 
 
-USA_HISTORY_MAX_WORKERS = 6
+USA_HISTORY_MAX_WORKERS = 3
 
-USA_PROCESS_MAX_WORKERS = 6
+USA_PROCESS_MAX_WORKERS = 4
+
+_DEAD_TICKERS_PATH = Path(__file__).resolve().parent.parent / "data" / "dead_tickers_usa.json"
+_DEAD_TICKERS_FAIL_THRESHOLD = 3
+
+
+def _load_dead_tickers() -> dict[str, int]:
+    try:
+        raw = _DEAD_TICKERS_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(obj, dict):
+        return {}
+    out: dict[str, int] = {}
+    for k, v in obj.items():
+        if not isinstance(k, str):
+            continue
+        key = k.strip().upper()
+        if not key:
+            continue
+        try:
+            n = int(v)
+        except Exception:
+            continue
+        if n > 0:
+            out[key] = n
+    return out
+
+
+def _save_dead_tickers(data: dict[str, int]) -> None:
+    try:
+        _DEAD_TICKERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _DEAD_TICKERS_PATH.write_text(
+            json.dumps(data, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        return
+
+
+def _should_skip_ticker(ticker: str, data: dict[str, int]) -> bool:
+    key = (ticker or "").strip().upper()
+    if not key:
+        return False
+    return int(data.get(key, 0)) >= _DEAD_TICKERS_FAIL_THRESHOLD
+
+
+def _record_failure(ticker: str, data: dict[str, int]) -> None:
+    key = (ticker or "").strip().upper()
+    if not key:
+        return
+    data[key] = int(data.get(key, 0)) + 1
+
+
+def _clear_if_ok(ticker: str, data: dict[str, int]) -> None:
+    key = (ticker or "").strip().upper()
+    if not key:
+        return
+    data.pop(key, None)
 
 
 def format_number(value):
@@ -33,6 +99,7 @@ def format_number(value):
 
 def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     t0 = time.perf_counter()
+    dead = _load_dead_tickers()
     prev_run = load_previous_engine("usa")
     if prev_run:
         print(
@@ -63,7 +130,14 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
     history_phase_wall_ms = 0.0
     processing_phase_wall_ms = 0.0
 
-    tickers = list(TICKERS_USA)
+    tickers_all = list(TICKERS_USA)
+    tickers: list[str] = []
+    for t in tickers_all:
+        if _should_skip_ticker(t, dead):
+            key = (t or "").strip().upper()
+            print(f"[USA_DEAD_SKIP] ticker={t} fail_count={dead.get(key, 0)}")
+            continue
+        tickers.append(t)
     tickers_total = len(tickers)
 
     # Optimización mínima: paralelizar SOLO el fetch de history (yahoo) por ticker.
@@ -126,6 +200,7 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
             if data is None or getattr(data, "empty", False):
                 n_hist_empty += 1
                 print(f"[USA] omitido {ticker}: history vacío (sin velas)")
+                _record_failure(ticker, dead)
                 continue
 
             close = pd.to_numeric(data["Close"], errors="coerce").dropna()
@@ -135,6 +210,7 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
                     f"[USA] omitido {ticker}: history insuficiente "
                     f"({len(close)} velas válidas < 200)"
                 )
+                _record_failure(ticker, dead)
                 continue
 
             # INFO es lo más lento y poco variable: cache por ticker con TTL.
@@ -326,6 +402,7 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
                     f"[USA] precio inválido tras history/fast_info: {ticker} → {row[11] if row else None!r}"
                 )
             n_ok += 1
+            _clear_if_ok(ticker, dead)
 
     for row in ordered_results:
         if row is not None:
@@ -424,5 +501,6 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
             "cache_errors": cache.stats.errors,
         },
     )
+    _save_dead_tickers(dead)
 
     return df, df_universo, sector_summary, df[['Ticker']].copy()

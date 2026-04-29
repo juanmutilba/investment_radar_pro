@@ -16,7 +16,7 @@ from services.fundamentals_cache import FundamentalsCache
 from services.yfinance_helpers import fetch_info_with_timeout, precio_valido, try_apply_fast_info_price
 
 
-ARG_MAX_WORKERS = 4
+ARG_MAX_WORKERS = 2
 
 
 def format_number(value):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from core.config import (
     ENABLE_TELEGRAM,
     TELEGRAM_BOT_TOKEN,
@@ -11,7 +13,9 @@ from services.scan_service import run_full_scan
 
 
 def main():
-    outputs = run_full_scan(verbose=True)
+    # Pausa anti YFRateLimit entre motor USA y Argentina: run_full_scan aplica time.sleep(pause_after_usa_s).
+    pause_after_usa_s = 2.0
+    outputs = run_full_scan(verbose=True, pause_after_usa_s=pause_after_usa_s)
     previous_file = outputs.pop("previous_file")
 
     if previous_file:
