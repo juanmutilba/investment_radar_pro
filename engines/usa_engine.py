@@ -3,11 +3,13 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 from pathlib import Path
+from datetime import date
 import pandas as pd
 import time
 import yfinance as yf
 
 from core.config import PRICE_HISTORY_PERIOD, YFINANCE_INFO_TIMEOUT_S
+from core.history_returns import _calc_return_pct_from_history, _calc_ytd_return_pct_from_history
 from core.risk import calculate_risk_score, classify_risk_profile
 from core.scoring import calculate_fund_score, calculate_tech_score
 from core.signals import classify_conviction, classify_setup, classify_signal_state, suggested_capital
@@ -97,6 +99,104 @@ def format_number(value):
         return None
 
 
+def _parse_earnings_date_from_info(info: dict) -> date | None:
+    """
+    Intenta extraer la próxima fecha de earnings desde el dict `info` ya cacheado.
+    No debe lanzar; devuelve None si no hay dato o no es parseable.
+    """
+    try:
+        val = info.get("earningsDate")
+        if val is None:
+            return None
+
+        # `earningsDate` a veces viene como lista/tupla (start, end) o scalar.
+        if isinstance(val, (list, tuple)):
+            if not val:
+                return None
+            v0 = val[0]
+        else:
+            v0 = val
+
+        ts = pd.to_datetime(v0, errors="coerce")
+        if ts is pd.NaT or ts is None:
+            return None
+        d = ts.date()
+        return d
+    except Exception:
+        return None
+
+
+def _get_earnings_date(
+    ticker: str,
+    info: dict,
+    cache: dict[str, date | None],
+    stats: dict[str, float],
+    *,
+    max_calendar_calls: int,
+) -> date | None:
+    """
+    Obtiene próxima fecha de earnings con costo controlado:
+    - Primero desde `info` (0 llamadas extra).
+    - Fallback opcional a `yfinance.Ticker(...).calendar` (1 llamada) con límite por corrida.
+    Guarda en cache local por ticker para no repetir.
+    """
+    key = (ticker or "").strip().upper()
+    if not key:
+        return None
+    if key in cache:
+        return cache[key]
+
+    d0 = _parse_earnings_date_from_info(info)
+    if d0 is not None:
+        cache[key] = d0
+        return d0
+
+    # Fallback a calendar: controlar cantidad total de llamadas por performance.
+    try:
+        if int(stats.get("calendar_calls", 0)) >= int(max_calendar_calls):
+            cache[key] = None
+            return None
+    except Exception:
+        cache[key] = None
+        return None
+
+    t1 = time.perf_counter()
+    try:
+        stats["calendar_calls"] = float(stats.get("calendar_calls", 0)) + 1.0
+        asset = yf.Ticker(ticker)
+        cal = getattr(asset, "calendar", None)
+        if cal is None:
+            cache[key] = None
+            return None
+        # yfinance puede devolver dict o DataFrame.
+        if isinstance(cal, dict):
+            raw = cal.get("Earnings Date") or cal.get("EarningsDate") or cal.get("earningsDate")
+        else:
+            raw = None
+            try:
+                if hasattr(cal, "loc"):
+                    raw = cal.loc["Earnings Date"][0]  # type: ignore[index]
+            except Exception:
+                raw = None
+        ts = pd.to_datetime(raw, errors="coerce")
+        if ts is pd.NaT or ts is None:
+            cache[key] = None
+            return None
+        d = ts.date()
+        cache[key] = d
+        return d
+    except Exception:
+        cache[key] = None
+        return None
+    finally:
+        try:
+            stats["earnings_accum_ms"] = float(stats.get("earnings_accum_ms", 0.0)) + (
+                (time.perf_counter() - t1) * 1000.0
+            )
+        except Exception:
+            pass
+
+
 def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     t0 = time.perf_counter()
     dead = _load_dead_tickers()
@@ -180,7 +280,26 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
 
     # Pre-validación de history + fetch de INFO (secuencial; usa FundamentalsCache).
     # Armamos lista de tareas para paralelizar SOLO technicals + scoring + armado de filas.
-    process_tasks: list[tuple[int, str, pd.Series, dict]] = []
+    process_tasks: list[
+        tuple[
+            int,
+            str,
+            pd.Series,
+            dict,
+            date | None,
+            int | None,
+            bool | None,
+            bool | None,
+            float | None,
+            float | None,
+            float | None,
+            float | None,
+        ]
+    ] = []
+
+    earnings_cache: dict[str, date | None] = {}
+    earnings_stats: dict[str, float] = {"earnings_accum_ms": 0.0, "calendar_calls": 0.0}
+    EARNINGS_CALENDAR_MAX_CALLS = 20
 
     for idx, ticker in enumerate(tickers):
         print(f"Procesando USA: {ticker}")
@@ -223,7 +342,32 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
             )
             acc_yahoo_info_ms += (time.perf_counter() - t_info0) * 1000.0
 
-            process_tasks.append((idx, ticker, close, info))
+            earnings_date = _get_earnings_date(
+                ticker=ticker,
+                info=info if isinstance(info, dict) else {},
+                cache=earnings_cache,
+                stats=earnings_stats,
+                max_calendar_calls=EARNINGS_CALENDAR_MAX_CALLS,
+            )
+            today = date.today()
+            dias_hasta = None
+            en_7d = None
+            en_30d = None
+            if earnings_date is not None:
+                try:
+                    dias_hasta = int((earnings_date - today).days)
+                    en_7d = bool(dias_hasta <= 7) if dias_hasta >= 0 else False
+                    en_30d = bool(dias_hasta <= 30) if dias_hasta >= 0 else False
+                except Exception:
+                    dias_hasta = None
+                    en_7d = None
+                    en_30d = None
+
+            r1 = _calc_return_pct_from_history(data, 21)
+            r3 = _calc_return_pct_from_history(data, 63)
+            r6 = _calc_return_pct_from_history(data, 126)
+            ry = _calc_ytd_return_pct_from_history(data)
+            process_tasks.append((idx, ticker, close, info, earnings_date, dias_hasta, en_7d, en_30d, r1, r3, r6, ry))
         except Exception as e:
             n_fail += 1
             if stage == "history":
@@ -242,6 +386,14 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
         ticker: str,
         close: pd.Series,
         info: dict,
+        fecha_proximo_earnings: date | None,
+        dias_hasta_earnings: int | None,
+        earnings_en_7d: bool | None,
+        earnings_en_30d: bool | None,
+        rendimiento_1m_pct: float | None,
+        rendimiento_3m_pct: float | None,
+        rendimiento_6m_pct: float | None,
+        rendimiento_ytd_pct: float | None,
     ) -> tuple[int, list | None, list | None, int, int, float, str | None, str | None]:
         """
         Worker: technicals + scoring + armado de row/universe.
@@ -342,6 +494,14 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
                 signal_state,
                 conviction,
                 capital,
+                fecha_proximo_earnings.isoformat() if fecha_proximo_earnings is not None else None,
+                dias_hasta_earnings,
+                earnings_en_7d,
+                earnings_en_30d,
+                rendimiento_1m_pct,
+                rendimiento_3m_pct,
+                rendimiento_6m_pct,
+                rendimiento_ytd_pct,
             ]
             universe_row = [
                 ticker,
@@ -364,8 +524,22 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
 
     with ThreadPoolExecutor(max_workers=USA_PROCESS_MAX_WORKERS) as executor:
         future_to_meta = {
-            executor.submit(_process_usa_ticker_from_history, idx, ticker, close, info): (idx, ticker)
-            for (idx, ticker, close, info) in process_tasks
+            executor.submit(
+                _process_usa_ticker_from_history,
+                idx,
+                ticker,
+                close,
+                info,
+                earnings_date,
+                dias_hasta,
+                en_7d,
+                en_30d,
+                r1,
+                r3,
+                r6,
+                ry,
+            ): (idx, ticker)
+            for (idx, ticker, close, info, earnings_date, dias_hasta, en_7d, en_30d, r1, r3, r6, ry) in process_tasks
         }
         for future in as_completed(future_to_meta):
             idx, ticker = future_to_meta[future]
@@ -420,6 +594,8 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
         'PE', 'PriceToBook', 'EBITDA', 'NetIncome', 'DebtToEquity', 'DebtToEbitda', 'TargetPrice', 'Upside_%',
         'TechScore', 'FundScore', 'TotalScore', 'Setup', 'SignalState',
         'Conviccion', 'CapitalSugerido_%',
+        'fecha_proximo_earnings', 'dias_hasta_earnings', 'earnings_en_7d', 'earnings_en_30d',
+        'rendimiento_1m_pct', 'rendimiento_3m_pct', 'rendimiento_6m_pct', 'rendimiento_ytd_pct',
     ])
 
     df_universo = pd.DataFrame(universe_rows, columns=[
@@ -483,6 +659,17 @@ def run_usa_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataF
             n_fail,
         )
     )
+    try:
+        print(
+            "[USA_EARNINGS_TIMING] accum_ms=%.1f calendar_calls=%s calendar_calls_cap=%s"
+            % (
+                float(earnings_stats.get("earnings_accum_ms", 0.0)),
+                int(earnings_stats.get("calendar_calls", 0)),
+                EARNINGS_CALENDAR_MAX_CALLS,
+            )
+        )
+    except Exception:
+        pass
 
     save_engine_metrics(
         "usa",

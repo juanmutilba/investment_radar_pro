@@ -6,6 +6,7 @@ import time
 import yfinance as yf
 
 from core.config import PRICE_HISTORY_PERIOD, YFINANCE_INFO_TIMEOUT_S
+from core.history_returns import _calc_return_pct_from_history, _calc_ytd_return_pct_from_history
 from core.risk import calculate_risk_score, classify_risk_profile
 from core.scoring import calculate_fund_score, calculate_tech_score
 from core.signals import classify_conviction, classify_setup, classify_signal_state, suggested_capital
@@ -106,7 +107,7 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
     # Pre-validación + INFO secuencial (FundamentalsCache); construir tareas de processing.
     t_proc_phase0 = time.perf_counter()
-    process_tasks: list[tuple[int, dict, pd.Series, dict]] = []
+    process_tasks: list[tuple[int, dict, pd.Series, dict, float | None, float | None, float | None, float | None]] = []
     t_started_by_idx: list[float | None] = [None] * len(items)
     t_finished_by_idx: list[float | None] = [None] * len(items)
     status_by_idx: list[str | None] = [None] * len(items)  # ok | fail | skipped
@@ -204,7 +205,11 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
                 "mercado": mercado,
             }
             ctx_by_idx[idx] = item_ctx
-            process_tasks.append((idx, item_ctx, close, info))
+            r1 = _calc_return_pct_from_history(data, 21)
+            r3 = _calc_return_pct_from_history(data, 63)
+            r6 = _calc_return_pct_from_history(data, 126)
+            ry = _calc_ytd_return_pct_from_history(data)
+            process_tasks.append((idx, item_ctx, close, info, r1, r3, r6, ry))
         except Exception as e:
             n_fail += 1
             if stage == "history":
@@ -235,6 +240,10 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         item_ctx: dict,
         close: pd.Series,
         info: dict,
+        rendimiento_1m_pct: float | None,
+        rendimiento_3m_pct: float | None,
+        rendimiento_6m_pct: float | None,
+        rendimiento_ytd_pct: float | None,
     ) -> tuple[int, list | None, list | None, int, int, float, str | None, str | None]:
         """
         Devuelve: (idx, row, universe_row, fast_price_used_inc, sin_precio_inc, scoring_ms, err_type, err_msg)
@@ -356,6 +365,10 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
                 signal_state,
                 conviction,
                 capital,
+                rendimiento_1m_pct,
+                rendimiento_3m_pct,
+                rendimiento_6m_pct,
+                rendimiento_ytd_pct,
             ]
             universe_row = [
                 local_ticker,
@@ -379,11 +392,21 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
     with ThreadPoolExecutor(max_workers=ARG_MAX_WORKERS) as executor:
         future_to_meta = {
-            executor.submit(_process_arg_ticker_from_history, idx, item_ctx, close, info): (
+            executor.submit(
+                _process_arg_ticker_from_history,
+                idx,
+                item_ctx,
+                close,
+                info,
+                r1,
+                r3,
+                r6,
+                ry,
+            ): (
                 idx,
                 str(item_ctx.get("yahoo_ticker") or ""),
             )
-            for (idx, item_ctx, close, info) in process_tasks
+            for (idx, item_ctx, close, info, r1, r3, r6, ry) in process_tasks
         }
         for future in as_completed(future_to_meta):
             idx, yahoo_ticker = future_to_meta[future]
@@ -471,6 +494,7 @@ def run_argentina_engine() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         'PE', 'PriceToBook', 'EBITDA', 'NetIncome', 'DebtToEquity', 'DebtToEbitda', 'TargetPrice', 'Upside_%',
         'TechScore', 'FundScore', 'TotalScore', 'Setup', 'SignalState',
         'Conviccion', 'CapitalSugerido_%',
+        'rendimiento_1m_pct', 'rendimiento_3m_pct', 'rendimiento_6m_pct', 'rendimiento_ytd_pct',
     ])
 
     df_universo = pd.DataFrame(universe_rows, columns=[
