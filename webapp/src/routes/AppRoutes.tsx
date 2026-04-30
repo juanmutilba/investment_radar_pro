@@ -6,6 +6,7 @@ import { AlertasPage } from "@/pages/AlertasPage";
 import { CarteraPage } from "@/pages/CarteraPage";
 import { CedearsPage } from "@/pages/CedearsPage";
 import { DashboardPage } from "@/pages/DashboardPage";
+import { EventosPage } from "@/pages/EventosPage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 
 export function AppRoutes() {
@@ -17,6 +18,7 @@ export function AppRoutes() {
         <Route path="acciones-usa" element={<AccionesUsaPage />} />
         <Route path="acciones-argentina" element={<AccionesArgentinaPage />} />
         <Route path="alertas" element={<AlertasPage />} />
+        <Route path="eventos" element={<EventosPage />} />
         <Route path="cedears" element={<CedearsPage />} />
         <Route
           path="bonos"
