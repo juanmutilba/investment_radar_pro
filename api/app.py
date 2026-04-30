@@ -75,6 +75,8 @@ app.include_router(portfolio_router)
 
 # --- Eventos USA (cache updater) ---
 _USA_EVENTS_LOCK = threading.Lock()
+_ESTIMATED_USA_EVENTS_UPDATE_S = 600.0
+
 _USA_EVENTS_UPDATE: dict[str, Any] = {
     "status": "idle",  # idle | running | success | error
     "started_at": None,
@@ -82,11 +84,77 @@ _USA_EVENTS_UPDATE: dict[str, Any] = {
     "message": None,
     "error": None,
     "last_updated_at": None,
+    "progress_pct": 0.0,
+    "progress_message": "Listo para actualizar",
 }
 
 
 def _events_cache_usa_path() -> Path:
     return Path(__file__).resolve().parent.parent / "data" / "events_cache_usa.json"
+
+
+def _parse_utc_iso(s: Any) -> datetime | None:
+    if s is None or not isinstance(s, str):
+        return None
+    t = s.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(t)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _running_progress_message(pct: float) -> str:
+    if pct < 10:
+        return "Iniciando actualización..."
+    if pct < 40:
+        return "Consultando eventos..."
+    if pct < 75:
+        return "Procesando dividendos y earnings..."
+    return "Guardando cache..."
+
+
+def _apply_usa_events_progress_locked() -> None:
+    """
+    Actualiza last_updated_at desde cache y progress_* según status (lock ya tomado).
+    """
+    _USA_EVENTS_UPDATE["last_updated_at"] = _compute_last_updated_at_from_cache()
+    st = str(_USA_EVENTS_UPDATE.get("status") or "idle")
+
+    if st == "idle":
+        _USA_EVENTS_UPDATE["progress_pct"] = 0.0
+        _USA_EVENTS_UPDATE["progress_message"] = "Listo para actualizar"
+        return
+    if st == "running":
+        start = _parse_utc_iso(_USA_EVENTS_UPDATE.get("started_at"))
+        now = datetime.now(timezone.utc)
+        if start is None:
+            pct = 0.0
+        else:
+            elapsed = (now - start).total_seconds()
+            pct = min(95.0, max(0.0, elapsed / _ESTIMATED_USA_EVENTS_UPDATE_S * 100.0))
+        _USA_EVENTS_UPDATE["progress_pct"] = round(pct, 1)
+        _USA_EVENTS_UPDATE["progress_message"] = _running_progress_message(pct)
+        return
+    if st == "success":
+        _USA_EVENTS_UPDATE["progress_pct"] = 100.0
+        _USA_EVENTS_UPDATE["progress_message"] = "Eventos actualizados correctamente."
+        return
+    if st == "error":
+        _USA_EVENTS_UPDATE["progress_message"] = "No se pudo actualizar eventos"
+        p = _USA_EVENTS_UPDATE.get("progress_pct")
+        if isinstance(p, (int, float)):
+            return
+        start = _parse_utc_iso(_USA_EVENTS_UPDATE.get("started_at"))
+        end = _parse_utc_iso(_USA_EVENTS_UPDATE.get("finished_at")) or datetime.now(timezone.utc)
+        if start is None:
+            pct = 0.0
+        else:
+            elapsed = (end - start).total_seconds()
+            pct = min(95.0, max(0.0, elapsed / _ESTIMATED_USA_EVENTS_UPDATE_S * 100.0))
+        _USA_EVENTS_UPDATE["progress_pct"] = round(pct, 1)
 
 
 def _compute_last_updated_at_from_cache() -> str | None:
@@ -138,6 +206,8 @@ def _run_usa_events_cache_update_bg() -> None:
                 "message": "Actualizando eventos USA…",
                 "error": None,
                 "last_updated_at": _compute_last_updated_at_from_cache(),
+                "progress_pct": 0.0,
+                "progress_message": "Iniciando actualización...",
             }
         )
 
@@ -163,10 +233,19 @@ def _run_usa_events_cache_update_bg() -> None:
                     "message": "Eventos USA actualizados correctamente.",
                     "error": None,
                     "last_updated_at": _compute_last_updated_at_from_cache(),
+                    "progress_pct": 100.0,
+                    "progress_message": "Eventos actualizados correctamente.",
                 }
             )
     except Exception as e:
         finished_at = datetime.now(timezone.utc).isoformat()
+        start_dt = _parse_utc_iso(started_at)
+        end_dt = _parse_utc_iso(finished_at)
+        if start_dt is not None and end_dt is not None:
+            elapsed = (end_dt - start_dt).total_seconds()
+            err_pct = min(95.0, max(0.0, elapsed / _ESTIMATED_USA_EVENTS_UPDATE_S * 100.0))
+        else:
+            err_pct = 0.0
         with _USA_EVENTS_LOCK:
             _USA_EVENTS_UPDATE.update(
                 {
@@ -175,6 +254,8 @@ def _run_usa_events_cache_update_bg() -> None:
                     "message": "Falló la actualización de eventos USA.",
                     "error": f"{type(e).__name__}: {e}",
                     "last_updated_at": _compute_last_updated_at_from_cache(),
+                    "progress_pct": round(err_pct, 1),
+                    "progress_message": "No se pudo actualizar eventos",
                 }
             )
 
@@ -394,16 +475,17 @@ def trigger_update_events_usa():
     with _USA_EVENTS_LOCK:
         st = str(_USA_EVENTS_UPDATE.get("status") or "idle")
         if st == "running":
+            _apply_usa_events_progress_locked()
             return dict(_USA_EVENTS_UPDATE)
         # lanzar thread
         t = threading.Thread(target=_run_usa_events_cache_update_bg, daemon=True)
         t.start()
+        _apply_usa_events_progress_locked()
         return dict(_USA_EVENTS_UPDATE)
 
 
 @app.get("/events/usa/update-status")
 def get_update_events_usa_status():
     with _USA_EVENTS_LOCK:
-        # refrescar last_updated_at en lecturas (por si se actualizó fuera del proceso)
-        _USA_EVENTS_UPDATE["last_updated_at"] = _compute_last_updated_at_from_cache()
+        _apply_usa_events_progress_locked()
         return dict(_USA_EVENTS_UPDATE)

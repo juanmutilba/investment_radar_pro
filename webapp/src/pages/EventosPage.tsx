@@ -580,6 +580,36 @@ export function EventosPage() {
           </span>
         </div>
       </div>
+      {updateStatus?.status === "running" ? (
+        <div className="card" style={{ padding: "0.75rem 1rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+            <div
+              style={{
+                flex: 1,
+                height: 8,
+                background: "var(--border)",
+                borderRadius: 4,
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  width: `${Math.min(100, Math.max(0, Math.round(Number(updateStatus.progress_pct) || 0)))}%`,
+                  height: "100%",
+                  background: "var(--accent)",
+                  transition: "width 0.35s ease",
+                }}
+              />
+            </div>
+            <span className="msg-muted" style={{ fontSize: "0.85rem", minWidth: "2.75rem", textAlign: "right" }}>
+              {Math.min(100, Math.max(0, Math.round(Number(updateStatus.progress_pct) || 0)))}%
+            </span>
+          </div>
+          <p className="msg-muted" style={{ margin: "0.45rem 0 0", fontSize: "0.82rem" }}>
+            {updateStatus.progress_message ?? "Actualizando eventos…"}
+          </p>
+        </div>
+      ) : null}
       {updateMsg ? (
         <div className="card">
           <p className="msg-muted" style={{ margin: 0 }}>

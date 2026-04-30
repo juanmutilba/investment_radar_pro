@@ -589,6 +589,8 @@ export type UsaEventsUpdateStatus = {
   message: string | null;
   error: string | null;
   last_updated_at: string | null;
+  progress_pct?: number | null;
+  progress_message?: string | null;
 };
 
 function isUsaEventsUpdateStatus(v: unknown): v is UsaEventsUpdateStatus {
