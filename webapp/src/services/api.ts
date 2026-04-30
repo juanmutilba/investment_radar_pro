@@ -580,6 +580,49 @@ export async function runScan(): Promise<RunScanResponse> {
   return { status: o.status, summary: o.summary };
 }
 
+// --- Eventos USA (cache updater) ---
+
+export type UsaEventsUpdateStatus = {
+  status: "idle" | "running" | "success" | "error";
+  started_at: string | null;
+  finished_at: string | null;
+  message: string | null;
+  error: string | null;
+  last_updated_at: string | null;
+};
+
+function isUsaEventsUpdateStatus(v: unknown): v is UsaEventsUpdateStatus {
+  if (v === null || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  const st = o.status;
+  if (st !== "idle" && st !== "running" && st !== "success" && st !== "error") return false;
+  return true;
+}
+
+export async function triggerUsaEventsUpdate(): Promise<UsaEventsUpdateStatus> {
+  const res = await fetch(`${BASE}/events/usa/update`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(await readHttpErrorMessage(res));
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isUsaEventsUpdateStatus(data)) {
+    throw new Error("Respuesta inesperada: events usa update");
+  }
+  return data;
+}
+
+export async function getUsaEventsUpdateStatus(): Promise<UsaEventsUpdateStatus> {
+  const res = await fetch(`${BASE}/events/usa/update-status`);
+  if (!res.ok) {
+    throw new Error(await readHttpErrorMessage(res));
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isUsaEventsUpdateStatus(data)) {
+    throw new Error("Respuesta inesperada: events usa update-status");
+  }
+  return data;
+}
+
 // --- Cartera (SQLite) ---
 
 export type PortfolioAssetType = "USA" | "Argentina" | "CEDEAR";

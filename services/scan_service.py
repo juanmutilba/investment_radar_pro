@@ -37,7 +37,7 @@ def _prepare_dataframe(df, previous_file, previous_sheet_name):
     return df
 
 
-def run_full_scan(*, verbose: bool = True) -> dict:
+def run_full_scan(*, verbose: bool = True, pause_after_usa_s: float = 2.0) -> dict:
     """
     Orquesta el scan completo (USA + Argentina), merge con export previo,
     priorización y alertas. Misma secuencia que el CLI histórico.
@@ -47,6 +47,9 @@ def run_full_scan(*, verbose: bool = True) -> dict:
     verbose
         Si True, imprime el mismo progreso que el CLI (motores USA / Argentina).
         Usar False desde API u otros entornos sin consola.
+    pause_after_usa_s
+        Segundos de pausa (time.sleep) tras el motor USA y antes del de Argentina.
+        Ayuda a reducir YFRateLimitError por ráfagas consecutivas a Yahoo.
 
     Returns
     -------
@@ -61,6 +64,8 @@ def run_full_scan(*, verbose: bool = True) -> dict:
     if verbose:
         print("Corriendo motor USA...")
     usa_df, usa_universo, usa_sectores, _ = run_usa_engine()
+    if pause_after_usa_s > 0:
+        time.sleep(pause_after_usa_s)
     if verbose:
         print("\nCorriendo motor Argentina...")
     arg_df, arg_universo, arg_sectores = run_argentina_engine()
@@ -122,7 +127,7 @@ def _count_nonempty_rows_df(df) -> int:
         return 0
 
 
-def run_full_scan_timed(*, verbose: bool = True) -> tuple[dict, dict]:
+def run_full_scan_timed(*, verbose: bool = True, pause_after_usa_s: float = 2.0) -> tuple[dict, dict]:
     """
     Igual a run_full_scan pero devuelve además métricas/timings por etapa,
     sin alterar la lógica de cálculo.
@@ -137,6 +142,9 @@ def run_full_scan_timed(*, verbose: bool = True) -> tuple[dict, dict]:
     t0 = time.perf_counter()
     usa_df, usa_universo, usa_sectores, _ = run_usa_engine()
     usa_scan_s = time.perf_counter() - t0
+
+    if pause_after_usa_s > 0:
+        time.sleep(pause_after_usa_s)
 
     if verbose:
         print("\nCorriendo motor Argentina...")
@@ -154,15 +162,20 @@ def run_full_scan_timed(*, verbose: bool = True) -> tuple[dict, dict]:
     usa_top10 = usa_df.head(10).copy()
     arg_top10 = arg_df.head(10).copy()
 
-    t0 = time.perf_counter()
+    t_alerts0 = time.perf_counter()
+    t_usa_alerts0 = time.perf_counter()
     usa_alerts = generate_alerts(usa_df)
-    arg_alerts = generate_alerts(arg_df)
+    usa_alerts_ms = (time.perf_counter() - t_usa_alerts0) * 1000.0
 
     if usa_alerts is not None and not usa_alerts.empty:
+        t_usa_cedear0 = time.perf_counter()
         cedear_set = get_active_cedear_usa_tickers()
         usa_alerts["CEDEAR"] = usa_alerts["Ticker"].apply(
             lambda t: "SI" if normalize_usa_ticker_for_cedear_lookup(t) in cedear_set else "NO"
         )
+        usa_alerts_ms += (time.perf_counter() - t_usa_cedear0) * 1000.0
+
+    arg_alerts = generate_alerts(arg_df)
 
     usa_detected = collect_detected_alerts(usa_df)
     arg_detected = collect_detected_alerts(arg_df)
@@ -177,7 +190,8 @@ def run_full_scan_timed(*, verbose: bool = True) -> tuple[dict, dict]:
         )
     except Exception:
         pass
-    alerts_s = time.perf_counter() - t0
+    alerts_s = time.perf_counter() - t_alerts0
+    print(f"[USA_TIMING] alerts_ms={usa_alerts_ms:.1f}")
 
     outputs = {
         "usa_df": usa_df,

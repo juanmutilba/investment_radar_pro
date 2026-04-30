@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { getRaw, parseNumberLoose } from "@/components/radar/radarTableCore";
-import { fetchLatestRadar, type LatestRadarResponse, type RadarRow } from "@/services/api";
+import {
+  fetchLatestRadar,
+  getUsaEventsUpdateStatus,
+  triggerUsaEventsUpdate,
+  type LatestRadarResponse,
+  type RadarRow,
+  type UsaEventsUpdateStatus,
+} from "@/services/api";
 
 type UsaEventRow = {
   ticker: string;
@@ -18,10 +25,14 @@ type UsaEventRow = {
   earningsEn30d: boolean | null;
   fechaUltimoDividendo: string | null;
   ultimoDividendo: number | null;
+  dividendYieldPagoPct: number | null;
   dividendYieldAnualEstimadoPct: number | null;
   frecuenciaDividendos: string | null;
   fechaProximoDividendoEstimado: string | null;
   diasHastaProximoDividendo: number | null;
+  dividendosEstimados12m: number | null;
+  flujoDividendos12mPorAccion: number | null;
+  updatedAt: string | null;
 };
 
 const KEYS = {
@@ -41,6 +52,11 @@ const KEYS = {
 
   fechaUltDiv: ["fecha_ultimo_dividendo", "FechaUltimoDividendo", "fechaUltimoDividendo"],
   ultDiv: ["ultimo_dividendo", "UltimoDividendo", "ultimoDividendo"],
+  yPago: [
+    "dividend_yield_pago_pct",
+    "DividendYieldPagoPct",
+    "dividendYieldPagoPct",
+  ],
   yAnual: [
     "dividend_yield_anual_estimado_pct",
     "DividendYieldAnualEstimadoPct",
@@ -57,6 +73,9 @@ const KEYS = {
     "DiasHastaProximoDividendo",
     "diasHastaProximoDividendo",
   ],
+  nPagos12m: ["dividendos_estimados_12m", "DividendosEstimados12m", "dividendosEstimados12m"],
+  flujo12m: ["flujo_dividendos_12m_por_accion", "FlujoDividendos12mPorAccion", "flujoDividendos12mPorAccion"],
+  updatedAt: ["updated_at", "UpdatedAt", "updatedAt"],
 } as const;
 
 function parseIsoDate(v: unknown): Date | null {
@@ -69,6 +88,13 @@ function parseIsoDate(v: unknown): Date | null {
   const mo = Number(m[2]) - 1;
   const d = Number(m[3]);
   const dt = new Date(Date.UTC(y, mo, d));
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+function parseIsoDateTimeUtc(v: unknown): Date | null {
+  const s = v === null || v === undefined ? "" : String(v).trim();
+  if (!s) return null;
+  const dt = new Date(s);
   return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
@@ -132,6 +158,7 @@ function toUsaEventRow(r: RadarRow): UsaEventRow | null {
       return s ? s : null;
     })(),
     ultimoDividendo: parseNumberLoose(getRaw(r, KEYS.ultDiv)),
+    dividendYieldPagoPct: parseNumberLoose(getRaw(r, KEYS.yPago)),
     dividendYieldAnualEstimadoPct: parseNumberLoose(getRaw(r, KEYS.yAnual)),
     frecuenciaDividendos: (() => {
       const v = getRaw(r, KEYS.freq);
@@ -144,6 +171,13 @@ function toUsaEventRow(r: RadarRow): UsaEventRow | null {
       return s ? s : null;
     })(),
     diasHastaProximoDividendo: parseNumberLoose(getRaw(r, KEYS.diasNextDiv)),
+    dividendosEstimados12m: parseNumberLoose(getRaw(r, KEYS.nPagos12m)),
+    flujoDividendos12mPorAccion: parseNumberLoose(getRaw(r, KEYS.flujo12m)),
+    updatedAt: (() => {
+      const v = getRaw(r, KEYS.updatedAt);
+      const s = v === undefined || v === null ? "" : String(v).trim();
+      return s ? s : null;
+    })(),
   };
 }
 
@@ -168,6 +202,13 @@ function monthKeyUtc(d: Date): string {
 
 const fmtUsd2 = new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtPct2 = new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtEsArDateTime = new Intl.DateTimeFormat("es-AR", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
 
 export function EventosPage() {
   const [radar, setRadar] = useState<LatestRadarResponse | null | undefined>(undefined);
@@ -177,6 +218,19 @@ export function EventosPage() {
   const [detailSortDir, setDetailSortDir] = useState<"asc" | "desc">("asc");
   const [flowOnlyCedear, setFlowOnlyCedear] = useState<boolean>(false);
   const detailRef = useRef<HTMLDivElement | null>(null);
+
+  const [divRankCedear, setDivRankCedear] = useState<"all" | "cedear">("all");
+  const [divRankNextPay, setDivRankNextPay] = useState<boolean>(false);
+  const [divRankFreq, setDivRankFreq] = useState<
+    "all" | "monthly" | "quarterly" | "semiannual" | "annual" | "irregular"
+  >("all");
+  const [divRankSort, setDivRankSort] = useState<
+    "yield_anual" | "flujo_12m" | "pagos_12m" | "proximo_pago" | "score"
+  >("yield_anual");
+
+  const [updateStatus, setUpdateStatus] = useState<UsaEventsUpdateStatus | null>(null);
+  const [updateMsg, setUpdateMsg] = useState<string | null>(null);
+  const [isTriggering, setIsTriggering] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -194,8 +248,66 @@ export function EventosPage() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    getUsaEventsUpdateStatus()
+      .then((s) => {
+        if (!cancelled) setUpdateStatus(s);
+      })
+      .catch(() => null);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (updateStatus?.status !== "running") return;
+    const id = window.setInterval(() => {
+      getUsaEventsUpdateStatus()
+        .then((s) => {
+          setUpdateStatus(s);
+          if (s.status === "success") {
+            setUpdateMsg("Eventos actualizados correctamente.");
+            const lu = s.last_updated_at;
+            fetchLatestRadar()
+              .then((d) => setRadar(d))
+              .catch(() => null)
+              .finally(() => {
+                if (!lu) return;
+                setUpdateStatus((prev) => (prev ? { ...prev, last_updated_at: lu } : prev));
+              });
+          } else if (s.status === "error") {
+            setUpdateMsg("No se pudieron actualizar los eventos. Podés reintentar.");
+          }
+        })
+        .catch(() => null);
+    }, 4000);
+    return () => window.clearInterval(id);
+  }, [updateStatus?.status]);
+
   const rows = radar?.rows ?? [];
   const events = useMemo(() => rows.map(toUsaEventRow).filter(Boolean) as UsaEventRow[], [rows]);
+
+  const latestUpdatedAt = useMemo(() => {
+    let max: Date | null = null;
+    for (const r of events) {
+      const dt = parseIsoDateTimeUtc(r.updatedAt);
+      if (!dt) continue;
+      if (max === null || dt.getTime() > max.getTime()) {
+        max = dt;
+      }
+    }
+    return max;
+  }, [events]);
+
+  const displayUpdatedAt = useMemo(() => {
+    const raw = updateStatus?.last_updated_at;
+    if (typeof raw === "string" && raw.trim()) {
+      const dt = parseIsoDateTimeUtc(raw);
+      if (dt) return dt;
+    }
+    return latestUpdatedAt;
+  }, [updateStatus?.last_updated_at, latestUpdatedAt]);
 
   const upcoming = useMemo(() => {
     const items = events
@@ -215,6 +327,50 @@ export function EventosPage() {
     if (!flowOnlyCedear) return events;
     return events.filter((r) => r.tieneCedear === true);
   }, [events, flowOnlyCedear]);
+
+  const dividendRankRows = useMemo(() => {
+    let out = events;
+    if (divRankCedear === "cedear") {
+      out = out.filter((r) => r.tieneCedear === true);
+    }
+    if (divRankNextPay) {
+      out = out.filter((r) => (r.fechaProximoDividendoEstimado ?? "").trim() !== "");
+    }
+    if (divRankFreq !== "all") {
+      out = out.filter((r) => (r.frecuenciaDividendos ?? "").trim().toLowerCase() === divRankFreq);
+    }
+
+    const numOrNegInf = (v: number | null) => (v === null ? Number.NEGATIVE_INFINITY : v);
+    const daysOrInf = (v: number | null) => (v === null ? Number.POSITIVE_INFINITY : v);
+
+    const sorted = [...out];
+    sorted.sort((a, b) => {
+      if (divRankSort === "yield_anual") {
+        const va = numOrNegInf(a.dividendYieldAnualEstimadoPct);
+        const vb = numOrNegInf(b.dividendYieldAnualEstimadoPct);
+        if (va !== vb) return vb - va;
+      } else if (divRankSort === "flujo_12m") {
+        const va = numOrNegInf(a.flujoDividendos12mPorAccion);
+        const vb = numOrNegInf(b.flujoDividendos12mPorAccion);
+        if (va !== vb) return vb - va;
+      } else if (divRankSort === "pagos_12m") {
+        const va = numOrNegInf(a.dividendosEstimados12m);
+        const vb = numOrNegInf(b.dividendosEstimados12m);
+        if (va !== vb) return vb - va;
+      } else if (divRankSort === "proximo_pago") {
+        const va = daysOrInf(a.diasHastaProximoDividendo);
+        const vb = daysOrInf(b.diasHastaProximoDividendo);
+        if (va !== vb) return va - vb;
+      } else if (divRankSort === "score") {
+        const va = numOrNegInf(a.totalScore);
+        const vb = numOrNegInf(b.totalScore);
+        if (va !== vb) return vb - va;
+      }
+      return a.ticker.localeCompare(b.ticker);
+    });
+
+    return sorted.slice(0, 30);
+  }, [divRankCedear, divRankFreq, divRankNextPay, divRankSort, events]);
 
   const dividendMonthly = useMemo(() => {
     const agg = new Map<string, { amount: number; count: number }>();
@@ -373,6 +529,65 @@ export function EventosPage() {
       <p className="page-desc">
         Próximos eventos del universo USA (earnings y dividendos estimados) y un flujo mensual proyectado de dividendos.
       </p>
+      <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
+        <div className="msg-muted" style={{ margin: 0 }}>
+          {displayUpdatedAt
+            ? `Eventos actualizados: ${fmtEsArDateTime.format(displayUpdatedAt)}`
+            : "Eventos sin actualizar"}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.25rem" }}>
+          <button
+            type="button"
+            className="radar-refresh-btn"
+            disabled={isTriggering || updateStatus?.status === "running"}
+            onClick={() => {
+              setUpdateMsg(null);
+              setIsTriggering(true);
+              triggerUsaEventsUpdate()
+                .then((s) => {
+                  setUpdateStatus(s);
+                  if (s.status === "running") {
+                    setUpdateMsg("Actualizando eventos… puede tardar varios minutos.");
+                  } else if (s.status === "success") {
+                    setUpdateMsg("Eventos actualizados correctamente.");
+                    const lu = s.last_updated_at;
+                    fetchLatestRadar()
+                      .then((d) => setRadar(d))
+                      .catch(() => null)
+                      .finally(() => {
+                        if (!lu) return;
+                        setUpdateStatus((prev) => (prev ? { ...prev, last_updated_at: lu } : prev));
+                      });
+                  } else if (s.status === "error") {
+                    setUpdateMsg("No se pudieron actualizar los eventos. Podés reintentar.");
+                  }
+                })
+                .catch((e: unknown) => {
+                  setUpdateMsg(e instanceof Error ? e.message : "No se pudo iniciar la actualización.");
+                })
+                .finally(() => setIsTriggering(false));
+            }}
+            title="Actualiza events_cache_usa.json en background"
+          >
+            {updateStatus?.status === "running" ? "Actualizando…" : "Actualizar eventos"}
+          </button>
+          <span className="msg-muted" style={{ fontSize: "0.82rem" }}>
+            {updateStatus?.status === "running"
+              ? "Actualizando eventos… puede tardar varios minutos."
+              : updateStatus?.status === "error"
+                ? "Último intento falló."
+                : "Actualización manual de eventos USA."}
+          </span>
+        </div>
+      </div>
+      {updateMsg ? (
+        <div className="card">
+          <p className="msg-muted" style={{ margin: 0 }}>
+            {updateMsg}
+            {updateStatus?.status === "error" && updateStatus.error ? ` (${updateStatus.error})` : ""}
+          </p>
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="card">
@@ -683,6 +898,135 @@ export function EventosPage() {
         <p className="msg-muted" style={{ marginBottom: 0, marginTop: "0.75rem", fontSize: "0.82rem" }}>
           Nota: por ahora se muestra solo el flujo proyectado; la estructura queda lista para sumar histórico real desde
           la cache de eventos en una fase posterior.
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>Ranking de dividendos</h2>
+
+        <div className="radar-toolbar" style={{ marginBottom: "0.75rem" }}>
+          <div className="radar-toolbar__field">
+            <label className="radar-toolbar__label">Universo</label>
+            <select
+              className="radar-toolbar__select"
+              value={divRankCedear}
+              onChange={(e) => setDivRankCedear(e.target.value === "cedear" ? "cedear" : "all")}
+            >
+              <option value="all">Todos</option>
+              <option value="cedear">Solo CEDEAR</option>
+            </select>
+          </div>
+
+          <div className="radar-toolbar__field">
+            <label className="radar-toolbar__label">Próximo pago</label>
+            <button
+              type="button"
+              className="radar-refresh-btn"
+              style={{ padding: "0.35rem 0.6rem", opacity: divRankNextPay ? 1 : 0.7 }}
+              onClick={() => setDivRankNextPay((v) => !v)}
+              title="Filtrar solo empresas con próximo pago estimado"
+            >
+              Con próximo pago estimado
+            </button>
+          </div>
+
+          <div className="radar-toolbar__field">
+            <label className="radar-toolbar__label">Frecuencia</label>
+            <select
+              className="radar-toolbar__select"
+              value={divRankFreq}
+              onChange={(e) => setDivRankFreq(e.target.value as typeof divRankFreq)}
+            >
+              <option value="all">Todas</option>
+              <option value="monthly">mensual</option>
+              <option value="quarterly">trimestral</option>
+              <option value="semiannual">semestral</option>
+              <option value="annual">anual</option>
+              <option value="irregular">irregular</option>
+            </select>
+          </div>
+
+          <div className="radar-toolbar__field">
+            <label className="radar-toolbar__label">Orden</label>
+            <select
+              className="radar-toolbar__select"
+              value={divRankSort}
+              onChange={(e) => setDivRankSort(e.target.value as typeof divRankSort)}
+            >
+              <option value="yield_anual">Mejor yield anual estimado</option>
+              <option value="flujo_12m">Mayor flujo 12m por acción</option>
+              <option value="pagos_12m">Más pagos estimados</option>
+              <option value="proximo_pago">Próximo pago más cercano</option>
+              <option value="score">Mejor score radar</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table className="radar-table" style={{ minWidth: 980 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left" }}>Ticker</th>
+                <th style={{ textAlign: "left" }}>Empresa</th>
+                <th style={{ textAlign: "center" }}>CEDEAR</th>
+                <th style={{ textAlign: "center" }}>Frecuencia</th>
+                <th style={{ textAlign: "center" }}>Próximo pago</th>
+                <th style={{ textAlign: "center" }}>Días</th>
+                <th style={{ textAlign: "right" }}>Último dividendo</th>
+                <th style={{ textAlign: "right" }}>Yield anual %</th>
+                <th style={{ textAlign: "right" }}>Flujo 12m por acción</th>
+                <th style={{ textAlign: "center" }}>Pagos 12m</th>
+                <th style={{ textAlign: "center" }}>SignalState</th>
+                <th style={{ textAlign: "right" }}>TotalScore</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dividendRankRows.length === 0 ? (
+                <tr>
+                  <td colSpan={12} className="msg-muted">
+                    Sin filas para los filtros seleccionados.
+                  </td>
+                </tr>
+              ) : (
+                dividendRankRows.map((r) => (
+                  <tr key={r.ticker}>
+                    <td>{r.ticker}</td>
+                    <td className="msg-muted">{(r.empresa ?? "Sin dato").trim() || "Sin dato"}</td>
+                    <td style={{ textAlign: "center" }}>
+                      {r.tieneCedear === null ? "—" : r.tieneCedear ? "SI" : "NO"}
+                    </td>
+                    <td style={{ textAlign: "center" }}>{(r.frecuenciaDividendos ?? "Sin dato").trim() || "Sin dato"}</td>
+                    <td style={{ textAlign: "center" }}>{fmtDateIsoOrEmpty(r.fechaProximoDividendoEstimado)}</td>
+                    <td style={{ textAlign: "center" }}>
+                      {r.diasHastaProximoDividendo === null ? "Sin dato" : String(r.diasHastaProximoDividendo)}
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      {r.ultimoDividendo === null ? "Sin dato" : `USD ${fmtUsd2.format(r.ultimoDividendo)}`}
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      {r.dividendYieldAnualEstimadoPct === null
+                        ? "Sin dato"
+                        : `${fmtPct2.format(r.dividendYieldAnualEstimadoPct)}%`}
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      {r.flujoDividendos12mPorAccion === null ? "Sin dato" : `USD ${fmtUsd2.format(r.flujoDividendos12mPorAccion)}`}
+                    </td>
+                    <td style={{ textAlign: "center" }}>
+                      {r.dividendosEstimados12m === null ? "Sin dato" : String(r.dividendosEstimados12m)}
+                    </td>
+                    <td style={{ textAlign: "center" }}>{(r.signalState ?? "Sin dato").trim() || "Sin dato"}</td>
+                    <td style={{ textAlign: "right" }}>
+                      {r.totalScore === null ? "Sin dato" : r.totalScore.toFixed(2)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="msg-muted" style={{ marginBottom: 0, marginTop: "0.75rem", fontSize: "0.82rem" }}>
+          Se muestra top 30 para mantener la página liviana.
         </p>
       </div>
     </>

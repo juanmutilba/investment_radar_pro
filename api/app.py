@@ -35,6 +35,11 @@ from services.export_service import export_results
 from services.engine_run_metrics import load_last_scan_metrics, save_last_scan_metrics
 from services.scan_service import run_full_scan_timed
 import time
+import threading
+import subprocess
+import sys
+import json as _json
+
 
 
 @asynccontextmanager
@@ -66,6 +71,112 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Investment Radar API", version="0.1.0", lifespan=lifespan)
 
 app.include_router(portfolio_router)
+
+
+# --- Eventos USA (cache updater) ---
+_USA_EVENTS_LOCK = threading.Lock()
+_USA_EVENTS_UPDATE: dict[str, Any] = {
+    "status": "idle",  # idle | running | success | error
+    "started_at": None,
+    "finished_at": None,
+    "message": None,
+    "error": None,
+    "last_updated_at": None,
+}
+
+
+def _events_cache_usa_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "data" / "events_cache_usa.json"
+
+
+def _compute_last_updated_at_from_cache() -> str | None:
+    """
+    1) Intenta max(updated_at) dentro de data/events_cache_usa.json
+    2) Fallback: mtime del archivo (UTC)
+    """
+    p = _events_cache_usa_path()
+    if not p.exists():
+        return None
+    try:
+        raw = p.read_text(encoding="utf-8").strip()
+    except Exception:
+        raw = ""
+    if raw:
+        try:
+            obj = _json.loads(raw)
+        except Exception:
+            obj = None
+        if isinstance(obj, dict):
+            best: str | None = None
+            for _, v in obj.items():
+                if not isinstance(v, dict):
+                    continue
+                u = v.get("updated_at")
+                if isinstance(u, str) and u.strip():
+                    # ISO comparable lexicográficamente cuando es UTC con Z
+                    if best is None or u > best:
+                        best = u
+            if best is not None:
+                return best
+    try:
+        ts = p.stat().st_mtime
+        return datetime.fromtimestamp(ts, tz=timezone.utc).replace(microsecond=0).isoformat()
+    except Exception:
+        return None
+
+
+def _run_usa_events_cache_update_bg() -> None:
+    root = Path(__file__).resolve().parent.parent
+    script = root / "tools" / "update_usa_events_cache.py"
+    started_at = datetime.now(timezone.utc).isoformat()
+    with _USA_EVENTS_LOCK:
+        _USA_EVENTS_UPDATE.update(
+            {
+                "status": "running",
+                "started_at": started_at,
+                "finished_at": None,
+                "message": "Actualizando eventos USA…",
+                "error": None,
+                "last_updated_at": _compute_last_updated_at_from_cache(),
+            }
+        )
+
+    try:
+        if not script.exists():
+            raise RuntimeError(f"Script no encontrado: {script}")
+        proc = subprocess.run(
+            [sys.executable, str(script)],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        finished_at = datetime.now(timezone.utc).isoformat()
+        if proc.returncode != 0:
+            err_txt = (proc.stderr or "").strip() or (proc.stdout or "").strip()
+            raise RuntimeError(f"exit_code={proc.returncode} {err_txt[:4000]}")
+        with _USA_EVENTS_LOCK:
+            _USA_EVENTS_UPDATE.update(
+                {
+                    "status": "success",
+                    "finished_at": finished_at,
+                    "message": "Eventos USA actualizados correctamente.",
+                    "error": None,
+                    "last_updated_at": _compute_last_updated_at_from_cache(),
+                }
+            )
+    except Exception as e:
+        finished_at = datetime.now(timezone.utc).isoformat()
+        with _USA_EVENTS_LOCK:
+            _USA_EVENTS_UPDATE.update(
+                {
+                    "status": "error",
+                    "finished_at": finished_at,
+                    "message": "Falló la actualización de eventos USA.",
+                    "error": f"{type(e).__name__}: {e}",
+                    "last_updated_at": _compute_last_updated_at_from_cache(),
+                }
+            )
 
 
 @app.get("/health")
@@ -272,3 +383,27 @@ def get_latest_radar_argentina():
     if payload is None:
         raise HTTPException(status_code=404, detail="No hay export radar_*.xlsx en la carpeta configurada")
     return payload
+
+
+@app.post("/events/usa/update")
+def trigger_update_events_usa():
+    """
+    Dispara actualización de data/events_cache_usa.json en background.
+    No bloquea. Si ya está running, devuelve el estado actual.
+    """
+    with _USA_EVENTS_LOCK:
+        st = str(_USA_EVENTS_UPDATE.get("status") or "idle")
+        if st == "running":
+            return dict(_USA_EVENTS_UPDATE)
+        # lanzar thread
+        t = threading.Thread(target=_run_usa_events_cache_update_bg, daemon=True)
+        t.start()
+        return dict(_USA_EVENTS_UPDATE)
+
+
+@app.get("/events/usa/update-status")
+def get_update_events_usa_status():
+    with _USA_EVENTS_LOCK:
+        # refrescar last_updated_at en lecturas (por si se actualizó fuera del proceso)
+        _USA_EVENTS_UPDATE["last_updated_at"] = _compute_last_updated_at_from_cache()
+        return dict(_USA_EVENTS_UPDATE)

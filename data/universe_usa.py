@@ -2,6 +2,9 @@ from data.cedear_mapping import ticker_usa_list_for_universe_merge
 
 # Subyacentes USA de CEDEAR activos se fusionan al final de TICKERS_USA (dedupe; ticker limpio, sin .BA).
 
+# Tickers problemáticos conocidos (sin CEDEAR y sin history válido).
+KNOWN_BAD_TICKERS = {"MMC", "ERJ", "DISN"}
+
 TICKERS_CORE = [
     'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'AMD', 'NFLX', 'MELI',
     'KO', 'PEP', 'WMT', 'COST', 'PG', 'JNJ', 'UNH', 'XOM', 'CVX', 'V',
@@ -69,6 +72,7 @@ def _dedupe_preserve_order(seq: list[str]) -> list[str]:
 TICKERS_USA = _dedupe_preserve_order(
     TICKERS_CORE + TICKERS_EXTENDED + TICKERS_ETF + TICKERS_GROWTH + ticker_usa_list_for_universe_merge(),
 )
+TICKERS_USA = [t for t in TICKERS_USA if t not in KNOWN_BAD_TICKERS]
 
 
 def classify_universe_type(ticker: str) -> str:
