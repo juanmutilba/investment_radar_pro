@@ -18,7 +18,7 @@ if not exist "%ROOT%\venv\Scripts\python.exe" (
 )
 
 "%ROOT%\venv\Scripts\python.exe" -m pip install --upgrade pip
-"%ROOT%\venv\Scripts\pip.exe" install -r "%ROOT%\requirements.txt" -r "%ROOT%\requirements-api.txt"
+"%ROOT%\venv\Scripts\python.exe" -m pip install -r "%ROOT%\requirements.txt"
 
 echo.
 echo Verificando import del backend...
