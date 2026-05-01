@@ -580,6 +580,48 @@ export async function runScan(): Promise<RunScanResponse> {
   return { status: o.status, summary: o.summary };
 }
 
+/** Estado del scan en background (POST /scan/run, GET /scan/status). */
+export type ScanStatus = {
+  status: "idle" | "running" | "success" | "error";
+  started_at: string | null;
+  finished_at: string | null;
+  message: string | null;
+  error: string | null;
+  progress_pct?: number | null;
+  progress_message?: string | null;
+  last_scan_at?: string | null;
+};
+
+function isScanStatus(v: unknown): v is ScanStatus {
+  if (v === null || typeof v !== "object") return false;
+  const st = (v as Record<string, unknown>).status;
+  return st === "idle" || st === "running" || st === "success" || st === "error";
+}
+
+export async function triggerScanRun(): Promise<ScanStatus> {
+  const res = await fetch(`${BASE}/scan/run`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(await readHttpErrorMessage(res));
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isScanStatus(data)) {
+    throw new Error("Respuesta inesperada: scan/run");
+  }
+  return data;
+}
+
+export async function getScanStatus(): Promise<ScanStatus> {
+  const res = await fetch(`${BASE}/scan/status`);
+  if (!res.ok) {
+    throw new Error(await readHttpErrorMessage(res));
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isScanStatus(data)) {
+    throw new Error("Respuesta inesperada: scan/status");
+  }
+  return data;
+}
+
 // --- Eventos USA (cache updater) ---
 
 export type UsaEventsUpdateStatus = {

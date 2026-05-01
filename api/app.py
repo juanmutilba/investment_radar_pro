@@ -260,37 +260,82 @@ def _run_usa_events_cache_update_bg() -> None:
             )
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+# --- Scan en background (Dashboard) ---
+_SCAN_RUN_LOCK = threading.Lock()
+_ESTIMATED_SCAN_S = 300.0
+
+_SCAN_RUN_STATE: dict[str, Any] = {
+    "status": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "message": None,
+    "error": None,
+    "progress_pct": 0.0,
+    "progress_message": "Listo para ejecutar scan",
+    "last_scan_at": None,
+}
 
 
-@app.post("/run-scan")
-def run_scan():
+def _scan_running_progress_message(pct: float) -> str:
+    if pct < 10:
+        return "Iniciando scan..."
+    if pct < 40:
+        return "Analizando acciones USA..."
+    if pct < 70:
+        return "Analizando acciones Argentina..."
+    if pct < 90:
+        return "Procesando alertas..."
+    return "Generando export..."
+
+
+def _apply_scan_run_progress_locked() -> None:
+    st = str(_SCAN_RUN_STATE.get("status") or "idle")
+    if st == "idle":
+        _SCAN_RUN_STATE["progress_pct"] = 0.0
+        _SCAN_RUN_STATE["progress_message"] = "Listo para ejecutar scan"
+        return
+    if st == "running":
+        start = _parse_utc_iso(_SCAN_RUN_STATE.get("started_at"))
+        now = datetime.now(timezone.utc)
+        if start is None:
+            pct = 0.0
+        else:
+            elapsed = (now - start).total_seconds()
+            pct = min(95.0, max(0.0, elapsed / _ESTIMATED_SCAN_S * 100.0))
+        _SCAN_RUN_STATE["progress_pct"] = round(pct, 1)
+        _SCAN_RUN_STATE["progress_message"] = _scan_running_progress_message(pct)
+        return
+    if st == "success":
+        _SCAN_RUN_STATE["progress_pct"] = 100.0
+        _SCAN_RUN_STATE["progress_message"] = "Scan ejecutado correctamente."
+        return
+    if st == "error":
+        _SCAN_RUN_STATE["progress_message"] = "No se pudo completar el scan"
+        p = _SCAN_RUN_STATE.get("progress_pct")
+        if isinstance(p, (int, float)):
+            return
+        start = _parse_utc_iso(_SCAN_RUN_STATE.get("started_at"))
+        end = _parse_utc_iso(_SCAN_RUN_STATE.get("finished_at")) or datetime.now(timezone.utc)
+        if start is None:
+            pct = 0.0
+        else:
+            elapsed = (end - start).total_seconds()
+            pct = min(95.0, max(0.0, elapsed / _ESTIMATED_SCAN_S * 100.0))
+        _SCAN_RUN_STATE["progress_pct"] = round(pct, 1)
+
+
+def _perform_full_run_scan(run_id: int) -> dict[str, Any]:
     """
-    Misma secuencia que el CLI: scan completo + export Excel/CSV.
-    Sin prints de motores (verbose=False). Devuelve estado y resumen leído del export.
+    Pipeline completo + export (misma lógica que POST /run-scan).
     """
-    started_at = datetime.now(timezone.utc).isoformat()
     scan_metrics: dict[str, Any] = {}
-    run_id: int | None = None
-
-    try:
-        with connection_scope() as conn:
-            run_id = insert_running_scan_run(conn, started_at, source="api")
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"No se pudo registrar el scan en SQLite: {e}",
-        ) from e
-
     try:
         outputs, scan_metrics = run_full_scan_timed(verbose=False)
         outputs.pop("previous_file")
         export_results(outputs)
     except Exception as e:
         persist_failed_scan_run(run_id, str(e), scan_metrics if scan_metrics else None)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise
 
     scan_finished_at = str(scan_metrics.get("scan_finished_at") or "")
     try:
@@ -310,10 +355,7 @@ def run_scan():
             "Scan completado pero no se pudo leer el resumen del export",
             scan_metrics,
         )
-        raise HTTPException(
-            status_code=500,
-            detail="Scan completado pero no se pudo leer el resumen del export",
-        )
+        raise RuntimeError("Scan completado pero no se pudo leer el resumen del export")
 
     scan_metrics["summary_seconds"] = round(summary_s, 3)
     scan_metrics["total_scan_seconds"] = round(
@@ -349,8 +391,130 @@ def run_scan():
         except Exception:
             pass
 
-    # Compat: mantener summary como antes; agregar scan_metrics consolidado.
     return {"status": "ok", "summary": summary, "scan_metrics": scan_metrics}
+
+
+def _run_full_scan_bg(started_at: str) -> None:
+    run_id: int | None = None
+    try:
+        with connection_scope() as conn:
+            run_id = insert_running_scan_run(conn, started_at, source="api")
+    except Exception as e:
+        finished_at = datetime.now(timezone.utc).isoformat()
+        with _SCAN_RUN_LOCK:
+            _SCAN_RUN_STATE.update(
+                {
+                    "status": "error",
+                    "finished_at": finished_at,
+                    "message": "No se pudo registrar el scan",
+                    "error": str(e),
+                    "progress_pct": 0.0,
+                    "progress_message": "No se pudo iniciar el scan",
+                }
+            )
+        return
+
+    try:
+        _perform_full_run_scan(run_id)
+    except Exception as e:
+        finished_at = datetime.now(timezone.utc).isoformat()
+        start_dt = _parse_utc_iso(started_at)
+        end_dt = _parse_utc_iso(finished_at)
+        if start_dt is not None and end_dt is not None:
+            err_pct = min(95.0, max(0.0, (end_dt - start_dt).total_seconds() / _ESTIMATED_SCAN_S * 100.0))
+        else:
+            err_pct = 0.0
+        with _SCAN_RUN_LOCK:
+            _SCAN_RUN_STATE.update(
+                {
+                    "status": "error",
+                    "finished_at": finished_at,
+                    "message": "Falló el scan",
+                    "error": str(e),
+                    "progress_pct": round(err_pct, 1),
+                    "progress_message": "No se pudo completar el scan",
+                }
+            )
+        return
+
+    finished_at = datetime.now(timezone.utc).isoformat()
+    with _SCAN_RUN_LOCK:
+        _SCAN_RUN_STATE.update(
+            {
+                "status": "success",
+                "finished_at": finished_at,
+                "message": "Scan ejecutado correctamente.",
+                "error": None,
+                "progress_pct": 100.0,
+                "progress_message": "Scan ejecutado correctamente.",
+                "last_scan_at": finished_at,
+            }
+        )
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/run-scan")
+def run_scan():
+    """
+    Misma secuencia que el CLI: scan completo + export Excel/CSV.
+    Sin prints de motores (verbose=False). Devuelve estado y resumen leído del export.
+    """
+    started_at = datetime.now(timezone.utc).isoformat()
+    run_id: int | None = None
+
+    try:
+        with connection_scope() as conn:
+            run_id = insert_running_scan_run(conn, started_at, source="api")
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudo registrar el scan en SQLite: {e}",
+        ) from e
+
+    try:
+        return _perform_full_run_scan(run_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/scan/run")
+def trigger_scan_run():
+    """
+    Dispara el scan en background. Si ya está corriendo, devuelve el estado actual.
+    """
+    with _SCAN_RUN_LOCK:
+        if str(_SCAN_RUN_STATE.get("status") or "idle") == "running":
+            _apply_scan_run_progress_locked()
+            return dict(_SCAN_RUN_STATE)
+        started_at = datetime.now(timezone.utc).isoformat()
+        prev_last = _SCAN_RUN_STATE.get("last_scan_at")
+        _SCAN_RUN_STATE.update(
+            {
+                "status": "running",
+                "started_at": started_at,
+                "finished_at": None,
+                "message": "Ejecutando scan…",
+                "error": None,
+                "progress_pct": 0.0,
+                "progress_message": "Iniciando scan...",
+                "last_scan_at": prev_last,
+            }
+        )
+        t = threading.Thread(target=_run_full_scan_bg, args=(started_at,), daemon=True)
+        t.start()
+        _apply_scan_run_progress_locked()
+        return dict(_SCAN_RUN_STATE)
+
+
+@app.get("/scan/status")
+def get_scan_status():
+    with _SCAN_RUN_LOCK:
+        _apply_scan_run_progress_locked()
+        return dict(_SCAN_RUN_STATE)
 
 
 @app.get("/latest-summary")

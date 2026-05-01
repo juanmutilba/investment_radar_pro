@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   fetchLatestSummary,
-  runScan,
+  getScanStatus,
+  triggerScanRun,
   type LatestSummary,
   type ScanMetrics,
+  type ScanStatus,
 } from "@/services/api";
 
 type ScanPhase = "idle" | "loading" | "success" | "error";
@@ -15,12 +17,23 @@ function fileBasename(path: string): string {
   return i >= 0 ? normalized.slice(i + 1) : normalized;
 }
 
+function dashboardScanPhase(scanStatus: ScanStatus | null): ScanPhase {
+  if (!scanStatus) return "idle";
+  if (scanStatus.status === "running") return "loading";
+  if (scanStatus.status === "success") return "success";
+  if (scanStatus.status === "error") return "error";
+  return "idle";
+}
+
 export function DashboardPage() {
   const [summary, setSummary] = useState<LatestSummary | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
-  const [scanPhase, setScanPhase] = useState<ScanPhase>("idle");
+  const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
   const [lastScan, setLastScan] = useState<ScanMetrics | null>(null);
+  const [isTriggering, setIsTriggering] = useState(false);
+
+  const scanPhase = dashboardScanPhase(scanStatus);
 
   const loadSummary = useCallback(() => {
     return fetchLatestSummary()
@@ -40,24 +53,60 @@ export function DashboardPage() {
     void loadSummary();
   }, [loadSummary]);
 
-  const handleRunScan = useCallback(async () => {
-    setScanMessage(null);
-    setScanPhase("loading");
-    try {
-      const r = await runScan();
-      const next = r.summary;
-      setSummary(next);
-      setLastScan(r.scan_metrics ?? next.last_scan ?? null);
-      setSummaryError(null);
-      setScanPhase("success");
-      setScanMessage("Scan completado. Datos actualizados.");
-    } catch (e: unknown) {
-      setScanPhase("error");
-      setScanMessage(
-        e instanceof Error ? e.message : "Error al ejecutar el scan",
-      );
-    }
+  useEffect(() => {
+    let cancelled = false;
+    getScanStatus()
+      .then((s) => {
+        if (!cancelled) setScanStatus(s);
+      })
+      .catch(() => null);
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  useEffect(() => {
+    if (scanStatus?.status !== "running") return;
+    const id = window.setInterval(() => {
+      getScanStatus()
+        .then((s) => {
+          setScanStatus(s);
+          if (s.status === "success") {
+            setScanMessage("Scan ejecutado correctamente.");
+            void loadSummary();
+          } else if (s.status === "error") {
+            setScanMessage(
+              s.error ? `No se completó el scan: ${s.error}` : "No se completó el scan.",
+            );
+          }
+        })
+        .catch(() => null);
+    }, 4000);
+    return () => window.clearInterval(id);
+  }, [scanStatus?.status, loadSummary]);
+
+  const handleRunScan = useCallback(() => {
+    setScanMessage(null);
+    setIsTriggering(true);
+    triggerScanRun()
+      .then((s) => {
+        setScanStatus(s);
+        if (s.status === "running") {
+          /* el polling actualiza mensaje y resumen */
+        } else if (s.status === "success") {
+          setScanMessage("Scan ejecutado correctamente.");
+          void loadSummary();
+        } else if (s.status === "error") {
+          setScanMessage(
+            s.error ? `No se completó el scan: ${s.error}` : "No se completó el scan.",
+          );
+        }
+      })
+      .catch((e: unknown) => {
+        setScanMessage(e instanceof Error ? e.message : "Error al iniciar el scan");
+      })
+      .finally(() => setIsTriggering(false));
+  }, [loadSummary]);
 
   const scanStatusText =
     scanPhase === "loading"
@@ -94,18 +143,50 @@ export function DashboardPage() {
           <button
             type="button"
             className="radar-refresh-btn"
-            disabled={scanPhase === "loading"}
-            onClick={() => void handleRunScan()}
+            disabled={scanStatus?.status === "running" || isTriggering}
+            onClick={() => handleRunScan()}
           >
-            {scanPhase === "loading" ? "Ejecutando…" : "Ejecutar scan"}
+            {scanStatus?.status === "running" ? "Ejecutando…" : "Ejecutar scan"}
           </button>
         </div>
+
+        {scanStatus?.status === "running" ? (
+          <div style={{ marginTop: "0.85rem", padding: "0.75rem 0 0" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              <div
+                style={{
+                  flex: 1,
+                  height: 8,
+                  background: "var(--border)",
+                  borderRadius: 4,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    width: `${Math.min(100, Math.max(0, Math.round(Number(scanStatus.progress_pct) || 0)))}%`,
+                    height: "100%",
+                    background: "var(--accent)",
+                    transition: "width 0.35s ease",
+                  }}
+                />
+              </div>
+              <span className="msg-muted" style={{ fontSize: "0.85rem", minWidth: "2.75rem", textAlign: "right" }}>
+                {Math.min(100, Math.max(0, Math.round(Number(scanStatus.progress_pct) || 0)))}%
+              </span>
+            </div>
+            <p className="msg-muted" style={{ margin: "0.45rem 0 0", fontSize: "0.82rem" }}>
+              {scanStatus.progress_message ?? "Ejecutando scan…"}
+            </p>
+          </div>
+        ) : null}
 
         {scanPhase === "success" && scanMessage !== null ? (
           <div
             className="dashboard-scan__result dashboard-scan__result--success"
             role="status"
             aria-live="polite"
+            style={{ marginTop: "0.85rem" }}
           >
             <strong>Resultado:</strong> {scanMessage}
           </div>
@@ -114,6 +195,7 @@ export function DashboardPage() {
           <div
             className="dashboard-scan__result dashboard-scan__result--error"
             role="alert"
+            style={{ marginTop: "0.85rem" }}
           >
             <strong>No se completó el scan.</strong> {scanMessage}
           </div>
