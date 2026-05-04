@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 
 import { fetchRavaOptionChain } from "@/services/api";
 
-const UNDERLYING_DEFAULT = "GFG";
+const UNDERLYING_CHOICES = ["GFG", "COM", "ALU", "BYM"] as const;
 
 type FlatRow = {
+  activo: string;
   tipo: "CALL" | "PUT";
   strike: number;
   expiryCode: string;
@@ -17,7 +18,7 @@ function fmtCell(v: unknown): string {
   return String(v);
 }
 
-function flattenChain(chain: Record<string, unknown>): FlatRow[] {
+function flattenChain(chain: Record<string, unknown>, activo: string): FlatRow[] {
   const out: FlatRow[] = [];
   for (const [expiryCode, bucket] of Object.entries(chain)) {
     if (bucket === null || typeof bucket !== "object") continue;
@@ -28,13 +29,13 @@ function flattenChain(chain: Record<string, unknown>): FlatRow[] {
       if (row === null || typeof row !== "object") continue;
       const strike = Number(strikeKey);
       if (!Number.isFinite(strike)) continue;
-      out.push({ tipo: "CALL", strike, expiryCode, raw: row as Record<string, unknown> });
+      out.push({ activo, tipo: "CALL", strike, expiryCode, raw: row as Record<string, unknown> });
     }
     for (const [strikeKey, row] of Object.entries(puts)) {
       if (row === null || typeof row !== "object") continue;
       const strike = Number(strikeKey);
       if (!Number.isFinite(strike)) continue;
-      out.push({ tipo: "PUT", strike, expiryCode, raw: row as Record<string, unknown> });
+      out.push({ activo, tipo: "PUT", strike, expiryCode, raw: row as Record<string, unknown> });
     }
   }
   out.sort((a, b) => a.strike - b.strike);
@@ -42,6 +43,7 @@ function flattenChain(chain: Record<string, unknown>): FlatRow[] {
 }
 
 export function OptionsPage() {
+  const [selectedUnderlying, setSelectedUnderlying] = useState<string>("GFG");
   const [rows, setRows] = useState<FlatRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -50,10 +52,10 @@ export function OptionsPage() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetchRavaOptionChain(UNDERLYING_DEFAULT)
+    fetchRavaOptionChain(selectedUnderlying)
       .then((chain) => {
         if (cancelled) return;
-        setRows(flattenChain(chain));
+        setRows(flattenChain(chain, selectedUnderlying));
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -66,7 +68,7 @@ export function OptionsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [selectedUnderlying]);
 
   const emptyHint = useMemo(() => {
     if (loading || error) return null;
@@ -77,11 +79,29 @@ export function OptionsPage() {
   return (
     <div className="page options-page">
       <header className="page__header">
-        <h1>Opciones (Rava)</h1>
+        <h1>Opciones Rava</h1>
         <p className="page__subtitle">
-          Subyacente: <strong>{UNDERLYING_DEFAULT}</strong> — GET /options/rava/chain
+          Activo: <strong>{selectedUnderlying}</strong>
         </p>
       </header>
+
+      <div className="radar-toolbar" role="toolbar" aria-label="Opciones de cadena">
+        <label className="radar-toolbar__field">
+          <span className="radar-toolbar__label">Activo</span>
+          <select
+            className="radar-toolbar__select"
+            value={selectedUnderlying}
+            onChange={(ev) => setSelectedUnderlying(ev.target.value)}
+            aria-label="Activo subyacente"
+          >
+            {UNDERLYING_CHOICES.map((u) => (
+              <option key={u} value={u}>
+                {u}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
       {loading && <p>Cargando…</p>}
       {error && (
@@ -96,16 +116,17 @@ export function OptionsPage() {
         <table>
           <thead>
             <tr>
-              <th>tipo</th>
-              <th>strike</th>
-              <th>expiry_date</th>
-              <th>days_to_expiry</th>
-              <th>option_price</th>
-              <th>bid</th>
-              <th>ask</th>
-              <th>volumen_float</th>
-              <th>operaciones_int</th>
-              <th>money_status</th>
+              <th>Activo</th>
+              <th>Tipo</th>
+              <th>Strike</th>
+              <th>Vto</th>
+              <th>Días</th>
+              <th>Precio</th>
+              <th>Bid</th>
+              <th>Ask</th>
+              <th>Volumen</th>
+              <th>Ops</th>
+              <th>ITM/OTM</th>
             </tr>
           </thead>
           <tbody>
@@ -114,6 +135,7 @@ export function OptionsPage() {
               const key = `${r.expiryCode}-${r.tipo}-${r.strike}-${i}`;
               return (
                 <tr key={key}>
+                  <td>{r.activo}</td>
                   <td>{r.tipo}</td>
                   <td>{fmtCell(r.strike)}</td>
                   <td>{fmtCell(o.expiry_date)}</td>
