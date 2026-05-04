@@ -478,6 +478,163 @@ def iol_options_raw(symbol: str):
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+@app.get("/options/scrape/raw")
+def options_scrape_raw(url: str = Query(..., description="URL pública a inspeccionar (RAW)")):
+    """
+    Descarga RAW de una URL pública (sin parsear/estructurar) para inspección manual.
+    """
+    import requests
+
+    u = (url or "").strip()
+    if not u:
+        raise HTTPException(status_code=400, detail="Query param 'url' es requerido")
+    if not (u.startswith("http://") or u.startswith("https://")):
+        raise HTTPException(status_code=400, detail="La URL debe empezar con http:// o https://")
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0 Safari/537.36"
+        )
+    }
+
+    try:
+        r = requests.get(u, headers=headers, timeout=20)
+    except requests.RequestException as e:
+        print(f"[OPTIONS_SCRAPE_RAW] url={u!r} status=error error={type(e).__name__}: {e}", flush=True)
+        raise HTTPException(status_code=502, detail=f"Error de red: {type(e).__name__}: {e}") from e
+
+    content_type = str(r.headers.get("content-type") or "")
+    length = len(r.content or b"")
+    print(
+        f"[OPTIONS_SCRAPE_RAW] url={u!r} status_code={r.status_code} content_type={content_type!r} length={length}",
+        flush=True,
+    )
+
+    try:
+        body_text = r.text or ""
+    except Exception:
+        body_text = ""
+
+    return {
+        "status_code": int(r.status_code),
+        "content_type": content_type,
+        "length": int(length),
+        "body_prefix": body_text[:5000],
+    }
+
+
+def _fetch_rava_prices_datos() -> list[Any]:
+    """
+    GET https://mercado.rava.com/api/prices/arg → lista raíz "datos".
+    Misma fuente que /options/rava/raw.
+    """
+    import requests
+
+    src_url = "https://mercado.rava.com/api/prices/arg"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0 Safari/537.36"
+        )
+    }
+
+    try:
+        r = requests.get(src_url, headers=headers, timeout=30)
+    except requests.RequestException as e:
+        print(f"[RAVA_OPTIONS_RAW] status=error error={type(e).__name__}: {e}", flush=True)
+        raise HTTPException(status_code=502, detail=f"Error de red: {type(e).__name__}: {e}") from e
+
+    if not r.ok:
+        body_prefix = (r.text or "")[:500]
+        print(f"[RAVA_OPTIONS_RAW] status=http_error http_status={r.status_code} body_prefix={body_prefix!r}", flush=True)
+        raise HTTPException(status_code=int(r.status_code), detail=f"Rava respondió {r.status_code}: {body_prefix}")
+
+    try:
+        obj: Any = r.json()
+    except ValueError as e:
+        body_prefix = (r.text or "")[:2000]
+        print(f"[RAVA_OPTIONS_RAW] status=invalid_json body_prefix={body_prefix!r}", flush=True)
+        raise HTTPException(status_code=502, detail=f"Respuesta Rava no es JSON válido: {e}") from e
+
+    datos = obj.get("datos") if isinstance(obj, dict) else None
+    if not isinstance(datos, list):
+        root_keys = list(obj.keys()) if isinstance(obj, dict) else None
+        print(
+            f"[RAVA_OPTIONS_RAW] status=missing_datos root_type={type(obj).__name__} root_keys={root_keys}",
+            flush=True,
+        )
+        raise HTTPException(status_code=502, detail="Respuesta Rava no contiene lista 'datos'")
+
+    return datos
+
+
+@app.get("/options/rava/raw")
+def options_rava_raw():
+    """
+    Opciones RAW desde Rava (mercado.rava.com) para inspección (sin parsear/estructurar).
+    Fuente: https://mercado.rava.com/api/prices/arg  (raíz JSON: datos)
+    """
+    datos = _fetch_rava_prices_datos()
+
+    opt_items: list[Any] = []
+    updated_max: str | None = None
+    first_keys: list[str] | None = None
+
+    for it in datos:
+        if not isinstance(it, dict):
+            continue
+        st = str(it.get("securitytype") or "").strip().upper()
+        if st != "OPT":
+            continue
+        opt_items.append(it)
+        if first_keys is None:
+            first_keys = list(it.keys())
+        # datetime suele venir ISO; max lexicográfico funciona si es ISO comparable.
+        dt = it.get("datetime")
+        if isinstance(dt, str) and dt.strip():
+            s = dt.strip()
+            if updated_max is None or s > updated_max:
+                updated_max = s
+
+    print(
+        f"[RAVA_OPTIONS_RAW] total_items={len(datos)} opt_items={len(opt_items)} "
+        f"first_keys={first_keys or []} updated_max={updated_max!r}",
+        flush=True,
+    )
+
+    return opt_items
+
+
+@app.get("/options/rava/chain")
+def options_rava_chain(underlying: str | None = Query(default=None, description="Filtrar por subyacente parseado")):
+    """
+    Cadena de opciones Rava (misma fuente que /options/rava/raw), agrupada por subyacente / vencimiento / strike.
+    """
+    from services.options.rava_chain_builder import build_rava_option_chain
+
+    datos = _fetch_rava_prices_datos()
+    opt_items = [
+        it
+        for it in datos
+        if isinstance(it, dict) and str(it.get("securitytype") or "").strip().upper() == "OPT"
+    ]
+
+    chain = build_rava_option_chain(opt_items)
+    underlyings_count = len(chain)
+    u_filter = (underlying or "").strip().upper() or None
+    print(
+        f"[RAVA_CHAIN_API] opt_items={len(opt_items)} underlyings_count={underlyings_count} underlying_filter={u_filter!r}",
+        flush=True,
+    )
+
+    if u_filter:
+        return chain.get(u_filter, {})
+    return chain
+
+
 @app.post("/run-scan")
 def run_scan():
     """
