@@ -402,10 +402,6 @@ export function EventosPage() {
       }
     }
 
-    const months = Array.from(agg.entries())
-      .map(([k, v]) => ({ month: k, amount: v.amount, count: v.count }))
-      .sort((a, b) => a.month.localeCompare(b.month));
-
     // Asegurar 12 meses en pantalla aunque estén vacíos
     const out: { month: string; amount: number; count: number }[] = [];
     let cur = start;
@@ -663,7 +659,7 @@ export function EventosPage() {
               Sin eventos próximos (no hay fechas de earnings/dividendos estimados en el radar).
             </p>
           ) : (
-            upcoming.map(({ row, next, e, d }) => {
+            upcoming.map(({ row, e, d }) => {
               const nextType =
                 e && d
                   ? Math.abs(e.getTime() - d.getTime()) <= 7 * 24 * 3600 * 1000

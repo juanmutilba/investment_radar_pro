@@ -22,7 +22,7 @@ const RATIO_FORMAT = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
-export function getRaw(row: RadarRow, keys: string[]): unknown {
+export function getRaw(row: RadarRow, keys: readonly string[]): unknown {
   for (const k of keys) {
     if (!(k in row)) {
       continue;

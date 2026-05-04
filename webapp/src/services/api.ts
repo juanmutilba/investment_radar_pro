@@ -808,6 +808,23 @@ function coerceStringArray(v: unknown): string[] | null {
   return out;
 }
 
+/** Cadena GET /options/rava/chain (objeto anidado por vencimiento → calls/puts → strike). */
+export type RavaOptionChainResponse = Record<string, unknown>;
+
+export async function fetchRavaOptionChain(underlying: string): Promise<RavaOptionChainResponse> {
+  const u = underlying.trim();
+  const q = new URLSearchParams({ underlying: u });
+  const res = await fetch(`${BASE}/options/rava/chain?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object") {
+    throw new Error("Respuesta inesperada: options/rava/chain");
+  }
+  return data as RavaOptionChainResponse;
+}
+
 export async function fetchPortfolioTickersAutocomplete(
   assetType: PortfolioAssetType,
   q: string,

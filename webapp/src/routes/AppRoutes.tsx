@@ -7,6 +7,7 @@ import { CarteraPage } from "@/pages/CarteraPage";
 import { CedearsPage } from "@/pages/CedearsPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { EventosPage } from "@/pages/EventosPage";
+import { OptionsPage } from "@/pages/OptionsPage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 
 export function AppRoutes() {
@@ -20,21 +21,14 @@ export function AppRoutes() {
         <Route path="alertas" element={<AlertasPage />} />
         <Route path="eventos" element={<EventosPage />} />
         <Route path="cedears" element={<CedearsPage />} />
+        <Route path="options" element={<OptionsPage />} />
+        <Route path="opciones" element={<Navigate to="/options" replace />} />
         <Route
           path="bonos"
           element={
             <PlaceholderPage
               title="Bonos"
               description="Rentas fijas y curvas. Módulo reservado para una fase posterior."
-            />
-          }
-        />
-        <Route
-          path="opciones"
-          element={
-            <PlaceholderPage
-              title="Opciones"
-              description="Cadena de opciones y griegas. Placeholder hasta integrar proveedor."
             />
           }
         />

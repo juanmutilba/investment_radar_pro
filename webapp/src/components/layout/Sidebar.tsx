@@ -14,7 +14,7 @@ const ITEMS: NavItem[] = [
   { to: "/eventos", label: "Eventos" },
   { to: "/cedears", label: "CEDEARs" },
   { to: "/bonos", label: "Bonos", placeholder: true },
-  { to: "/opciones", label: "Opciones", placeholder: true },
+  { to: "/options", label: "Opciones" },
   { to: "/futuros", label: "Futuros", placeholder: true },
   { to: "/alertas", label: "Alertas" },
   { to: "/cartera", label: "Cartera" },
