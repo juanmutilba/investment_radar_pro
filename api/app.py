@@ -616,19 +616,74 @@ def options_rava_chain(underlying: str | None = Query(default=None, description=
     from services.options.rava_chain_builder import build_rava_option_chain
 
     datos = _fetch_rava_prices_datos()
+
+    def _rava_ultimo_float(v: Any) -> float | None:
+        if v is None:
+            return None
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return None
+        if x != x or x <= 0:
+            return None
+        return x
+
+    # Solo acciones CS en ARS; preferir plazo 2, si no hay usar plazo 1.
+    prices_by_symbol: dict[str, tuple[float, int]] = {}
+    for it in datos:
+        if not isinstance(it, dict):
+            continue
+        if str(it.get("securitytype") or "").strip().upper() != "CS":
+            continue
+        if str(it.get("moneda") or "").strip().upper() != "ARS":
+            continue
+        symbol = str(it.get("simbolo") or "").strip().upper()
+        if not symbol:
+            continue
+        try:
+            plazo = int(it.get("plazo"))
+        except (TypeError, ValueError):
+            continue
+        if plazo not in (1, 2):
+            continue
+        uf = _rava_ultimo_float(it.get("ultimo"))
+        if uf is None:
+            continue
+
+        cur = prices_by_symbol.get(symbol)
+        if cur is None:
+            prices_by_symbol[symbol] = (uf, plazo)
+        elif plazo == 2:
+            prices_by_symbol[symbol] = (uf, plazo)
+        elif cur[1] != 2 and plazo == 1:
+            prices_by_symbol[symbol] = (uf, plazo)
+
+    underlying_prices: dict[str, float] = {s: t[0] for s, t in prices_by_symbol.items()}
+
+    for src, dst in (("GGAL", "GFG"), ("ALUA", "ALU"), ("COME", "COM"), ("BYMA", "BYM")):
+        if src in underlying_prices:
+            underlying_prices[dst] = underlying_prices[src]
+
     opt_items = [
         it
         for it in datos
         if isinstance(it, dict) and str(it.get("securitytype") or "").strip().upper() == "OPT"
     ]
 
-    chain = build_rava_option_chain(opt_items)
+    chain = build_rava_option_chain(opt_items, underlying_prices)
     underlyings_count = len(chain)
     u_filter = (underlying or "").strip().upper() or None
+    prices_sample = sorted(underlying_prices.keys())[:30]
     print(
-        f"[RAVA_CHAIN_API] opt_items={len(opt_items)} underlyings_count={underlyings_count} underlying_filter={u_filter!r}",
+        f"[RAVA_CHAIN_API] opt_items={len(opt_items)} underlyings_count={underlyings_count} "
+        f"underlying_prices_count={len(underlying_prices)} underlying_filter={u_filter!r}",
         flush=True,
     )
+    print(f"[RAVA_CHAIN_API] has_GGAL={'GGAL' in underlying_prices}", flush=True)
+    print(f"[RAVA_CHAIN_API] GGAL_price={underlying_prices.get('GGAL')!r}", flush=True)
+    print(f"[RAVA_CHAIN_API] has_GFG={'GFG' in underlying_prices}", flush=True)
+    print(f"[RAVA_CHAIN_API] GFG_price={underlying_prices.get('GFG')!r}", flush=True)
+    print(f"[RAVA_CHAIN_API] underlying_prices_sample={prices_sample!r}", flush=True)
 
     if u_filter:
         return chain.get(u_filter, {})
