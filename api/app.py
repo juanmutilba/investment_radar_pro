@@ -457,6 +457,27 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/options/iol/raw/{symbol}")
+def iol_options_raw(symbol: str):
+    """
+    Inspección RAW: lista de opciones IOL para un subyacente ByMA (sin persistir ni transformar).
+    """
+    from services.market_data.providers.iol import IolOptionsRawError, get_iol_options_raw
+
+    try:
+        return get_iol_options_raw(symbol)
+    except IolOptionsRawError as e:
+        if getattr(e, "iol_resource_401", False):
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "IOL rechazó el recurso de opciones con 401. La autenticación funciona para cotizaciones, "
+                    "pero opciones parece restringido o usa otro endpoint."
+                ),
+            ) from e
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 @app.post("/run-scan")
 def run_scan():
     """
