@@ -29,6 +29,59 @@ def _pick_symbol(item: dict[str, Any]) -> str:
 _TRAILING_EXP_RE = re.compile(r"^(?P<strike>.*?)(?P<exp>\.*[A-Z]+)$", re.IGNORECASE)
 
 
+def _normalize_rava_strike_with_spot(
+    strike_raw: str,
+    expiry_code_raw: str,
+    underlying_price: float | None,
+) -> tuple[float | None, str]:
+    """
+    Normaliza strike usando contexto (spot) para sufijos simples.
+
+    Problema:
+    - En sufijos de 1 letra, a veces el strike viene sin separador decimal.
+      Ej: GFGC67487J => 6748.7 (÷10), pero GFGC10524J debe quedarse 10524.
+
+    Regla (conservadora):
+    - Si NO es sufijo de 1 letra → usar float(strike_raw).
+    - Si spot no existe/<=0 → NO escalar (usar float(strike_raw)).
+    - Si sufijo de 1 letra y strike_raw entero sin '.'/',' y len>=5:
+        candidatos = base, base/10
+        elegir /10 solo si mejora claramente contra spot:
+          dist_div10 < dist_base
+          dist_div10 < 0.60
+          dist_base > 1.00
+    """
+    sr = (strike_raw or "").strip()
+    code = (expiry_code_raw or "").strip().upper()
+    if not sr:
+        return None, "invalid"
+    try:
+        base = float(sr)
+    except ValueError:
+        return None, "invalid"
+
+    if len(code) != 1:
+        return base, "raw"
+
+    spot = underlying_price if (underlying_price is not None and underlying_price > 0) else None
+    if spot is None:
+        return base, "raw"
+
+    if "." in sr or "," in sr:
+        return base, "raw"
+    if not sr.isdigit() or len(sr) < 5:
+        return base, "raw"
+
+    div10 = base / 10.0
+    dist_base = abs(base - spot) / spot
+    dist_div10 = abs(div10 - spot) / spot
+
+    if dist_div10 < dist_base and dist_div10 < 0.60 and dist_base > 1.00:
+        return div10, "div10"
+
+    return base, "raw"
+
+
 def _parse_option_symbol(raw_symbol: str) -> dict[str, str] | None:
     """
     Misma heurística que scripts/debug_rava_options_parse.py (copiada para uso interno).
@@ -230,10 +283,6 @@ def build_rava_option_chain(options: list[Any], underlying_prices: dict | None =
         strike_raw = (parsed.get("strike_raw") or "").strip()
         if not strike_raw:
             continue
-        try:
-            strike = float(strike_raw)
-        except ValueError:
-            continue
 
         und = parsed["underlying_guess"]
         exp_code_raw = parsed["expiry_code_raw"]
@@ -249,6 +298,16 @@ def build_rava_option_chain(options: list[Any], underlying_prices: dict | None =
         spot: float | None = None
         if price_by_underlying:
             spot = _safe_float(price_by_underlying.get(und.upper()))
+
+        strike, scale = _normalize_rava_strike_with_spot(strike_raw, exp_code_raw, spot)
+        if strike is None:
+            continue
+        if scale != "raw":
+            print(
+                f"[RAVA_STRIKE] symbol={sym!r} strike_raw={strike_raw!r} strike_final={strike!r} "
+                f"scale={scale} spot={spot!r} expiry_code_raw={exp_code_raw!r}",
+                flush=True,
+            )
         row = _option_row(
             raw,
             expiry_code_raw=exp_code_raw,
