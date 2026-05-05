@@ -14,6 +14,8 @@ type FlatRow = {
 
 type StrategyType = "Bull Call Spread" | "Bear Put Spread" | "Covered Call" | "Protective Put" | "Collar";
 type LegAction = "BUY" | "SELL";
+type ActiveTab = "panel" | "strategies";
+type StrategiesFilter = "" | "Bull Call Spread" | "Covered Call";
 
 type StrategyLeg = {
   action: LegAction;
@@ -173,6 +175,13 @@ function legPriceUsed(leg: StrategyLeg): number | null {
   return leg.bid ?? leg.last ?? null;
 }
 
+function daysToExpiryRaw(raw: Record<string, unknown>): number | null {
+  const d = toNumberOrNull(raw.days_to_expiry);
+  if (d === null) return null;
+  const di = Math.trunc(d);
+  return Number.isFinite(di) ? di : null;
+}
+
 function flattenChain(chain: Record<string, unknown>, activo: string): FlatRow[] {
   const out: FlatRow[] = [];
   for (const [expiryCode, bucket] of Object.entries(chain)) {
@@ -203,7 +212,9 @@ export function OptionsPage() {
   const [onlyWithVolume, setOnlyWithVolume] = useState(false);
   const [onlyWithTrades, setOnlyWithTrades] = useState(false);
   const [onlyAtm, setOnlyAtm] = useState(false);
+  const [activeTab, setActiveTab] = useState<ActiveTab>("panel");
   const [strategyType, setStrategyType] = useState<StrategyType>("Bull Call Spread");
+  const [strategiesFilter, setStrategiesFilter] = useState<StrategiesFilter>("");
   const [selectedLegs, setSelectedLegs] = useState<StrategyLeg[]>([]);
   const [rows, setRows] = useState<FlatRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -330,6 +341,123 @@ export function OptionsPage() {
     [filteredRows],
   );
 
+  const bullCallSpreads = useMemo(() => {
+    // Combos: BUY call (ask) en strike menor, SELL call (bid) en strike mayor, mismo vencimiento.
+    // Filtramos débito > 0 y ganancia máxima > 0.
+    type CallRow = {
+      expiryKey: string;
+      strike: number;
+      ask: number | null;
+      bid: number | null;
+    };
+    const byExp = new Map<string, CallRow[]>();
+    for (const r of calls) {
+      const exp = expiryKeyFromRaw(r.raw);
+      if (!exp) continue;
+      const ask = toNumberOrNull(r.raw.ask);
+      const bid = toNumberOrNull(r.raw.bid);
+      const arr = byExp.get(exp) ?? [];
+      arr.push({ expiryKey: exp, strike: r.strike, ask, bid });
+      byExp.set(exp, arr);
+    }
+    const out: {
+      expiryKey: string;
+      buyStrike: number;
+      sellStrike: number;
+      buyAsk: number;
+      sellBid: number;
+      debit: number;
+      maxGain: number;
+      maxLoss: number;
+      breakEven: number;
+    }[] = [];
+    const expiries = Array.from(byExp.keys()).sort();
+    for (const exp of expiries) {
+      const arr = (byExp.get(exp) ?? []).slice().sort((a, b) => a.strike - b.strike);
+      for (let i = 0; i < arr.length; i++) {
+        const buy = arr[i];
+        if (buy.ask === null || buy.ask <= 0) continue;
+        for (let j = i + 1; j < arr.length; j++) {
+          const sell = arr[j];
+          if (sell.bid === null || sell.bid <= 0) continue;
+          const debit = buy.ask - sell.bid;
+          if (!(debit > 0)) continue;
+          const width = sell.strike - buy.strike;
+          if (!(width > 0)) continue;
+          const maxGain = width - debit;
+          if (!(maxGain > 0)) continue;
+          out.push({
+            expiryKey: exp,
+            buyStrike: buy.strike,
+            sellStrike: sell.strike,
+            buyAsk: buy.ask,
+            sellBid: sell.bid,
+            debit,
+            maxGain,
+            maxLoss: debit,
+            breakEven: buy.strike + debit,
+          });
+        }
+      }
+    }
+    out.sort((a, b) => a.expiryKey.localeCompare(b.expiryKey) || a.buyStrike - b.buyStrike || a.sellStrike - b.sellStrike);
+    return out.slice(0, 30);
+  }, [calls]);
+
+  const coveredCalls = useMemo(() => {
+    const out: {
+      expiryKey: string;
+      strike: number;
+      bid: number;
+      intrinsic: number | null;
+      timeValue: number | null;
+      days: number | null;
+      tnaPct: number | null;
+      breakEven: number | null;
+      moneyness: string | null;
+    }[] = [];
+    for (const r of calls) {
+      const exp = expiryKeyFromRaw(r.raw);
+      if (!exp) continue;
+      const bid = toNumberOrNull(r.raw.bid);
+      if (bid === null || bid <= 0) continue;
+      const days = daysToExpiryRaw(r.raw);
+      const breakEven = underlyingPrice !== null ? underlyingPrice - bid : null;
+
+      const intrinsic =
+        underlyingPrice !== null && underlyingPrice > 0
+          ? Math.max(0, underlyingPrice - r.strike)
+          : null;
+      const timeValue =
+        intrinsic !== null
+          ? bid - intrinsic
+          : null;
+
+      const tnaPct =
+        underlyingPrice !== null &&
+          underlyingPrice > 0 &&
+          days !== null &&
+          days > 0 &&
+          timeValue !== null &&
+          timeValue > 0
+          ? (timeValue / underlyingPrice) * (365 / days) * 100
+          : null;
+      out.push({
+        expiryKey: exp,
+        strike: r.strike,
+        bid,
+        intrinsic,
+        timeValue,
+        days,
+        tnaPct,
+        breakEven,
+        moneyness: moneyStatus(r.raw),
+      });
+    }
+    out.sort((a, b) => a.expiryKey.localeCompare(b.expiryKey) || a.strike - b.strike);
+    return out.slice(0, 30);
+  }, [calls, underlyingPrice]);
+
   const netCost = useMemo(() => {
     let net = 0;
     let ok = false;
@@ -415,6 +543,27 @@ export function OptionsPage() {
         </div>
       </div>
 
+      <div className="options-tabs" role="tablist" aria-label="Secciones de opciones">
+        <button
+          type="button"
+          className={`options-tab${activeTab === "panel" ? " options-tab-active" : ""}`}
+          role="tab"
+          aria-selected={activeTab === "panel"}
+          onClick={() => setActiveTab("panel")}
+        >
+          PANEL
+        </button>
+        <button
+          type="button"
+          className={`options-tab${activeTab === "strategies" ? " options-tab-active" : ""}`}
+          role="tab"
+          aria-selected={activeTab === "strategies"}
+          onClick={() => setActiveTab("strategies")}
+        >
+          ESTRATEGIAS
+        </button>
+      </div>
+
       <div className="options-underlying-card" aria-label="Subyacente">
         <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem" }}>
           <div className="options-underlying-label">Subyacente</div>
@@ -448,128 +597,6 @@ export function OptionsPage() {
         ) : null}
       </div>
 
-      <section className="options-strategy-panel" aria-label="Estrategia">
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
-          <div>
-            <h2 style={{ margin: 0 }}>Estrategia</h2>
-            <div className="msg-muted" style={{ marginTop: "0.25rem" }}>
-              {strategyHelpText(strategyType)}
-            </div>
-          </div>
-          <button type="button" className="options-filter-toggle" onClick={() => setSelectedLegs([])}>
-            Limpiar estrategia
-          </button>
-        </div>
-
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.85rem 1.25rem", marginTop: "0.75rem" }}>
-          <label className="radar-toolbar__field" style={{ margin: 0 }}>
-            <span className="radar-toolbar__label">Tipo de estrategia</span>
-            <select
-              className="radar-toolbar__select"
-              value={strategyType}
-              onChange={(ev) => setStrategyType(ev.target.value as StrategyType)}
-            >
-              <option value="Bull Call Spread">Bull Call Spread</option>
-              <option value="Bear Put Spread">Bear Put Spread</option>
-              <option value="Covered Call">Covered Call</option>
-              <option value="Protective Put">Protective Put</option>
-              <option value="Collar">Collar</option>
-            </select>
-          </label>
-          <div className="radar-toolbar__field" style={{ margin: 0 }}>
-            <span className="radar-toolbar__label">Modo</span>
-            <div style={{ padding: "0.45rem 0" }}><strong>Manual</strong></div>
-          </div>
-          <div className="radar-toolbar__field" style={{ margin: 0 }}>
-            <span className="radar-toolbar__label">Patas</span>
-            <div style={{ padding: "0.45rem 0" }}><strong>{selectedLegs.length}</strong></div>
-          </div>
-          <div className="radar-toolbar__field strategy-net-cost" style={{ margin: 0 }}>
-            <span className="radar-toolbar__label">Costo neto estimado</span>
-            <div style={{ padding: "0.45rem 0" }}>
-              {netCost.ok ? (
-                <strong>
-                  {netCost.net < 0 ? "Débito" : netCost.net > 0 ? "Crédito" : "Neto"}{" "}
-                  {netCost.net !== 0 ? `$ ${formatNumber(Math.abs(netCost.net), 2)}` : "$ 0,00"}
-                </strong>
-              ) : (
-                <span className="msg-muted">—</span>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div style={{ marginTop: "0.75rem" }}>
-          <div className="options-section-title" style={{ marginBottom: "0.35rem" }}>Patas seleccionadas</div>
-          {selectedLegs.length === 0 ? (
-            <div className="msg-muted">Agregá patas desde la tabla con el botón “Agregar”.</div>
-          ) : (
-            <div className="table-wrap">
-              <table className="strategy-leg-table">
-                <thead>
-                  <tr>
-                    <th>Acción</th>
-                    <th>Tipo</th>
-                    <th>Ticker</th>
-                    <th>Vencimiento</th>
-                    <th>Strike</th>
-                    <th>Precio usado</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedLegs.map((leg) => {
-                    const k = legKey(leg);
-                    const p = legPriceUsed(leg);
-                    return (
-                      <tr key={k}>
-                        <td className="strategy-leg-action">
-                          <select
-                            className="radar-toolbar__select"
-                            value={leg.action}
-                            onChange={(ev) => {
-                              const nextAction = ev.target.value as LegAction;
-                              setSelectedLegs((prev) => {
-                                const next = prev.map((x) => (legKey(x) === k ? { ...x, action: nextAction } : x));
-                                // evitar duplicado exacto symbol+action
-                                const seen = new Set<string>();
-                                return next.filter((x) => {
-                                  const kk = legKey(x);
-                                  if (seen.has(kk)) return false;
-                                  seen.add(kk);
-                                  return true;
-                                });
-                              });
-                            }}
-                          >
-                            <option value="BUY">Comprar</option>
-                            <option value="SELL">Vender</option>
-                          </select>
-                        </td>
-                        <td>{leg.tipo}</td>
-                        <td>{leg.symbol ? leg.symbol : "—"}</td>
-                        <td>{leg.expiry_date ? leg.expiry_date.slice(0, 10) : "—"}</td>
-                        <td style={{ textAlign: "right" }}>{leg.strike !== null ? formatNumber(leg.strike, 2) : "-"}</td>
-                        <td style={{ textAlign: "right" }}>{p !== null ? `$ ${formatNumber(p, 2)}` : "-"}</td>
-                        <td style={{ textAlign: "right" }}>
-                          <button
-                            type="button"
-                            className="option-add-leg-button"
-                            onClick={() => setSelectedLegs((prev) => prev.filter((x) => legKey(x) !== k))}
-                          >
-                            Quitar
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </section>
-
       {loading && <p>Cargando…</p>}
       {error && (
         <p role="alert">
@@ -578,142 +605,483 @@ export function OptionsPage() {
       )}
       {emptyHint && <p>{emptyHint}</p>}
 
-      {!loading && !error && filteredRows.length > 0 ? (
-        <div className="options-sections">
-          <section className="options-section" aria-label="Calls">
-            <h2 className="options-section-title">CALLS</h2>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th></th>
-                    <th>Tipo</th>
-                    <th>Activo</th>
-                    <th>Ticker opción</th>
-                    <th>Vencimiento</th>
-                    <th>Strike</th>
-                    <th>Último</th>
-                    <th>Compra</th>
-                    <th>Venta</th>
-                    <th>Spread</th>
-                    <th>Volumen</th>
-                    <th>Operaciones</th>
-                    <th>Moneyness</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {calls.map((r, i) => {
-                    const o = r.raw;
-                    const key = `calls-${r.expiryCode}-${r.strike}-${i}`;
-                    const cls = rowMoneynessClass(o);
-                    const canAdd = typeof o.simbolo === "string" && o.simbolo.trim();
-                    return (
-                      <tr key={key} className={cls}>
-                        <td style={{ whiteSpace: "nowrap" }}>
-                          <button
-                            type="button"
-                            className="option-add-leg-button"
-                            disabled={!canAdd}
-                            onClick={() => {
-                              const leg = buildLegFromRow(r);
-                              if (!leg.symbol) return;
-                              setSelectedLegs((prev) => {
-                                const kk = legKey(leg);
-                                if (prev.some((x) => legKey(x) === kk)) return prev;
-                                return [...prev, leg];
-                              });
-                            }}
-                          >
-                            Agregar
-                          </button>
-                        </td>
-                        <td>{r.tipo}</td>
-                        <td>{r.activo}</td>
-                        <td>{fmtCell(o.simbolo)}</td>
-                        <td>{fmtCell(o.expiry_date)}</td>
-                        <td style={{ textAlign: "right" }}>{formatNumber(r.strike, 2)}</td>
-                        <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ultimo), 2)}</td>
-                        <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.bid), 2)}</td>
-                        <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ask), 2)}</td>
-                        <td style={{ textAlign: "right" }}>{formatNumber(spreadAbs(o), 2)}</td>
-                        <td style={{ textAlign: "right" }}>{formatInteger(toNumberOrNull(o.volumen_float))}</td>
-                        <td style={{ textAlign: "right" }}>{formatInteger(toNumberOrNull(o.operaciones_int))}</td>
-                        <td>{fmtCell(moneyStatus(o) ?? o.money_status)}</td>
+      {!loading && !error ? (
+        activeTab === "panel" ? (
+          filteredRows.length > 0 ? (
+            <div className="options-sections">
+              <section className="options-section" aria-label="Calls">
+                <h2 className="options-section-title">CALLS</h2>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Tipo</th>
+                        <th>Activo</th>
+                        <th>Ticker opción</th>
+                        <th>Vencimiento</th>
+                        <th>Strike</th>
+                        <th>Último</th>
+                        <th>Compra</th>
+                        <th>Venta</th>
+                        <th>Spread</th>
+                        <th>Volumen</th>
+                        <th>Operaciones</th>
+                        <th>Moneyness</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
+                    </thead>
+                    <tbody>
+                      {calls.map((r, i) => {
+                        const o = r.raw;
+                        const key = `calls-${r.expiryCode}-${r.strike}-${i}`;
+                        const cls = rowMoneynessClass(o);
+                        return (
+                          <tr key={key} className={cls}>
+                            <td>{r.tipo}</td>
+                            <td>{r.activo}</td>
+                            <td>{fmtCell(o.simbolo)}</td>
+                            <td>{fmtCell(o.expiry_date)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(r.strike, 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ultimo), 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.bid), 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ask), 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(spreadAbs(o), 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatInteger(toNumberOrNull(o.volumen_float))}</td>
+                            <td style={{ textAlign: "right" }}>{formatInteger(toNumberOrNull(o.operaciones_int))}</td>
+                            <td>{fmtCell(moneyStatus(o) ?? o.money_status)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
 
-          <section className="options-section" aria-label="Puts">
-            <h2 className="options-section-title">PUTS</h2>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th></th>
-                    <th>Tipo</th>
-                    <th>Activo</th>
-                    <th>Ticker opción</th>
-                    <th>Vencimiento</th>
-                    <th>Strike</th>
-                    <th>Último</th>
-                    <th>Compra</th>
-                    <th>Venta</th>
-                    <th>Spread</th>
-                    <th>Volumen</th>
-                    <th>Operaciones</th>
-                    <th>Moneyness</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {puts.map((r, i) => {
-                    const o = r.raw;
-                    const key = `puts-${r.expiryCode}-${r.strike}-${i}`;
-                    const cls = rowMoneynessClass(o);
-                    const canAdd = typeof o.simbolo === "string" && o.simbolo.trim();
-                    return (
-                      <tr key={key} className={cls}>
-                        <td style={{ whiteSpace: "nowrap" }}>
-                          <button
-                            type="button"
-                            className="option-add-leg-button"
-                            disabled={!canAdd}
-                            onClick={() => {
-                              const leg = buildLegFromRow(r);
-                              if (!leg.symbol) return;
-                              setSelectedLegs((prev) => {
-                                const kk = legKey(leg);
-                                if (prev.some((x) => legKey(x) === kk)) return prev;
-                                return [...prev, leg];
-                              });
-                            }}
-                          >
-                            Agregar
-                          </button>
-                        </td>
-                        <td>{r.tipo}</td>
-                        <td>{r.activo}</td>
-                        <td>{fmtCell(o.simbolo)}</td>
-                        <td>{fmtCell(o.expiry_date)}</td>
-                        <td style={{ textAlign: "right" }}>{formatNumber(r.strike, 2)}</td>
-                        <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ultimo), 2)}</td>
-                        <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.bid), 2)}</td>
-                        <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ask), 2)}</td>
-                        <td style={{ textAlign: "right" }}>{formatNumber(spreadAbs(o), 2)}</td>
-                        <td style={{ textAlign: "right" }}>{formatInteger(toNumberOrNull(o.volumen_float))}</td>
-                        <td style={{ textAlign: "right" }}>{formatInteger(toNumberOrNull(o.operaciones_int))}</td>
-                        <td>{fmtCell(moneyStatus(o) ?? o.money_status)}</td>
+              <section className="options-section" aria-label="Puts">
+                <h2 className="options-section-title">PUTS</h2>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Tipo</th>
+                        <th>Activo</th>
+                        <th>Ticker opción</th>
+                        <th>Vencimiento</th>
+                        <th>Strike</th>
+                        <th>Último</th>
+                        <th>Compra</th>
+                        <th>Venta</th>
+                        <th>Spread</th>
+                        <th>Volumen</th>
+                        <th>Operaciones</th>
+                        <th>Moneyness</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody>
+                      {puts.map((r, i) => {
+                        const o = r.raw;
+                        const key = `puts-${r.expiryCode}-${r.strike}-${i}`;
+                        const cls = rowMoneynessClass(o);
+                        return (
+                          <tr key={key} className={cls}>
+                            <td>{r.tipo}</td>
+                            <td>{r.activo}</td>
+                            <td>{fmtCell(o.simbolo)}</td>
+                            <td>{fmtCell(o.expiry_date)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(r.strike, 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ultimo), 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.bid), 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ask), 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(spreadAbs(o), 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatInteger(toNumberOrNull(o.volumen_float))}</td>
+                            <td style={{ textAlign: "right" }}>{formatInteger(toNumberOrNull(o.operaciones_int))}</td>
+                            <td>{fmtCell(moneyStatus(o) ?? o.money_status)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
             </div>
-          </section>
-        </div>
+          ) : null
+        ) : (
+          <div>
+            <section className="options-strategy-panel" aria-label="Crear estrategia manual">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  justifyContent: "space-between",
+                  gap: "0.75rem",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div>
+                  <h2 style={{ margin: 0 }}>Crear estrategia manual</h2>
+                  <div className="msg-muted" style={{ marginTop: "0.25rem" }}>
+                    {strategyHelpText(strategyType)}
+                  </div>
+                </div>
+                <button type="button" className="options-filter-toggle" onClick={() => setSelectedLegs([])}>
+                  Limpiar estrategia
+                </button>
+              </div>
+
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.85rem 1.25rem", marginTop: "0.75rem" }}>
+                <label className="radar-toolbar__field" style={{ margin: 0 }}>
+                  <span className="radar-toolbar__label">Tipo de estrategia</span>
+                  <select
+                    className="radar-toolbar__select"
+                    value={strategyType}
+                    onChange={(ev) => setStrategyType(ev.target.value as StrategyType)}
+                  >
+                    <option value="Bull Call Spread">Bull Call Spread</option>
+                    <option value="Bear Put Spread">Bear Put Spread</option>
+                    <option value="Covered Call">Covered Call</option>
+                    <option value="Protective Put">Protective Put</option>
+                    <option value="Collar">Collar</option>
+                  </select>
+                </label>
+                <div className="radar-toolbar__field" style={{ margin: 0 }}>
+                  <span className="radar-toolbar__label">Modo</span>
+                  <div style={{ padding: "0.45rem 0" }}>
+                    <strong>Manual</strong>
+                  </div>
+                </div>
+                <div className="radar-toolbar__field" style={{ margin: 0 }}>
+                  <span className="radar-toolbar__label">Patas</span>
+                  <div style={{ padding: "0.45rem 0" }}>
+                    <strong>{selectedLegs.length}</strong>
+                  </div>
+                </div>
+                <div className="radar-toolbar__field strategy-net-cost" style={{ margin: 0 }}>
+                  <span className="radar-toolbar__label">Costo neto estimado</span>
+                  <div style={{ padding: "0.45rem 0" }}>
+                    {netCost.ok ? (
+                      <strong>
+                        {netCost.net < 0 ? "Débito" : netCost.net > 0 ? "Crédito" : "Neto"}{" "}
+                        {netCost.net !== 0 ? `$ ${formatNumber(Math.abs(netCost.net), 2)}` : "$ 0,00"}
+                      </strong>
+                    ) : (
+                      <span className="msg-muted">—</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: "0.75rem" }}>
+                <div className="options-section-title" style={{ marginBottom: "0.35rem" }}>
+                  Patas seleccionadas
+                </div>
+                {selectedLegs.length === 0 ? (
+                  <div className="msg-muted">Agregá patas desde la tabla del PANEL con el botón “Agregar”.</div>
+                ) : (
+                  <div className="table-wrap">
+                    <table className="strategy-leg-table">
+                      <thead>
+                        <tr>
+                          <th>Acción</th>
+                          <th>Tipo</th>
+                          <th>Ticker</th>
+                          <th>Vencimiento</th>
+                          <th>Strike</th>
+                          <th>Precio usado</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedLegs.map((leg) => {
+                          const k = legKey(leg);
+                          const p = legPriceUsed(leg);
+                          return (
+                            <tr key={k}>
+                              <td className="strategy-leg-action">
+                                <select
+                                  className="radar-toolbar__select"
+                                  value={leg.action}
+                                  onChange={(ev) => {
+                                    const nextAction = ev.target.value as LegAction;
+                                    setSelectedLegs((prev) => {
+                                      const next = prev.map((x) => (legKey(x) === k ? { ...x, action: nextAction } : x));
+                                      const seen = new Set<string>();
+                                      return next.filter((x) => {
+                                        const kk = legKey(x);
+                                        if (seen.has(kk)) return false;
+                                        seen.add(kk);
+                                        return true;
+                                      });
+                                    });
+                                  }}
+                                >
+                                  <option value="BUY">Comprar</option>
+                                  <option value="SELL">Vender</option>
+                                </select>
+                              </td>
+                              <td>{leg.tipo}</td>
+                              <td>{leg.symbol ? leg.symbol : "—"}</td>
+                              <td>{leg.expiry_date ? leg.expiry_date.slice(0, 10) : "—"}</td>
+                              <td style={{ textAlign: "right" }}>{leg.strike !== null ? formatNumber(leg.strike, 2) : "-"}</td>
+                              <td style={{ textAlign: "right" }}>{p !== null ? `$ ${formatNumber(p, 2)}` : "-"}</td>
+                              <td style={{ textAlign: "right" }}>
+                                <button
+                                  type="button"
+                                  className="option-add-leg-button"
+                                  onClick={() => setSelectedLegs((prev) => prev.filter((x) => legKey(x) !== k))}
+                                >
+                                  Quitar
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ marginTop: "0.95rem" }}>
+                <div className="options-section-title" style={{ marginBottom: "0.35rem" }}>
+                  Agregar patas (desde la cadena)
+                </div>
+                <div className="msg-muted" style={{ marginBottom: "0.5rem" }}>
+                  Usá estos botones para sumar patas al constructor manual.
+                </div>
+                <div className="table-wrap">
+                  <table className="strategy-leg-table">
+                    <thead>
+                      <tr>
+                        <th></th>
+                        <th>Tipo</th>
+                        <th>Ticker</th>
+                        <th>Vencimiento</th>
+                        <th style={{ textAlign: "right" }}>Strike</th>
+                        <th style={{ textAlign: "right" }}>Bid</th>
+                        <th style={{ textAlign: "right" }}>Ask</th>
+                        <th style={{ textAlign: "right" }}>Último</th>
+                        <th>Moneyness</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {calls.slice(0, 40).map((r, i) => {
+                        const o = r.raw;
+                        const key = `add-calls-${r.expiryCode}-${r.strike}-${i}`;
+                        const canAdd = typeof o.simbolo === "string" && o.simbolo.trim();
+                        return (
+                          <tr key={key} className={rowMoneynessClass(o)}>
+                            <td style={{ whiteSpace: "nowrap" }}>
+                              <button
+                                type="button"
+                                className="option-add-leg-button"
+                                disabled={!canAdd}
+                                onClick={() => {
+                                  const leg = buildLegFromRow(r);
+                                  if (!leg.symbol) return;
+                                  setSelectedLegs((prev) => {
+                                    const kk = legKey(leg);
+                                    if (prev.some((x) => legKey(x) === kk)) return prev;
+                                    return [...prev, leg];
+                                  });
+                                }}
+                              >
+                                Agregar
+                              </button>
+                            </td>
+                            <td>{r.tipo}</td>
+                            <td>{fmtCell(o.simbolo)}</td>
+                            <td>{fmtCell(o.expiry_date)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(r.strike, 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.bid), 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ask), 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ultimo), 2)}</td>
+                            <td>{fmtCell(moneyStatus(o) ?? o.money_status)}</td>
+                          </tr>
+                        );
+                      })}
+                      {puts.slice(0, 40).map((r, i) => {
+                        const o = r.raw;
+                        const key = `add-puts-${r.expiryCode}-${r.strike}-${i}`;
+                        const canAdd = typeof o.simbolo === "string" && o.simbolo.trim();
+                        return (
+                          <tr key={key} className={rowMoneynessClass(o)}>
+                            <td style={{ whiteSpace: "nowrap" }}>
+                              <button
+                                type="button"
+                                className="option-add-leg-button"
+                                disabled={!canAdd}
+                                onClick={() => {
+                                  const leg = buildLegFromRow(r);
+                                  if (!leg.symbol) return;
+                                  setSelectedLegs((prev) => {
+                                    const kk = legKey(leg);
+                                    if (prev.some((x) => legKey(x) === kk)) return prev;
+                                    return [...prev, leg];
+                                  });
+                                }}
+                              >
+                                Agregar
+                              </button>
+                            </td>
+                            <td>{r.tipo}</td>
+                            <td>{fmtCell(o.simbolo)}</td>
+                            <td>{fmtCell(o.expiry_date)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(r.strike, 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.bid), 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ask), 2)}</td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ultimo), 2)}</td>
+                            <td>{fmtCell(moneyStatus(o) ?? o.money_status)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="payoff-placeholder" style={{ marginTop: "0.85rem" }}>
+                <div className="options-section-title" style={{ marginBottom: "0.25rem" }}>
+                  Gráfico de payoff
+                </div>
+                <div className="msg-muted">Próximamente: ganancia/pérdida y break even según patas seleccionadas.</div>
+              </div>
+            </section>
+
+            <section className="strategy-section" aria-label="Oportunidades prearmadas">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-end",
+                  justifyContent: "space-between",
+                  gap: "0.75rem",
+                  flexWrap: "wrap",
+                }}
+              >
+                <h2 style={{ margin: 0 }}>Oportunidades</h2>
+                <label className="radar-toolbar__field" style={{ margin: 0 }}>
+                  <span className="radar-toolbar__label">Tipo de estrategia</span>
+                  <select
+                    className="radar-toolbar__select"
+                    value={strategiesFilter}
+                    onChange={(ev) => setStrategiesFilter(ev.target.value as StrategiesFilter)}
+                  >
+                    <option value="">Todas</option>
+                    <option value="Bull Call Spread">Bull Call Spread</option>
+                    <option value="Covered Call">Covered Call</option>
+                  </select>
+                </label>
+              </div>
+
+              {strategiesFilter === "" || strategiesFilter === "Bull Call Spread" ? (
+                <div style={{ marginTop: "0.75rem" }}>
+                  <div className="options-section-title">Bull Call Spread</div>
+                  {bullCallSpreads.length === 0 ? (
+                    <div className="msg-muted">Sin combinaciones válidas con el feed actual.</div>
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="strategy-opportunities-table">
+                        <thead>
+                          <tr>
+                            <th>Vencimiento</th>
+                            <th style={{ textAlign: "right" }}>Strike compra</th>
+                            <th style={{ textAlign: "right" }}>Strike venta</th>
+                            <th style={{ textAlign: "right" }}>Prima compra</th>
+                            <th style={{ textAlign: "right" }}>Prima venta</th>
+                            <th style={{ textAlign: "right" }}>Débito neto</th>
+                            <th style={{ textAlign: "right" }}>Ganancia máx.</th>
+                            <th style={{ textAlign: "right" }}>Pérdida máx.</th>
+                            <th style={{ textAlign: "right" }}>Break even</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {bullCallSpreads.map((x, idx) => (
+                            <tr key={`${x.expiryKey}-${x.buyStrike}-${x.sellStrike}-${idx}`}>
+                              <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
+                              <td style={{ textAlign: "right" }}>{formatNumber(x.buyStrike, 2)}</td>
+                              <td style={{ textAlign: "right" }}>{formatNumber(x.sellStrike, 2)}</td>
+                              <td style={{ textAlign: "right" }}>{formatNumber(x.buyAsk, 2)}</td>
+                              <td style={{ textAlign: "right" }}>{formatNumber(x.sellBid, 2)}</td>
+                              <td style={{ textAlign: "right" }}>{formatNumber(x.debit, 2)}</td>
+                              <td style={{ textAlign: "right" }}>{formatNumber(x.maxGain, 2)}</td>
+                              <td style={{ textAlign: "right" }}>{formatNumber(x.maxLoss, 2)}</td>
+                              <td style={{ textAlign: "right" }}>{formatNumber(x.breakEven, 2)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {strategiesFilter === "" || strategiesFilter === "Covered Call" ? (
+                <div style={{ marginTop: "0.95rem" }}>
+                  <div className="options-section-title">Covered Call</div>
+                  {coveredCalls.length === 0 ? (
+                    <div className="msg-muted">Sin calls con bid &gt; 0 en el feed actual.</div>
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="strategy-opportunities-table">
+                        <thead>
+                          <tr>
+                            <th>Vencimiento</th>
+                            <th style={{ textAlign: "right" }}>Subyacente</th>
+                            <th style={{ textAlign: "right" }}>Strike</th>
+                            <th style={{ textAlign: "right" }}>Prima</th>
+                            <th style={{ textAlign: "right" }}>Intrínseco</th>
+                            <th style={{ textAlign: "right" }}>Valor tiempo</th>
+                            <th style={{ textAlign: "right" }}>Días</th>
+                            <th style={{ textAlign: "right" }} title="TNA calculada solo sobre valor tiempo">
+                              TNA
+                            </th>
+                            <th style={{ textAlign: "right" }}>Break even</th>
+                            <th>Moneyness</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {coveredCalls.map((x, idx) => (
+                            <tr key={`${x.expiryKey}-${x.strike}-${idx}`}>
+                              <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
+                              <td style={{ textAlign: "right" }}>
+                                {underlyingPrice !== null ? formatNumber(underlyingPrice, 2) : "-"}
+                              </td>
+                              <td style={{ textAlign: "right" }}>{formatNumber(x.strike, 2)}</td>
+                              <td style={{ textAlign: "right" }}>{formatNumber(x.bid, 2)}</td>
+                              <td style={{ textAlign: "right", color: "var(--text-muted)" }}>
+                                {x.intrinsic !== null && x.intrinsic > 0 ? formatNumber(x.intrinsic, 2) : "-"}
+                              </td>
+                              <td
+                                style={{
+                                  textAlign: "right",
+                                  color: x.timeValue !== null && x.timeValue > 0 ? "rgba(22, 163, 74, 0.9)" : "var(--text-muted)",
+                                }}
+                              >
+                                {x.timeValue !== null && x.timeValue > 0 ? formatNumber(x.timeValue, 2) : "-"}
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                {x.days !== null ? formatInteger(x.days) : "-"}
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                {x.tnaPct !== null ? `${formatNumber(x.tnaPct, 2)}%` : "-"}
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                {x.breakEven !== null ? formatNumber(x.breakEven, 2) : "-"}
+                              </td>
+                              <td>{x.moneyness ?? "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              <div className="msg-muted" style={{ marginTop: "0.9rem" }}>
+                Próximamente: Bear Put Spread, Protective Put, Collar.
+              </div>
+            </section>
+          </div>
+        )
       ) : null}
     </div>
   );
