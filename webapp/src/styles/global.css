@@ -169,6 +169,159 @@ a:hover {
   overflow-x: auto;
 }
 
+/* --- Opciones (Rava) --- */
+.options-toolbar {
+  margin-top: 0.25rem;
+}
+
+.options-section {
+  margin-top: 1rem;
+}
+
+.options-section-title {
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 0.5rem 0;
+}
+
+tr.option-row-atm td {
+  background: rgba(250, 204, 21, 0.22);
+}
+
+tr.option-row-itm td {
+  background: rgba(34, 197, 94, 0.16);
+}
+
+tr.option-row-otm td {
+  background: rgba(239, 68, 68, 0.13);
+}
+
+tr.option-row-atm td:first-child {
+  border-left: 4px solid rgba(202, 138, 4, 0.85);
+  font-weight: 600;
+}
+
+tr.option-row-itm td:first-child {
+  border-left: 4px solid rgba(22, 163, 74, 0.75);
+}
+
+tr.option-row-otm td:first-child {
+  border-left: 4px solid rgba(220, 38, 38, 0.65);
+}
+
+.options-underlying-card {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
+  margin-top: 0.25rem;
+}
+
+.options-underlying-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.options-underlying-symbol {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+
+.options-underlying-symbol code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+}
+
+.options-underlying-price {
+  font-size: 1.55rem; /* ~24-25px */
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.options-filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.options-filter-toggle:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-dim);
+}
+
+.options-filter-toggle-active {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  font-weight: 700;
+}
+
+.options-strategy-panel {
+  margin-top: 1rem;
+  padding: 0.9rem 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+
+.strategy-leg-table {
+  margin-top: 0.25rem;
+}
+
+.strategy-leg-action select {
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}
+
+.strategy-net-cost strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.option-add-leg-button {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.option-add-leg-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent-dim);
+}
+
+.option-add-leg-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 /** Barra de filtros / búsqueda (Acciones USA). */
 .radar-toolbar {
   display: flex;

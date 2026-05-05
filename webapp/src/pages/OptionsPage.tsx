@@ -12,6 +12,21 @@ type FlatRow = {
   raw: Record<string, unknown>;
 };
 
+type StrategyType = "Bull Call Spread" | "Bear Put Spread" | "Covered Call" | "Protective Put" | "Collar";
+type LegAction = "BUY" | "SELL";
+
+type StrategyLeg = {
+  action: LegAction;
+  tipo: "CALL" | "PUT";
+  symbol: string;
+  expiry_date: string | null;
+  strike: number | null;
+  bid: number | null;
+  ask: number | null;
+  last: number | null;
+  moneyness: string | null;
+};
+
 function fmtCell(v: unknown): string {
   if (v === null || v === undefined) return "—";
   if (typeof v === "number" && !Number.isFinite(v)) return "—";
@@ -67,6 +82,22 @@ function formatExpiryMonthLabel(yyyyMmDd: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : yyyyMmDd;
 }
 
+function getUnderlyingPriceRaw(raw: Record<string, unknown>): number | null {
+  const candidates = [
+    raw.underlying_price,
+    raw.spot,
+    raw.spot_price,
+    raw.precio_subyacente,
+    raw.underlying_last,
+    raw.last_underlying,
+  ];
+  for (const c of candidates) {
+    const n = toNumberOrNull(c);
+    if (n !== null && n > 0) return n;
+  }
+  return null;
+}
+
 function spreadAbs(raw: Record<string, unknown>): number | null {
   const fromApi = toNumberOrNull(raw.spread_abs);
   if (fromApi !== null) return fromApi;
@@ -99,6 +130,49 @@ function rowMoneynessClass(raw: Record<string, unknown>): string {
   return "";
 }
 
+function strategyHelpText(t: StrategyType): string {
+  switch (t) {
+    case "Bull Call Spread":
+      return "Comprar call de strike menor y vender call de strike mayor.";
+    case "Bear Put Spread":
+      return "Comprar put de strike mayor y vender put de strike menor.";
+    case "Covered Call":
+      return "Tener el activo y vender call OTM.";
+    case "Protective Put":
+      return "Tener el activo y comprar put como cobertura.";
+    case "Collar":
+      return "Tener el activo, comprar put y vender call.";
+  }
+}
+
+function legKey(leg: Pick<StrategyLeg, "symbol" | "action">): string {
+  return `${leg.symbol}::${leg.action}`;
+}
+
+function buildLegFromRow(r: FlatRow): StrategyLeg {
+  const o = r.raw;
+  const symbol = typeof o.simbolo === "string" && o.simbolo.trim() ? o.simbolo.trim() : "";
+  const expiry_date = getExpiryDateRaw(o);
+  return {
+    action: "BUY",
+    tipo: r.tipo,
+    symbol,
+    expiry_date,
+    strike: Number.isFinite(r.strike) ? r.strike : null,
+    bid: toNumberOrNull(o.bid),
+    ask: toNumberOrNull(o.ask),
+    last: toNumberOrNull(o.ultimo),
+    moneyness: moneyStatus(o),
+  };
+}
+
+function legPriceUsed(leg: StrategyLeg): number | null {
+  if (leg.action === "BUY") {
+    return leg.ask ?? leg.last ?? null;
+  }
+  return leg.bid ?? leg.last ?? null;
+}
+
 function flattenChain(chain: Record<string, unknown>, activo: string): FlatRow[] {
   const out: FlatRow[] = [];
   for (const [expiryCode, bucket] of Object.entries(chain)) {
@@ -129,6 +203,8 @@ export function OptionsPage() {
   const [onlyWithVolume, setOnlyWithVolume] = useState(false);
   const [onlyWithTrades, setOnlyWithTrades] = useState(false);
   const [onlyAtm, setOnlyAtm] = useState(false);
+  const [strategyType, setStrategyType] = useState<StrategyType>("Bull Call Spread");
+  const [selectedLegs, setSelectedLegs] = useState<StrategyLeg[]>([]);
   const [rows, setRows] = useState<FlatRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -181,6 +257,33 @@ export function OptionsPage() {
     return items.map(([k, count]) => ({ key: k, label: formatExpiryMonthLabel(k), count }));
   }, [rows]);
 
+  const underlyingPrice = useMemo(() => {
+    for (const r of rows) {
+      const p = getUnderlyingPriceRaw(r.raw);
+      if (p !== null) return p;
+    }
+    return null;
+  }, [rows]);
+
+  const filterCounts = useMemo(() => {
+    let withVolume = 0;
+    let withTrades = 0;
+    let withAtm = 0;
+    for (const r of rows) {
+      const o = r.raw;
+      const hv = o.has_volume;
+      const vf = toNumberOrNull(o.volumen_float);
+      if (hv === true || (vf !== null && vf > 0)) withVolume += 1;
+
+      const ht = o.has_trades;
+      const ops = toNumberOrNull(o.operaciones_int);
+      if (ht === true || (ops !== null && ops > 0)) withTrades += 1;
+
+      if (isAtmMoneyStatus(moneyStatus(o))) withAtm += 1;
+    }
+    return { withVolume, withTrades, withAtm };
+  }, [rows]);
+
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
       const o = r.raw;
@@ -227,6 +330,18 @@ export function OptionsPage() {
     [filteredRows],
   );
 
+  const netCost = useMemo(() => {
+    let net = 0;
+    let ok = false;
+    for (const leg of selectedLegs) {
+      const p = legPriceUsed(leg);
+      if (p === null) continue;
+      ok = true;
+      net += leg.action === "BUY" ? -p : p;
+    }
+    return { ok, net };
+  }, [selectedLegs]);
+
   return (
     <div className="page options-page">
       <header className="page__header">
@@ -269,32 +384,47 @@ export function OptionsPage() {
             ))}
           </select>
         </label>
-        <label className="radar-toolbar__field" style={{ flexDirection: "row", alignItems: "center", gap: "0.5rem" }}>
-          <input
-            type="checkbox"
-            checked={onlyWithVolume}
-            onChange={(ev) => setOnlyWithVolume(ev.target.checked)}
-          />
-          <span className="radar-toolbar__label" style={{ marginBottom: 0 }}>
-            Solo con volumen
-          </span>
-        </label>
-        <label className="radar-toolbar__field" style={{ flexDirection: "row", alignItems: "center", gap: "0.5rem" }}>
-          <input
-            type="checkbox"
-            checked={onlyWithTrades}
-            onChange={(ev) => setOnlyWithTrades(ev.target.checked)}
-          />
-          <span className="radar-toolbar__label" style={{ marginBottom: 0 }}>
-            Solo con operaciones
-          </span>
-        </label>
-        <label className="radar-toolbar__field" style={{ flexDirection: "row", alignItems: "center", gap: "0.5rem" }}>
-          <input type="checkbox" checked={onlyAtm} onChange={(ev) => setOnlyAtm(ev.target.checked)} />
-          <span className="radar-toolbar__label" style={{ marginBottom: 0 }}>
-            Solo ATM
-          </span>
-        </label>
+        <div className="radar-toolbar__field" style={{ gap: "0.45rem" }}>
+          <span className="radar-toolbar__label">Filtros</span>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+            <button
+              type="button"
+              className={`options-filter-toggle${onlyWithVolume ? " options-filter-toggle-active" : ""}`}
+              aria-pressed={onlyWithVolume}
+              onClick={() => setOnlyWithVolume((v) => !v)}
+            >
+              Con volumen{rows.length ? ` (${formatInteger(filterCounts.withVolume)})` : ""}
+            </button>
+            <button
+              type="button"
+              className={`options-filter-toggle${onlyWithTrades ? " options-filter-toggle-active" : ""}`}
+              aria-pressed={onlyWithTrades}
+              onClick={() => setOnlyWithTrades((v) => !v)}
+            >
+              Con operaciones{rows.length ? ` (${formatInteger(filterCounts.withTrades)})` : ""}
+            </button>
+            <button
+              type="button"
+              className={`options-filter-toggle${onlyAtm ? " options-filter-toggle-active" : ""}`}
+              aria-pressed={onlyAtm}
+              onClick={() => setOnlyAtm((v) => !v)}
+            >
+              Solo ATM{rows.length ? ` (${formatInteger(filterCounts.withAtm)})` : ""}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="options-underlying-card" aria-label="Subyacente">
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem" }}>
+          <div className="options-underlying-label">Subyacente</div>
+          <div className="options-underlying-symbol">
+            <code>{selectedUnderlying}</code>
+          </div>
+        </div>
+        <div className="options-underlying-price">
+          {underlyingPrice !== null ? `$ ${formatNumber(underlyingPrice, 2)}` : "sin dato"}
+        </div>
       </div>
 
       <div className="msg-muted" style={{ marginTop: "0.25rem" }}>
@@ -318,6 +448,128 @@ export function OptionsPage() {
         ) : null}
       </div>
 
+      <section className="options-strategy-panel" aria-label="Estrategia">
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Estrategia</h2>
+            <div className="msg-muted" style={{ marginTop: "0.25rem" }}>
+              {strategyHelpText(strategyType)}
+            </div>
+          </div>
+          <button type="button" className="options-filter-toggle" onClick={() => setSelectedLegs([])}>
+            Limpiar estrategia
+          </button>
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.85rem 1.25rem", marginTop: "0.75rem" }}>
+          <label className="radar-toolbar__field" style={{ margin: 0 }}>
+            <span className="radar-toolbar__label">Tipo de estrategia</span>
+            <select
+              className="radar-toolbar__select"
+              value={strategyType}
+              onChange={(ev) => setStrategyType(ev.target.value as StrategyType)}
+            >
+              <option value="Bull Call Spread">Bull Call Spread</option>
+              <option value="Bear Put Spread">Bear Put Spread</option>
+              <option value="Covered Call">Covered Call</option>
+              <option value="Protective Put">Protective Put</option>
+              <option value="Collar">Collar</option>
+            </select>
+          </label>
+          <div className="radar-toolbar__field" style={{ margin: 0 }}>
+            <span className="radar-toolbar__label">Modo</span>
+            <div style={{ padding: "0.45rem 0" }}><strong>Manual</strong></div>
+          </div>
+          <div className="radar-toolbar__field" style={{ margin: 0 }}>
+            <span className="radar-toolbar__label">Patas</span>
+            <div style={{ padding: "0.45rem 0" }}><strong>{selectedLegs.length}</strong></div>
+          </div>
+          <div className="radar-toolbar__field strategy-net-cost" style={{ margin: 0 }}>
+            <span className="radar-toolbar__label">Costo neto estimado</span>
+            <div style={{ padding: "0.45rem 0" }}>
+              {netCost.ok ? (
+                <strong>
+                  {netCost.net < 0 ? "Débito" : netCost.net > 0 ? "Crédito" : "Neto"}{" "}
+                  {netCost.net !== 0 ? `$ ${formatNumber(Math.abs(netCost.net), 2)}` : "$ 0,00"}
+                </strong>
+              ) : (
+                <span className="msg-muted">—</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: "0.75rem" }}>
+          <div className="options-section-title" style={{ marginBottom: "0.35rem" }}>Patas seleccionadas</div>
+          {selectedLegs.length === 0 ? (
+            <div className="msg-muted">Agregá patas desde la tabla con el botón “Agregar”.</div>
+          ) : (
+            <div className="table-wrap">
+              <table className="strategy-leg-table">
+                <thead>
+                  <tr>
+                    <th>Acción</th>
+                    <th>Tipo</th>
+                    <th>Ticker</th>
+                    <th>Vencimiento</th>
+                    <th>Strike</th>
+                    <th>Precio usado</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedLegs.map((leg) => {
+                    const k = legKey(leg);
+                    const p = legPriceUsed(leg);
+                    return (
+                      <tr key={k}>
+                        <td className="strategy-leg-action">
+                          <select
+                            className="radar-toolbar__select"
+                            value={leg.action}
+                            onChange={(ev) => {
+                              const nextAction = ev.target.value as LegAction;
+                              setSelectedLegs((prev) => {
+                                const next = prev.map((x) => (legKey(x) === k ? { ...x, action: nextAction } : x));
+                                // evitar duplicado exacto symbol+action
+                                const seen = new Set<string>();
+                                return next.filter((x) => {
+                                  const kk = legKey(x);
+                                  if (seen.has(kk)) return false;
+                                  seen.add(kk);
+                                  return true;
+                                });
+                              });
+                            }}
+                          >
+                            <option value="BUY">Comprar</option>
+                            <option value="SELL">Vender</option>
+                          </select>
+                        </td>
+                        <td>{leg.tipo}</td>
+                        <td>{leg.symbol ? leg.symbol : "—"}</td>
+                        <td>{leg.expiry_date ? leg.expiry_date.slice(0, 10) : "—"}</td>
+                        <td style={{ textAlign: "right" }}>{leg.strike !== null ? formatNumber(leg.strike, 2) : "-"}</td>
+                        <td style={{ textAlign: "right" }}>{p !== null ? `$ ${formatNumber(p, 2)}` : "-"}</td>
+                        <td style={{ textAlign: "right" }}>
+                          <button
+                            type="button"
+                            className="option-add-leg-button"
+                            onClick={() => setSelectedLegs((prev) => prev.filter((x) => legKey(x) !== k))}
+                          >
+                            Quitar
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
+
       {loading && <p>Cargando…</p>}
       {error && (
         <p role="alert">
@@ -334,6 +586,7 @@ export function OptionsPage() {
               <table>
                 <thead>
                   <tr>
+                    <th></th>
                     <th>Tipo</th>
                     <th>Activo</th>
                     <th>Ticker opción</th>
@@ -353,13 +606,32 @@ export function OptionsPage() {
                     const o = r.raw;
                     const key = `calls-${r.expiryCode}-${r.strike}-${i}`;
                     const cls = rowMoneynessClass(o);
+                    const canAdd = typeof o.simbolo === "string" && o.simbolo.trim();
                     return (
                       <tr key={key} className={cls}>
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          <button
+                            type="button"
+                            className="option-add-leg-button"
+                            disabled={!canAdd}
+                            onClick={() => {
+                              const leg = buildLegFromRow(r);
+                              if (!leg.symbol) return;
+                              setSelectedLegs((prev) => {
+                                const kk = legKey(leg);
+                                if (prev.some((x) => legKey(x) === kk)) return prev;
+                                return [...prev, leg];
+                              });
+                            }}
+                          >
+                            Agregar
+                          </button>
+                        </td>
                         <td>{r.tipo}</td>
                         <td>{r.activo}</td>
                         <td>{fmtCell(o.simbolo)}</td>
                         <td>{fmtCell(o.expiry_date)}</td>
-                        <td>{fmtCell(r.strike)}</td>
+                        <td style={{ textAlign: "right" }}>{formatNumber(r.strike, 2)}</td>
                         <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ultimo), 2)}</td>
                         <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.bid), 2)}</td>
                         <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ask), 2)}</td>
@@ -381,6 +653,7 @@ export function OptionsPage() {
               <table>
                 <thead>
                   <tr>
+                    <th></th>
                     <th>Tipo</th>
                     <th>Activo</th>
                     <th>Ticker opción</th>
@@ -400,13 +673,32 @@ export function OptionsPage() {
                     const o = r.raw;
                     const key = `puts-${r.expiryCode}-${r.strike}-${i}`;
                     const cls = rowMoneynessClass(o);
+                    const canAdd = typeof o.simbolo === "string" && o.simbolo.trim();
                     return (
                       <tr key={key} className={cls}>
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          <button
+                            type="button"
+                            className="option-add-leg-button"
+                            disabled={!canAdd}
+                            onClick={() => {
+                              const leg = buildLegFromRow(r);
+                              if (!leg.symbol) return;
+                              setSelectedLegs((prev) => {
+                                const kk = legKey(leg);
+                                if (prev.some((x) => legKey(x) === kk)) return prev;
+                                return [...prev, leg];
+                              });
+                            }}
+                          >
+                            Agregar
+                          </button>
+                        </td>
                         <td>{r.tipo}</td>
                         <td>{r.activo}</td>
                         <td>{fmtCell(o.simbolo)}</td>
                         <td>{fmtCell(o.expiry_date)}</td>
-                        <td>{fmtCell(r.strike)}</td>
+                        <td style={{ textAlign: "right" }}>{formatNumber(r.strike, 2)}</td>
                         <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ultimo), 2)}</td>
                         <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.bid), 2)}</td>
                         <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ask), 2)}</td>
