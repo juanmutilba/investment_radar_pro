@@ -77,6 +77,32 @@ def _parse_option_symbol(raw_symbol: str) -> dict[str, str] | None:
     if not s:
         return None
 
+    # Regla específica (Transener): TRAC... / TRAV... => underlying "TRA"
+    if s.startswith("TRAC") or s.startswith("TRAV"):
+        underlying = "TRA"
+        opt_type = "C" if s[3] == "C" else "V"
+        rest = s[4:]
+        if not rest:
+            return None
+        strike_raw = ""
+        expiry_raw = ""
+        m = _TRAILING_EXP_RE.match(rest)
+        if m:
+            expiry_raw = (m.group("exp") or "").replace(".", "").strip().upper()
+            strike_part = (m.group("strike") or "").strip()
+        else:
+            strike_part = rest.strip()
+        strike_part = strike_part.rstrip(".")
+        m2 = re.match(r"^(?P<num>[0-9]+(?:\.[0-9]+)?)", strike_part)
+        if m2:
+            strike_raw = m2.group("num")
+        return {
+            "underlying_guess": underlying,
+            "option_type": opt_type,
+            "strike_raw": strike_raw,
+            "expiry_code_raw": expiry_raw,
+        }
+
     # Encontrar primera C/V seguida por dígito (evita confundir letras dentro del subyacente).
     idx = -1
     opt_type = ""

@@ -1,8 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchRavaOptionChain } from "@/services/api";
+import { fetchLatestRadarArgentina, fetchRavaOptionChain, type RadarRow } from "@/services/api";
+import { formatTrend, getRaw } from "@/components/radar/radarTableCore";
 
-const UNDERLYING_CHOICES = ["GFG", "COM", "ALU", "BYM"] as const;
+type OptionUnderlying = { value: string; label: string; radarTicker: string };
+
+const OPTION_UNDERLYINGS: readonly OptionUnderlying[] = [
+  { value: "GFG", label: "GFG", radarTicker: "GGAL" },
+  { value: "COM", label: "COM", radarTicker: "COME" },
+  { value: "ALU", label: "ALU", radarTicker: "ALUA" },
+  { value: "BYM", label: "BYM", radarTicker: "BYMA" },
+  { value: "YPF", label: "YPF", radarTicker: "YPFD" },
+  { value: "PAM", label: "PAM", radarTicker: "PAMP" },
+  // Interno: TRA (prefijo en opciones). Visible: TRAN. Radar: TRAN.
+  { value: "TRA", label: "TRAN", radarTicker: "TRAN" },
+  { value: "TXA", label: "TXA", radarTicker: "TXAR" },
+] as const;
 
 type FlatRow = {
   activo: string;
@@ -57,6 +70,12 @@ function formatNumber(value: number | null | undefined, decimals = 2): string {
 function formatInteger(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";
   return value.toLocaleString("es-AR", { maximumFractionDigits: 0 });
+}
+
+function formatTrendLabel(value: unknown): string {
+  // Reutiliza exactamente la misma lógica del radar (Acciones Argentina).
+  const out = formatTrend(value);
+  return out.missing ? "-" : out.text;
 }
 
 function getExpiryDateRaw(raw: Record<string, unknown>): string | null {
@@ -222,6 +241,19 @@ export function OptionsPage() {
   const [rows, setRows] = useState<FlatRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [loadingUnderlyingContext, setLoadingUnderlyingContext] = useState(false);
+  const [underlyingSignal, setUnderlyingSignal] = useState<string | null>(null);
+  const [underlyingTrendRaw, setUnderlyingTrendRaw] = useState<unknown>(null);
+
+  const selectedUnderlyingMeta = useMemo(() => {
+    return OPTION_UNDERLYINGS.find((u) => u.value === selectedUnderlying) ?? {
+      value: selectedUnderlying,
+      label: selectedUnderlying,
+      radarTicker: selectedUnderlying,
+    };
+  }, [selectedUnderlying]);
+
+  const underlyingRadarSymbol = selectedUnderlyingMeta.radarTicker;
 
   useEffect(() => {
     let cancelled = false;
@@ -244,6 +276,75 @@ export function OptionsPage() {
       cancelled = true;
     };
   }, [selectedUnderlying]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingUnderlyingContext(true);
+    setUnderlyingSignal(null);
+    setUnderlyingTrendRaw(null);
+    fetchLatestRadarArgentina()
+      .then((res) => {
+        if (cancelled) return;
+        const rows: RadarRow[] = res?.rows ?? [];
+        const keysTicker = ["Ticker", "ticker", "Especie", "especie", "Simbolo", "simbolo", "Símbolo", "símbolo"];
+        const keysSignal = ["SignalState", "signal_state", "signalState", "Signal", "signal"];
+        // Reutilizar el MISMO campo que la tabla Acciones Argentina:
+        // COLUMNS_ARGENTINA (id="trend") => keys ["Trend", "trend"] y formatTrend().
+        const keysTrend = ["Trend", "trend"];
+
+        const target = underlyingRadarSymbol.trim().toUpperCase();
+        let found: RadarRow | null = null;
+        for (const r of rows) {
+          const t = getRaw(r, keysTicker);
+          const s = (t ?? "").toString().trim().toUpperCase();
+          if (s === target) {
+            found = r;
+            break;
+          }
+        }
+        if (!found) return;
+        const sig = getRaw(found, keysSignal);
+        const tr = getRaw(found, keysTrend);
+        setUnderlyingSignal(sig === undefined ? null : String(sig));
+        setUnderlyingTrendRaw(tr === undefined ? null : tr);
+      })
+      .catch(() => {
+        // silent: no bloquear /options si falla el radar
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingUnderlyingContext(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [underlyingRadarSymbol]);
+
+  const underlyingTrendLabel = useMemo(() => formatTrendLabel(underlyingTrendRaw), [underlyingTrendRaw]);
+
+  const signalBadgeClass = useMemo(() => {
+    const s = (underlyingSignal ?? "").trim().toLowerCase();
+    if (!s) return "options-underlying-badge options-underlying-badge-neutral";
+    if (s.includes("compra") || s.includes("buy") || s.includes("mejora")) {
+      return "options-underlying-badge options-underlying-badge-positive";
+    }
+    if (s.includes("venta") || s.includes("sell") || s.includes("deterioro")) {
+      return "options-underlying-badge options-underlying-badge-negative";
+    }
+    if (s.includes("neutral") || s.includes("lateral") || s.includes("sin")) {
+      return "options-underlying-badge options-underlying-badge-neutral";
+    }
+    return "options-underlying-badge options-underlying-badge-neutral";
+  }, [underlyingSignal]);
+
+  const trendBadgeClass = useMemo(() => {
+    const s = (underlyingTrendLabel ?? "").trim().toLowerCase();
+    if (!s) return "options-underlying-badge options-underlying-badge-neutral";
+    if (s === "-") return "options-underlying-badge options-underlying-badge-neutral";
+    if (s.includes("sub") || s.includes("alc")) return "options-underlying-badge options-underlying-badge-positive";
+    if (s.includes("baj") || s.includes("bear")) return "options-underlying-badge options-underlying-badge-negative";
+    if (s.includes("pla") || s.includes("lat")) return "options-underlying-badge options-underlying-badge-neutral";
+    return "options-underlying-badge options-underlying-badge-neutral";
+  }, [underlyingTrendLabel]);
 
   const emptyHint = useMemo(() => {
     if (loading || error) return null;
@@ -491,9 +592,9 @@ export function OptionsPage() {
             onChange={(ev) => setSelectedUnderlying(ev.target.value)}
             aria-label="Activo subyacente"
           >
-            {UNDERLYING_CHOICES.map((u) => (
-              <option key={u} value={u}>
-                {u}
+            {OPTION_UNDERLYINGS.map((u) => (
+              <option key={u.value} value={u.value}>
+                {u.label}
               </option>
             ))}
           </select>
@@ -569,13 +670,36 @@ export function OptionsPage() {
 
       <div className="options-underlying-card" aria-label="Subyacente">
         <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem" }}>
-          <div className="options-underlying-label">Subyacente</div>
-          <div className="options-underlying-symbol">
-            <code>{selectedUnderlying}</code>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+            <div className="options-underlying-label" style={{ margin: 0 }}>
+              Subyacente
+            </div>
+            <div className="options-underlying-symbol">
+              <code>{selectedUnderlying}</code>
+            </div>
+          </div>
+          <div className="options-underlying-meta">
+            <span className={signalBadgeClass} title="SignalState">
+              {loadingUnderlyingContext ? "Signal: …" : `Signal: ${underlyingSignal?.trim() ? underlyingSignal : "-"}`}
+            </span>
+            <span className={trendBadgeClass} title="Tendencia">
+              {loadingUnderlyingContext ? "Tendencia: …" : `Tendencia: ${underlyingTrendLabel}`}
+            </span>
+            <span className="options-underlying-badge options-underlying-badge-neutral" title="Ticker en Radar Argentina">
+              Activo: {underlyingRadarSymbol}
+            </span>
+            {selectedUnderlyingMeta.label !== selectedUnderlying ? (
+              <span className="options-underlying-badge options-underlying-badge-neutral" title="Etiqueta visible">
+                Label: {selectedUnderlyingMeta.label}
+              </span>
+            ) : null}
           </div>
         </div>
-        <div className="options-underlying-price">
-          {underlyingPrice !== null ? `$ ${formatNumber(underlyingPrice, 2)}` : "sin dato"}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.15rem" }}>
+          <div className="options-underlying-label">Precio</div>
+          <div className="options-underlying-price">
+            {underlyingPrice !== null ? `$ ${formatNumber(underlyingPrice, 2)}` : "sin dato"}
+          </div>
         </div>
       </div>
 

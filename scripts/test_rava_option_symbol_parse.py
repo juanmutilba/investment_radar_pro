@@ -47,6 +47,23 @@ def main() -> int:
     assert p2["expiry_code_raw"] == "JU"
     assert p2["strike_raw"] == "4774"
 
+    # Transener: prefijos TRAC/TRAV deben agrupar como underlying TRA
+    t1 = _parse_option_symbol("TRAC3800JU")
+    assert t1 is not None
+    print("[PARSE] TRAC3800JU ->", t1)
+    assert t1["underlying_guess"] == "TRA"
+    assert t1["option_type"] == "C"
+    assert t1["strike_raw"] == "3800"
+    assert t1["expiry_code_raw"] == "JU"
+
+    t2 = _parse_option_symbol("TRAV3600JU")
+    assert t2 is not None
+    print("[PARSE] TRAV3600JU ->", t2)
+    assert t2["underlying_guess"] == "TRA"
+    assert t2["option_type"] == "V"
+    assert t2["strike_raw"] == "3600"
+    assert t2["expiry_code_raw"] == "JU"
+
     # Inspección: 1 letra A (no validamos el strike exacto, solo que no crashea)
     p3 = _parse_option_symbol("GFGC10126A")
     assert p3 is not None
