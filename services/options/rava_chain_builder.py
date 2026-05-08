@@ -298,7 +298,10 @@ def build_rava_option_chain(options: list[Any], underlying_prices: dict | None =
     for raw in options:
         if not isinstance(raw, dict):
             continue
-        if str(raw.get("securitytype") or "").strip().upper() != "OPT":
+        # Rava a veces trae opciones con securitytype vacío. No filtrar por volumen/trades,
+        # y no descartar por falta de securitytype si el símbolo parsea como opción.
+        st = str(raw.get("securitytype") or "").strip().upper()
+        if st and st != "OPT":
             continue
 
         sym = _pick_symbol(raw)

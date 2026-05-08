@@ -478,6 +478,59 @@ def iol_options_raw(symbol: str):
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+@app.get("/options/chain")
+def options_chain(
+    underlying: str = Query(default="GGAL", description="Subyacente (ej. GGAL, YPFD, ALUA)"),
+):
+    """
+    Cadena merged Allaria + Rava (mismo criterio que services.options.options_service).
+    No incluye raw completo; sí field_sources si el merge lo definió.
+    """
+    from services.options.normalizer import normalize_option_type
+    from services.options.options_service import get_options_chain
+
+    chain = get_options_chain(underlying)
+    contracts_sorted = sorted(
+        chain.contracts,
+        key=lambda c: (
+            c.expiry or "",
+            normalize_option_type(c.option_type) or (c.option_type or ""),
+            c.strike if c.strike is not None else -1.0,
+            c.symbol or "",
+        ),
+    )
+    items: list[dict[str, Any]] = []
+    for c in contracts_sorted:
+        fs: dict[str, Any] | None = None
+        if isinstance(c.raw, dict):
+            v = c.raw.get("field_sources")
+            if isinstance(v, dict):
+                fs = dict(v)
+        items.append(
+            {
+                "underlying": c.underlying,
+                "symbol": c.symbol,
+                "expiry": c.expiry,
+                "option_type": normalize_option_type(c.option_type) or c.option_type,
+                "strike": c.strike,
+                "bid": c.bid,
+                "ask": c.ask,
+                "last": c.last,
+                "volume": c.volume,
+                "open_interest": c.open_interest,
+                "source": c.source,
+                "field_sources": fs if fs is not None else {},
+            }
+        )
+
+    print(f"[OPTIONS_API] chain underlying={underlying!r} total={len(items)}", flush=True)
+    return {
+        "underlying": chain.underlying,
+        "total": len(items),
+        "contracts": items,
+    }
+
+
 @app.get("/options/scrape/raw")
 def options_scrape_raw(url: str = Query(..., description="URL pública a inspeccionar (RAW)")):
     """
@@ -660,9 +713,22 @@ def options_rava_chain(underlying: str | None = Query(default=None, description=
 
     underlying_prices: dict[str, float] = {s: t[0] for s, t in prices_by_symbol.items()}
 
+    # Alias de símbolo "acción" → símbolo "opciones" o viceversa (para spot / moneyness y filtros).
+    # Nota: en algunas series, el prefijo de opciones puede no coincidir 1:1 con el ticker del subyacente.
+    OPTION_UNDERLYING_PREFIX_ALIASES: dict[str, list[str]] = {
+        # Transener: opciones suelen venir como TRA{C|V}..., pero el subyacente es TRAN.
+        "TRAN": ["TRA"],
+    }
+
     for src, dst in (("GGAL", "GFG"), ("ALUA", "ALU"), ("COME", "COM"), ("BYMA", "BYM")):
         if src in underlying_prices:
             underlying_prices[dst] = underlying_prices[src]
+
+    # Replicar spot del subyacente hacia aliases de prefijo de opciones.
+    for main, aliases in OPTION_UNDERLYING_PREFIX_ALIASES.items():
+        if main in underlying_prices:
+            for a in aliases:
+                underlying_prices.setdefault(a, underlying_prices[main])
 
     opt_items = [
         it
@@ -686,7 +752,28 @@ def options_rava_chain(underlying: str | None = Query(default=None, description=
     print(f"[RAVA_CHAIN_API] underlying_prices_sample={prices_sample!r}", flush=True)
 
     if u_filter:
-        return chain.get(u_filter, {})
+        # Si el subyacente filtrado no coincide con el prefijo de opciones, intentar aliases.
+        if u_filter in chain:
+            return chain.get(u_filter, {})
+        aliases = OPTION_UNDERLYING_PREFIX_ALIASES.get(u_filter) or []
+        merged: dict[str, Any] = {}
+        for a in aliases:
+            part = chain.get(a)
+            if not isinstance(part, dict):
+                continue
+            for exp, bucket in part.items():
+                if not isinstance(bucket, dict):
+                    continue
+                cur = merged.get(exp)
+                if not isinstance(cur, dict):
+                    cur = {"calls": {}, "puts": {}}
+                    merged[exp] = cur
+                for side in ("calls", "puts"):
+                    m = bucket.get(side)
+                    if isinstance(m, dict):
+                        cur.setdefault(side, {})
+                        cur[side].update(m)
+        return merged
     return chain
 
 

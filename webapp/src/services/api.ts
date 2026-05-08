@@ -808,6 +808,49 @@ function coerceStringArray(v: unknown): string[] | null {
   return out;
 }
 
+/** Fila de contrato en GET /options/chain (merge Allaria + Rava). */
+export type OptionContractRow = {
+  underlying: string;
+  symbol: string;
+  expiry: string | null;
+  option_type: string | null;
+  strike: number | null;
+  bid: number | null;
+  ask: number | null;
+  last: number | null;
+  volume: number | null;
+  open_interest: number | null;
+  source: string;
+  field_sources: Record<string, string>;
+};
+
+export type OptionsChainResponse = {
+  underlying: string;
+  total: number;
+  contracts: OptionContractRow[];
+};
+
+export async function fetchOptionsChain(underlying: string): Promise<OptionsChainResponse> {
+  const q = new URLSearchParams({ underlying: underlying.trim() });
+  const res = await fetch(`${BASE}/options/chain?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object") {
+    throw new Error("Respuesta inesperada: options/chain");
+  }
+  const o = data as { underlying?: unknown; total?: unknown; contracts?: unknown };
+  if (typeof o.underlying !== "string" || typeof o.total !== "number" || !Array.isArray(o.contracts)) {
+    throw new Error("Respuesta inesperada: options/chain");
+  }
+  return {
+    underlying: o.underlying,
+    total: o.total,
+    contracts: o.contracts as OptionContractRow[],
+  };
+}
+
 /** Cadena GET /options/rava/chain (objeto anidado por vencimiento → calls/puts → strike). */
 export type RavaOptionChainResponse = Record<string, unknown>;
 
