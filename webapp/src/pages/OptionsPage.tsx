@@ -136,14 +136,6 @@ function isAtmMoneyStatus(ms: string | null): boolean {
   return up === "ATM" || up.includes("ATM");
 }
 
-function rowMoneynessClass(raw: Record<string, unknown>): string {
-  const ms = (moneyStatus(raw) ?? "").toUpperCase();
-  if (ms.includes("ATM")) return "option-row-atm";
-  if (ms.includes("ITM")) return "option-row-itm";
-  if (ms.includes("OTM")) return "option-row-otm";
-  return "";
-}
-
 function strategyHelpText(t: StrategyType): string {
   switch (t) {
     case "Bull Call Spread":
@@ -227,12 +219,126 @@ function mergedContractTypeUpper(c: OptionContractRow): string {
   return (c.option_type ?? "").toString().trim().toUpperCase();
 }
 
+function mergedContractVolume(c: OptionContractRow): number {
+  const v = c.volume;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  return 0;
+}
+
+function mergedContractLastSortKey(c: OptionContractRow): number {
+  const v = c.last;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  return -Infinity;
+}
+
+/** Orden por defecto del panel: vencimiento → tipo → strike → símbolo. */
+function sortMergedDefault(a: OptionContractRow, b: OptionContractRow): number {
+  const eA = expiryKeyFromMergedContract(a);
+  const eB = expiryKeyFromMergedContract(b);
+  const cmpE = eA.localeCompare(eB);
+  if (cmpE !== 0) return cmpE;
+  const tA = mergedContractTypeUpper(a);
+  const tB = mergedContractTypeUpper(b);
+  const cmpT = tA.localeCompare(tB);
+  if (cmpT !== 0) return cmpT;
+  const sA = a.strike ?? -Infinity;
+  const sB = b.strike ?? -Infinity;
+  if (sA !== sB) return sA - sB;
+  return (a.symbol ?? "").localeCompare(b.symbol ?? "", "es");
+}
+
+function tieBreakExpiryTypeStrike(a: OptionContractRow, b: OptionContractRow): number {
+  const eA = expiryKeyFromMergedContract(a);
+  const eB = expiryKeyFromMergedContract(b);
+  const cmpE = eA.localeCompare(eB);
+  if (cmpE !== 0) return cmpE;
+  const tA = mergedContractTypeUpper(a);
+  const tB = mergedContractTypeUpper(b);
+  const cmpT = tA.localeCompare(tB);
+  if (cmpT !== 0) return cmpT;
+  const sA = a.strike ?? -Infinity;
+  const sB = b.strike ?? -Infinity;
+  return sA - sB;
+}
+
+/** Moneyness: ATM si |strike-spot|/spot ≤ 3%; luego ITM/OTM según CALL/PUT (mismo criterio panel y estrategias). */
+type MoneynessKind = "ITM" | "ATM" | "OTM" | "SIN_DATO";
+
+function getMoneynessFromValues(
+  strike: number | null | undefined,
+  optionKind: string,
+  spot: number | null,
+): MoneynessKind {
+  if (spot === null || !Number.isFinite(spot) || spot <= 0) return "SIN_DATO";
+  if (strike === null || strike === undefined || !Number.isFinite(strike)) return "SIN_DATO";
+  const rel = Math.abs(strike - spot) / spot;
+  if (rel <= 0.03) return "ATM";
+  const t = optionKind.toString().trim().toUpperCase();
+  const isCall = t.includes("CALL") || t === "C";
+  const isPut = t.includes("PUT") || t === "P" || t === "V";
+  if (!isCall && !isPut) return "SIN_DATO";
+  if (isCall) {
+    if (strike < spot) return "ITM";
+    return "OTM";
+  }
+  if (strike > spot) return "ITM";
+  return "OTM";
+}
+
+function getMoneyness(row: OptionContractRow, spot: number | null): MoneynessKind {
+  return getMoneynessFromValues(row.strike, mergedContractTypeUpper(row), spot);
+}
+
+function mergedMoneynessRowClass(m: MoneynessKind): string {
+  switch (m) {
+    case "ITM":
+      return "option-row-itm";
+    case "ATM":
+      return "option-row-atm";
+    case "OTM":
+      return "option-row-otm";
+    default:
+      return "moneyness-row-none";
+  }
+}
+
+function mergedMoneynessBadgeClass(m: MoneynessKind): string {
+  switch (m) {
+    case "ITM":
+      return "moneyness-badge moneyness-itm";
+    case "ATM":
+      return "moneyness-badge moneyness-atm";
+    case "OTM":
+      return "moneyness-badge moneyness-otm";
+    default:
+      return "moneyness-badge moneyness-none";
+  }
+}
+
+function mergedMoneynessBadgeText(m: MoneynessKind): string {
+  switch (m) {
+    case "ITM":
+      return "ITM";
+    case "ATM":
+      return "ATM";
+    case "OTM":
+      return "OTM";
+    default:
+      return "Sin dato";
+  }
+}
+
 type OptionTypeFilter = "all" | "CALL" | "PUT";
+type PanelSortMode = "expiry_type_strike" | "symbol" | "volume_desc" | "last_desc";
 
 export function OptionsPage() {
   const [selectedUnderlying, setSelectedUnderlying] = useState<string>("GGAL");
   const [selectedExpiry, setSelectedExpiry] = useState<string>("");
   const [optionTypeFilter, setOptionTypeFilter] = useState<OptionTypeFilter>("all");
+  const [hideZeroVolume, setHideZeroVolume] = useState(true);
+  const [panelSort, setPanelSort] = useState<PanelSortMode>("expiry_type_strike");
+  /** Override opcional si el spot del API no alcanza o el usuario quiere otro valor. */
+  const [manualSpotInput, setManualSpotInput] = useState("");
   const [onlyWithVolume, setOnlyWithVolume] = useState(false);
   const [onlyWithTrades, setOnlyWithTrades] = useState(false);
   const [onlyAtm, setOnlyAtm] = useState(false);
@@ -240,8 +346,8 @@ export function OptionsPage() {
   const [strategyType, setStrategyType] = useState<StrategyType>("Bull Call Spread");
   const [strategiesFilter, setStrategiesFilter] = useState<StrategiesFilter>("");
   const [showManualStrategy, setShowManualStrategy] = useState(false);
-  const [showBullCallSpread, setShowBullCallSpread] = useState(true);
-  const [showCoveredCall, setShowCoveredCall] = useState(true);
+  const [showBullCallSpread, setShowBullCallSpread] = useState(false);
+  const [showCoveredCall, setShowCoveredCall] = useState(false);
   const [selectedLegs, setSelectedLegs] = useState<StrategyLeg[]>([]);
   const [mergedChain, setMergedChain] = useState<OptionsChainResponse | null>(null);
   const [loadingChain, setLoadingChain] = useState(true);
@@ -285,6 +391,10 @@ export function OptionsPage() {
     return () => {
       cancelled = true;
     };
+  }, [selectedUnderlying]);
+
+  useEffect(() => {
+    setManualSpotInput("");
   }, [selectedUnderlying]);
 
   useEffect(() => {
@@ -427,6 +537,22 @@ export function OptionsPage() {
     return null;
   }, [ravaRows]);
 
+  const parsedManualSpot = useMemo(() => {
+    const t = manualSpotInput.trim().replace(",", ".");
+    if (!t) return null;
+    const n = Number(t);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [manualSpotInput]);
+
+  const apiChainSpot = useMemo(() => {
+    const s = mergedChain?.spot;
+    if (typeof s === "number" && Number.isFinite(s) && s > 0) return s;
+    return null;
+  }, [mergedChain?.spot]);
+
+  /** Spot para moneyness: manual > GET /options/chain > precio subyacente en filas Rava (si hubo estrategias). */
+  const effectivePanelSpot = parsedManualSpot ?? apiChainSpot ?? underlyingPrice;
+
   const filterCounts = useMemo(() => {
     let withVolume = 0;
     let withTrades = 0;
@@ -448,38 +574,46 @@ export function OptionsPage() {
 
   const mergedFilteredContracts = useMemo(() => {
     const list = mergedChain?.contracts ?? [];
-    return list
-      .filter((c) => {
-        if (selectedExpiry) {
-          const k = expiryKeyFromMergedContract(c);
-          if (k !== selectedExpiry) return false;
+    const filtered = list.filter((c) => {
+      if (selectedExpiry) {
+        const k = expiryKeyFromMergedContract(c);
+        if (k !== selectedExpiry) return false;
+      }
+      if (optionTypeFilter === "CALL") {
+        const t = mergedContractTypeUpper(c);
+        if (!t.includes("CALL")) return false;
+      }
+      if (optionTypeFilter === "PUT") {
+        const t = mergedContractTypeUpper(c);
+        if (!t.includes("PUT")) return false;
+      }
+      if (hideZeroVolume && mergedContractVolume(c) <= 0) return false;
+      return true;
+    });
+    return filtered.slice().sort((a, b) => {
+      switch (panelSort) {
+        case "symbol": {
+          const cmp = (a.symbol ?? "").localeCompare(b.symbol ?? "", "es");
+          if (cmp !== 0) return cmp;
+          return sortMergedDefault(a, b);
         }
-        if (optionTypeFilter === "CALL") {
-          const t = mergedContractTypeUpper(c);
-          if (!t.includes("CALL")) return false;
+        case "volume_desc": {
+          const va = mergedContractVolume(a);
+          const vb = mergedContractVolume(b);
+          if (vb !== va) return vb - va;
+          return tieBreakExpiryTypeStrike(a, b);
         }
-        if (optionTypeFilter === "PUT") {
-          const t = mergedContractTypeUpper(c);
-          if (!t.includes("PUT")) return false;
+        case "last_desc": {
+          const la = mergedContractLastSortKey(a);
+          const lb = mergedContractLastSortKey(b);
+          if (lb !== la) return lb - la;
+          return tieBreakExpiryTypeStrike(a, b);
         }
-        return true;
-      })
-      .slice()
-      .sort((a, b) => {
-        const eA = expiryKeyFromMergedContract(a);
-        const eB = expiryKeyFromMergedContract(b);
-        const cmpE = eA.localeCompare(eB);
-        if (cmpE !== 0) return cmpE;
-        const tA = mergedContractTypeUpper(a);
-        const tB = mergedContractTypeUpper(b);
-        const cmpT = tA.localeCompare(tB);
-        if (cmpT !== 0) return cmpT;
-        const sA = a.strike ?? -Infinity;
-        const sB = b.strike ?? -Infinity;
-        if (sA !== sB) return sA - sB;
-        return (a.symbol ?? "").localeCompare(b.symbol ?? "", "es");
-      });
-  }, [mergedChain, selectedExpiry, optionTypeFilter]);
+        default:
+          return sortMergedDefault(a, b);
+      }
+    });
+  }, [mergedChain, selectedExpiry, optionTypeFilter, hideZeroVolume, panelSort]);
 
   const panelFilteredEmptyHint = useMemo(() => {
     if (loadingChain || errorChain) return null;
@@ -706,19 +840,67 @@ export function OptionsPage() {
           </select>
         </label>
         {activeTab === "panel" ? (
-          <label className="radar-toolbar__field">
-            <span className="radar-toolbar__label">Tipo</span>
-            <select
-              className="radar-toolbar__select"
-              value={optionTypeFilter}
-              onChange={(ev) => setOptionTypeFilter(ev.target.value as OptionTypeFilter)}
-              aria-label="Tipo de opción"
-            >
-              <option value="all">Todas</option>
-              <option value="CALL">CALL</option>
-              <option value="PUT">PUT</option>
-            </select>
-          </label>
+          <>
+            <label className="radar-toolbar__field">
+              <span className="radar-toolbar__label">Tipo</span>
+              <select
+                className="radar-toolbar__select"
+                value={optionTypeFilter}
+                onChange={(ev) => setOptionTypeFilter(ev.target.value as OptionTypeFilter)}
+                aria-label="Tipo de opción"
+              >
+                <option value="all">Todas</option>
+                <option value="CALL">CALL</option>
+                <option value="PUT">PUT</option>
+              </select>
+            </label>
+            <label className="radar-toolbar__field" style={{ flexDirection: "row", alignItems: "center", gap: "0.45rem" }}>
+              <input
+                type="checkbox"
+                checked={hideZeroVolume}
+                onChange={(ev) => setHideZeroVolume(ev.target.checked)}
+                aria-label="Ocultar contratos con volumen 0"
+              />
+              <span className="radar-toolbar__label" style={{ margin: 0 }}>
+                Ocultar volumen 0
+              </span>
+            </label>
+            <label className="radar-toolbar__field">
+              <span className="radar-toolbar__label">Ordenar por</span>
+              <select
+                className="radar-toolbar__select"
+                value={panelSort}
+                onChange={(ev) => setPanelSort(ev.target.value as PanelSortMode)}
+                aria-label="Ordenar tabla"
+              >
+                <option value="expiry_type_strike">Vencimiento / Tipo / Strike</option>
+                <option value="symbol">Símbolo</option>
+                <option value="volume_desc">Volumen mayor a menor</option>
+                <option value="last_desc">Último mayor a menor</option>
+              </select>
+            </label>
+            <label className="radar-toolbar__field">
+              <span className="radar-toolbar__label">Spot manual</span>
+              <input
+                className="radar-toolbar__select"
+                type="number"
+                inputMode="decimal"
+                step="any"
+                min="0"
+                placeholder={
+                  apiChainSpot !== null
+                    ? String(apiChainSpot)
+                    : underlyingPrice !== null
+                      ? String(underlyingPrice)
+                      : "Ej. 8500"
+                }
+                value={manualSpotInput}
+                onChange={(ev) => setManualSpotInput(ev.target.value)}
+                aria-label="Spot manual (opcional; prioridad sobre el del servidor)"
+                style={{ minWidth: "7rem" }}
+              />
+            </label>
+          </>
         ) : null}
         {activeTab === "strategies" ? (
           <div className="radar-toolbar__field" style={{ gap: "0.45rem" }}>
@@ -828,9 +1010,30 @@ export function OptionsPage() {
               <span>
                 <strong>Subyacente (normalizado):</strong> {mergedChain.underlying}
                 {" — "}
+                <strong>Spot subyacente:</strong>{" "}
+                {apiChainSpot !== null ? (
+                  <>$ {formatNumber(apiChainSpot, 2)}</>
+                ) : (
+                  <em>Spot no disponible</em>
+                )}
+                {" — "}
+                <strong>Fuente:</strong> {mergedChain.spot_source ?? "—"}
+                {mergedChain.spot_symbol ? (
+                  <>
+                    {" "}
+                    (<code>{mergedChain.spot_symbol}</code>)
+                  </>
+                ) : null}
+                {" — "}
                 <strong>Total contratos:</strong> {mergedChain.total}
                 {" — "}
                 <strong>Filtrados:</strong> {mergedFilteredContracts.length}
+                {hideZeroVolume ? (
+                  <>
+                    {" — "}
+                    <em>Ocultando volumen 0</em>
+                  </>
+                ) : null}
               </span>
             ) : null}
           </div>
@@ -877,6 +1080,7 @@ export function OptionsPage() {
                 <th>Vencimiento</th>
                 <th>Tipo</th>
                 <th>Strike</th>
+                <th>Moneyness</th>
                 <th>Bid</th>
                 <th>Ask</th>
                 <th>Último</th>
@@ -885,19 +1089,25 @@ export function OptionsPage() {
               </tr>
             </thead>
             <tbody>
-              {mergedFilteredContracts.map((c, i) => (
-                <tr key={`${c.symbol}-${i}`}>
-                  <td>{fmtCell(c.symbol)}</td>
-                  <td>{expiryKeyFromMergedContract(c) || "—"}</td>
-                  <td>{fmtCell(c.option_type)}</td>
-                  <td style={{ textAlign: "right" }}>{formatNumber(c.strike, 2)}</td>
-                  <td style={{ textAlign: "right" }}>{formatNumber(c.bid, 2)}</td>
-                  <td style={{ textAlign: "right" }}>{formatNumber(c.ask, 2)}</td>
-                  <td style={{ textAlign: "right" }}>{formatNumber(c.last, 2)}</td>
-                  <td style={{ textAlign: "right" }}>{formatInteger(c.volume)}</td>
-                  <td>{fmtCell(c.source)}</td>
-                </tr>
-              ))}
+              {mergedFilteredContracts.map((c, i) => {
+                const m = getMoneyness(c, effectivePanelSpot);
+                return (
+                  <tr key={`${c.symbol}-${i}`} className={mergedMoneynessRowClass(m)}>
+                    <td>{fmtCell(c.symbol)}</td>
+                    <td>{expiryKeyFromMergedContract(c) || "—"}</td>
+                    <td>{fmtCell(c.option_type)}</td>
+                    <td style={{ textAlign: "right" }}>{formatNumber(c.strike, 2)}</td>
+                    <td>
+                      <span className={mergedMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
+                    </td>
+                    <td style={{ textAlign: "right" }}>{formatNumber(c.bid, 2)}</td>
+                    <td style={{ textAlign: "right" }}>{formatNumber(c.ask, 2)}</td>
+                    <td style={{ textAlign: "right" }}>{formatNumber(c.last, 2)}</td>
+                    <td style={{ textAlign: "right" }}>{formatInteger(c.volume)}</td>
+                    <td>{fmtCell(c.source)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1089,8 +1299,9 @@ export function OptionsPage() {
                             const o = r.raw;
                             const key = `add-calls-${r.expiryCode}-${r.strike}-${i}`;
                             const canAdd = typeof o.simbolo === "string" && o.simbolo.trim();
+                            const m = getMoneynessFromValues(r.strike, r.tipo, effectivePanelSpot);
                             return (
-                              <tr key={key} className={rowMoneynessClass(o)}>
+                              <tr key={key} className={mergedMoneynessRowClass(m)}>
                                 <td style={{ whiteSpace: "nowrap" }}>
                                   <button
                                     type="button"
@@ -1116,7 +1327,9 @@ export function OptionsPage() {
                                 <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.bid), 2)}</td>
                                 <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ask), 2)}</td>
                                 <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ultimo), 2)}</td>
-                                <td>{fmtCell(moneyStatus(o) ?? o.money_status)}</td>
+                                <td>
+                                  <span className={mergedMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
+                                </td>
                               </tr>
                             );
                           })}
@@ -1124,8 +1337,9 @@ export function OptionsPage() {
                             const o = r.raw;
                             const key = `add-puts-${r.expiryCode}-${r.strike}-${i}`;
                             const canAdd = typeof o.simbolo === "string" && o.simbolo.trim();
+                            const m = getMoneynessFromValues(r.strike, r.tipo, effectivePanelSpot);
                             return (
-                              <tr key={key} className={rowMoneynessClass(o)}>
+                              <tr key={key} className={mergedMoneynessRowClass(m)}>
                                 <td style={{ whiteSpace: "nowrap" }}>
                                   <button
                                     type="button"
@@ -1151,7 +1365,9 @@ export function OptionsPage() {
                                 <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.bid), 2)}</td>
                                 <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ask), 2)}</td>
                                 <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ultimo), 2)}</td>
-                                <td>{fmtCell(moneyStatus(o) ?? o.money_status)}</td>
+                                <td>
+                                  <span className={mergedMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
+                                </td>
                               </tr>
                             );
                           })}
@@ -1231,11 +1447,15 @@ export function OptionsPage() {
                                 <th style={{ textAlign: "right" }}>Ganancia máx.</th>
                                 <th style={{ textAlign: "right" }}>Pérdida máx.</th>
                                 <th style={{ textAlign: "right" }}>Break even</th>
+                                <th>Moneyness</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {bullCallSpreads.map((x, idx) => (
-                                <tr key={`${x.expiryKey}-${x.buyStrike}-${x.sellStrike}-${idx}`}>
+                              {bullCallSpreads.map((x, idx) => {
+                                const mBuy = getMoneynessFromValues(x.buyStrike, "CALL", effectivePanelSpot);
+                                const mSell = getMoneynessFromValues(x.sellStrike, "CALL", effectivePanelSpot);
+                                return (
+                                <tr key={`${x.expiryKey}-${x.buyStrike}-${x.sellStrike}-${idx}`} className={mergedMoneynessRowClass(mBuy)}>
                                   <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.buyStrike, 2)}</td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.sellStrike, 2)}</td>
@@ -1245,8 +1465,20 @@ export function OptionsPage() {
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.maxGain, 2)}</td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.maxLoss, 2)}</td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.breakEven, 2)}</td>
+                                  <td>
+                                    <span className={mergedMoneynessBadgeClass(mBuy)} title="Strike compra (call)">
+                                      C {mergedMoneynessBadgeText(mBuy)}
+                                    </span>
+                                    <span className="msg-muted" style={{ margin: "0 0.2rem" }}>
+                                      ·
+                                    </span>
+                                    <span className={mergedMoneynessBadgeClass(mSell)} title="Strike venta (call)">
+                                      V {mergedMoneynessBadgeText(mSell)}
+                                    </span>
+                                  </td>
                                 </tr>
-                              ))}
+                              );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -1298,8 +1530,10 @@ export function OptionsPage() {
                               </tr>
                             </thead>
                             <tbody>
-                              {coveredCalls.map((x, idx) => (
-                                <tr key={`${x.expiryKey}-${x.strike}-${idx}`}>
+                              {coveredCalls.map((x, idx) => {
+                                const m = getMoneynessFromValues(x.strike, "CALL", effectivePanelSpot);
+                                return (
+                                <tr key={`${x.expiryKey}-${x.strike}-${idx}`} className={mergedMoneynessRowClass(m)}>
                                   <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
                                   <td style={{ textAlign: "right" }}>
                                     {underlyingPrice !== null ? formatNumber(underlyingPrice, 2) : "-"}
@@ -1329,9 +1563,12 @@ export function OptionsPage() {
                                   <td style={{ textAlign: "right" }}>
                                     {x.breakEven !== null ? formatNumber(x.breakEven, 2) : "-"}
                                   </td>
-                                  <td>{x.moneyness ?? "—"}</td>
+                                  <td>
+                                    <span className={mergedMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
+                                  </td>
                                 </tr>
-                              ))}
+                              );
+                              })}
                             </tbody>
                           </table>
                         </div>
