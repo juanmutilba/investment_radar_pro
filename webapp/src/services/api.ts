@@ -828,7 +828,24 @@ export type OptionsChainResponse = {
   underlying: string;
   total: number;
   contracts: OptionContractRow[];
+  spot?: number | null;
+  spot_source?: string | null;
+  spot_symbol?: string | null;
 };
+
+function readOptionalChainSpot(v: unknown): number | null | undefined {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  return null;
+}
+
+function readOptionalChainStr(v: unknown): string | null | undefined {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  if (typeof v === "string") return v;
+  return null;
+}
 
 export async function fetchOptionsChain(underlying: string): Promise<OptionsChainResponse> {
   const q = new URLSearchParams({ underlying: underlying.trim() });
@@ -840,7 +857,14 @@ export async function fetchOptionsChain(underlying: string): Promise<OptionsChai
   if (data === null || typeof data !== "object") {
     throw new Error("Respuesta inesperada: options/chain");
   }
-  const o = data as { underlying?: unknown; total?: unknown; contracts?: unknown };
+  const o = data as {
+    underlying?: unknown;
+    total?: unknown;
+    contracts?: unknown;
+    spot?: unknown;
+    spot_source?: unknown;
+    spot_symbol?: unknown;
+  };
   if (typeof o.underlying !== "string" || typeof o.total !== "number" || !Array.isArray(o.contracts)) {
     throw new Error("Respuesta inesperada: options/chain");
   }
@@ -848,6 +872,9 @@ export async function fetchOptionsChain(underlying: string): Promise<OptionsChai
     underlying: o.underlying,
     total: o.total,
     contracts: o.contracts as OptionContractRow[],
+    spot: readOptionalChainSpot(o.spot),
+    spot_source: readOptionalChainStr(o.spot_source),
+    spot_symbol: readOptionalChainStr(o.spot_symbol),
   };
 }
 
