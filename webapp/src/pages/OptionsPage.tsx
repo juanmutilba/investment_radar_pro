@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchLatestRadarArgentina,
   fetchOptionsChain,
-  fetchRavaOptionChain,
   type OptionContractRow,
   type OptionsChainResponse,
   type RadarRow,
@@ -105,22 +104,6 @@ function formatExpiryMonthLabel(yyyyMmDd: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : yyyyMmDd;
 }
 
-function getUnderlyingPriceRaw(raw: Record<string, unknown>): number | null {
-  const candidates = [
-    raw.underlying_price,
-    raw.spot,
-    raw.spot_price,
-    raw.precio_subyacente,
-    raw.underlying_last,
-    raw.last_underlying,
-  ];
-  for (const c of candidates) {
-    const n = toNumberOrNull(c);
-    if (n !== null && n > 0) return n;
-  }
-  return null;
-}
-
 function moneyStatus(raw: Record<string, unknown>): string | null {
   const ms = raw.money_status;
   if (typeof ms === "string" && ms.trim()) return ms.trim();
@@ -128,12 +111,6 @@ function moneyStatus(raw: Record<string, unknown>): string | null {
   const m = raw.moneyness_status;
   if (typeof m === "string" && m.trim()) return m.trim();
   return null;
-}
-
-function isAtmMoneyStatus(ms: string | null): boolean {
-  if (!ms) return false;
-  const up = ms.trim().toUpperCase();
-  return up === "ATM" || up.includes("ATM");
 }
 
 function strategyHelpText(t: StrategyType): string {
@@ -184,30 +161,6 @@ function daysToExpiryRaw(raw: Record<string, unknown>): number | null {
   if (d === null) return null;
   const di = Math.trunc(d);
   return Number.isFinite(di) ? di : null;
-}
-
-function flattenChain(chain: Record<string, unknown>, activo: string): FlatRow[] {
-  const out: FlatRow[] = [];
-  for (const [expiryCode, bucket] of Object.entries(chain)) {
-    if (bucket === null || typeof bucket !== "object") continue;
-    const b = bucket as { calls?: Record<string, unknown>; puts?: Record<string, unknown> };
-    const calls = b.calls ?? {};
-    const puts = b.puts ?? {};
-    for (const [strikeKey, row] of Object.entries(calls)) {
-      if (row === null || typeof row !== "object") continue;
-      const strike = Number(strikeKey);
-      if (!Number.isFinite(strike)) continue;
-      out.push({ activo, tipo: "CALL", strike, expiryCode, raw: row as Record<string, unknown> });
-    }
-    for (const [strikeKey, row] of Object.entries(puts)) {
-      if (row === null || typeof row !== "object") continue;
-      const strike = Number(strikeKey);
-      if (!Number.isFinite(strike)) continue;
-      out.push({ activo, tipo: "PUT", strike, expiryCode, raw: row as Record<string, unknown> });
-    }
-  }
-  out.sort((a, b) => a.strike - b.strike);
-  return out;
 }
 
 function expiryKeyFromMergedContract(c: OptionContractRow): string {
@@ -335,7 +288,7 @@ export function OptionsPage() {
   const [selectedUnderlying, setSelectedUnderlying] = useState<string>("GGAL");
   const [selectedExpiry, setSelectedExpiry] = useState<string>("");
   const [optionTypeFilter, setOptionTypeFilter] = useState<OptionTypeFilter>("all");
-  const [hideZeroVolume, setHideZeroVolume] = useState(true);
+  const [hideZeroVolume, setHideZeroVolume] = useState(false);
   const [panelSort, setPanelSort] = useState<PanelSortMode>("expiry_type_strike");
   /** Override opcional si el spot del API no alcanza o el usuario quiere otro valor. */
   const [manualSpotInput, setManualSpotInput] = useState("");
@@ -354,10 +307,6 @@ export function OptionsPage() {
   const [errorChain, setErrorChain] = useState<string | null>(null);
   /** Invalida respuestas viejas (cambio de activo, desmontaje, StrictMode). */
   const optionsChainReqRef = useRef(0);
-
-  const [ravaRows, setRavaRows] = useState<FlatRow[]>([]);
-  const [loadingRava, setLoadingRava] = useState(false);
-  const [errorRava, setErrorRava] = useState<string | null>(null);
   const [loadingUnderlyingContext, setLoadingUnderlyingContext] = useState(false);
   const [underlyingSignal, setUnderlyingSignal] = useState<string | null>(null);
   const [underlyingTrendRaw, setUnderlyingTrendRaw] = useState<unknown>(null);
@@ -371,6 +320,12 @@ export function OptionsPage() {
     };
   }, [selectedUnderlying]);
 
+  const chainIsIolPrimary = useMemo(() => {
+    const rows = mergedChain?.contracts ?? [];
+    if (rows.length === 0) return false;
+    return rows.some((c) => c.iol_universe === true || (c.source ?? "").toLowerCase() === "iol_primary");
+  }, [mergedChain]);
+
   const underlyingRadarSymbol = selectedUnderlyingMeta.radarTicker;
 
   useEffect(() => {
@@ -378,7 +333,7 @@ export function OptionsPage() {
     setLoadingChain(true);
     setErrorChain(null);
     console.log("[OPTIONS_FRONT] fetch chain", selectedUnderlying);
-    fetchOptionsChain(selectedUnderlying)
+    fetchOptionsChain(selectedUnderlying, false)
       .then((res) => {
         if (reqId !== optionsChainReqRef.current) return;
         setMergedChain(res);
@@ -402,28 +357,10 @@ export function OptionsPage() {
   }, [selectedUnderlying]);
 
   useEffect(() => {
-    if (activeTab !== "strategies") return;
-    let cancelled = false;
-    const ravaU = selectedUnderlyingMeta.ravaUnderlying;
-    setLoadingRava(true);
-    setErrorRava(null);
-    fetchRavaOptionChain(ravaU)
-      .then((chain) => {
-        if (cancelled) return;
-        setRavaRows(flattenChain(chain, ravaU));
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setErrorRava(e instanceof Error ? e.message : String(e));
-        setRavaRows([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingRava(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab, selectedUnderlying, selectedUnderlyingMeta.ravaUnderlying]);
+    setSelectedExpiry("");
+  }, [selectedUnderlying]);
+
+  // Estrategias usan la misma cadena que el Panel: mergedChain (GET /options/chain).
 
   useEffect(() => {
     let cancelled = false;
@@ -501,45 +438,34 @@ export function OptionsPage() {
   }, [loadingChain, errorChain, mergedChain]);
 
   const emptyHintStrategies = useMemo(() => {
-    if (loadingRava || errorRava) return null;
-    if (ravaRows.length === 0) return "Sin filas Rava (cadena vacía o sin opciones).";
+    if (loadingChain || errorChain) return null;
+    if ((mergedChain?.contracts.length ?? 0) === 0) return "Sin contratos para este subyacente.";
     return null;
-  }, [loadingRava, errorRava, ravaRows.length]);
+  }, [loadingChain, errorChain, mergedChain]);
 
   const expiryOptions = useMemo(() => {
     const set = new Set<string>();
-    if (activeTab === "panel") {
-      for (const c of mergedChain?.contracts ?? []) {
-        const k = expiryKeyFromMergedContract(c);
-        if (k) set.add(k);
-      }
-    } else {
-      for (const r of ravaRows) {
-        const k = expiryKeyFromRaw(r.raw);
-        if (k) set.add(k);
-      }
+    for (const c of mergedChain?.contracts ?? []) {
+      const k = expiryKeyFromMergedContract(c);
+      if (k) set.add(k);
     }
     return Array.from(set).sort();
-  }, [activeTab, mergedChain, ravaRows]);
+  }, [mergedChain]);
 
   const expirySummary = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const r of ravaRows) {
-      const k = expiryKeyFromRaw(r.raw);
+    for (const c of mergedChain?.contracts ?? []) {
+      const k = expiryKeyFromMergedContract(c);
       if (!k) continue;
       counts.set(k, (counts.get(k) ?? 0) + 1);
     }
     const items = Array.from(counts.entries()).sort(([a], [b]) => a.localeCompare(b));
     return items.map(([k, count]) => ({ key: k, label: formatExpiryMonthLabel(k), count }));
-  }, [ravaRows]);
+  }, [mergedChain]);
 
   const underlyingPrice = useMemo(() => {
-    for (const r of ravaRows) {
-      const p = getUnderlyingPriceRaw(r.raw);
-      if (p !== null) return p;
-    }
     return null;
-  }, [ravaRows]);
+  }, []);
 
   const parsedManualSpot = useMemo(() => {
     const t = manualSpotInput.trim().replace(",", ".");
@@ -554,27 +480,23 @@ export function OptionsPage() {
     return null;
   }, [mergedChain?.spot]);
 
-  /** Spot para moneyness: manual > GET /options/chain > precio subyacente en filas Rava (si hubo estrategias). */
+  /** Spot para moneyness: manual > GET /options/chain. */
   const effectivePanelSpot = parsedManualSpot ?? apiChainSpot ?? underlyingPrice;
 
   const filterCounts = useMemo(() => {
     let withVolume = 0;
     let withTrades = 0;
     let withAtm = 0;
-    for (const r of ravaRows) {
-      const o = r.raw;
-      const hv = o.has_volume;
-      const vf = toNumberOrNull(o.volumen_float);
-      if (hv === true || (vf !== null && vf > 0)) withVolume += 1;
-
-      const ht = o.has_trades;
-      const ops = toNumberOrNull(o.operaciones_int);
-      if (ht === true || (ops !== null && ops > 0)) withTrades += 1;
-
-      if (isAtmMoneyStatus(moneyStatus(o))) withAtm += 1;
+    for (const c of mergedChain?.contracts ?? []) {
+      const vol = typeof c.volume === "number" && Number.isFinite(c.volume) ? c.volume : 0;
+      if (vol > 0) withVolume += 1;
+      const last = typeof c.last === "number" && Number.isFinite(c.last) ? c.last : 0;
+      if (last > 0) withTrades += 1;
+      const m = getMoneynessFromValues(c.strike, mergedContractTypeUpper(c), effectivePanelSpot);
+      if (m === "ATM") withAtm += 1;
     }
     return { withVolume, withTrades, withAtm };
-  }, [ravaRows]);
+  }, [mergedChain, effectivePanelSpot]);
 
   const mergedFilteredContracts = useMemo(() => {
     const list = mergedChain?.contracts ?? [];
@@ -621,47 +543,79 @@ export function OptionsPage() {
 
   const panelFilteredEmptyHint = useMemo(() => {
     if (loadingChain || errorChain) return null;
-    if ((mergedChain?.contracts.length ?? 0) === 0) return null;
-    if (mergedFilteredContracts.length === 0) return "Sin resultados con los filtros actuales.";
-    return null;
-  }, [loadingChain, errorChain, mergedChain, mergedFilteredContracts.length]);
+    const raw = mergedChain?.contracts ?? [];
+    if (raw.length === 0) return null;
+    if (mergedFilteredContracts.length > 0) return null;
+    if (hideZeroVolume) {
+      const allVolZero = raw.every((c) => mergedContractVolume(c) <= 0);
+      if (allVolZero) {
+        return "No hay contratos con volumen > 0 para estos filtros. Desactivá «Ocultar volumen 0» para ver la cadena.";
+      }
+    }
+    return "Sin resultados con los filtros actuales.";
+  }, [loadingChain, errorChain, mergedChain, mergedFilteredContracts.length, hideZeroVolume]);
+
+  const volumeFilterHidesAllIolRows = useMemo(() => {
+    if (!hideZeroVolume) return false;
+    const raw = mergedChain?.contracts ?? [];
+    if (raw.length === 0) return false;
+    return raw.every((c) => mergedContractVolume(c) <= 0);
+  }, [hideZeroVolume, mergedChain]);
+
+  const strategyRows = useMemo((): FlatRow[] => {
+    const rows: FlatRow[] = [];
+    for (const c of mergedChain?.contracts ?? []) {
+      const ot = mergedContractTypeUpper(c);
+      const tipo: "CALL" | "PUT" | null = ot.includes("CALL") ? "CALL" : ot.includes("PUT") ? "PUT" : null;
+      if (!tipo) continue;
+      const strike = typeof c.strike === "number" && Number.isFinite(c.strike) ? c.strike : null;
+      if (strike === null) continue;
+      const expiryKey = expiryKeyFromMergedContract(c);
+      rows.push({
+        activo: selectedUnderlying,
+        tipo,
+        strike,
+        expiryCode: expiryKey,
+        raw: {
+          simbolo: c.symbol,
+          expiry_date: c.expiry,
+          bid: c.bid,
+          ask: c.ask,
+          ultimo: c.last,
+          volumen_float: c.volume,
+          open_interest: c.open_interest,
+          source: c.source,
+          field_sources: c.field_sources,
+        },
+      });
+    }
+    rows.sort((a, b) => a.strike - b.strike);
+    return rows;
+  }, [mergedChain, selectedUnderlying]);
 
   const filteredRows = useMemo(() => {
-    return ravaRows.filter((r) => {
+    return strategyRows.filter((r) => {
       const o = r.raw;
       if (selectedExpiry) {
-        const k = expiryKeyFromRaw(o);
-        if (!k) return false; // si no tiene vencimiento parseado, solo se ve en "Todos"
+        const k = r.expiryCode;
+        if (!k) return false;
         if (k !== selectedExpiry) return false;
       }
       if (onlyWithVolume) {
-        const hv = o.has_volume;
         const vf = toNumberOrNull(o.volumen_float);
-        if (hv === true) {
-          // ok
-        } else if (vf !== null && vf > 0) {
-          // ok
-        } else {
-          return false;
-        }
+        if (vf === null || vf <= 0) return false;
       }
       if (onlyWithTrades) {
-        const ht = o.has_trades;
-        const ops = toNumberOrNull(o.operaciones_int);
-        if (ht === true) {
-          // ok
-        } else if (ops !== null && ops > 0) {
-          // ok
-        } else {
-          return false;
-        }
+        const last = toNumberOrNull(o.ultimo);
+        if (last === null || last <= 0) return false;
       }
       if (onlyAtm) {
-        if (!isAtmMoneyStatus(moneyStatus(o))) return false;
+        const m = getMoneynessFromValues(r.strike, r.tipo, effectivePanelSpot);
+        if (m !== "ATM") return false;
       }
       return true;
     });
-  }, [ravaRows, selectedExpiry, onlyWithVolume, onlyWithTrades, onlyAtm]);
+  }, [strategyRows, selectedExpiry, onlyWithVolume, onlyWithTrades, onlyAtm, effectivePanelSpot]);
 
   const calls = useMemo(
     () => filteredRows.filter((r) => r.tipo === "CALL").slice().sort((a, b) => a.strike - b.strike),
@@ -753,11 +707,11 @@ export function OptionsPage() {
       const bid = toNumberOrNull(r.raw.bid);
       if (bid === null || bid <= 0) continue;
       const days = daysToExpiryRaw(r.raw);
-      const breakEven = underlyingPrice !== null ? underlyingPrice - bid : null;
+      const breakEven = effectivePanelSpot !== null ? effectivePanelSpot - bid : null;
 
       const intrinsic =
-        underlyingPrice !== null && underlyingPrice > 0
-          ? Math.max(0, underlyingPrice - r.strike)
+        effectivePanelSpot !== null && effectivePanelSpot > 0
+          ? Math.max(0, effectivePanelSpot - r.strike)
           : null;
       const timeValue =
         intrinsic !== null
@@ -765,13 +719,13 @@ export function OptionsPage() {
           : null;
 
       const tnaPct =
-        underlyingPrice !== null &&
-          underlyingPrice > 0 &&
+        effectivePanelSpot !== null &&
+          effectivePanelSpot > 0 &&
           days !== null &&
           days > 0 &&
           timeValue !== null &&
           timeValue > 0
-          ? (timeValue / underlyingPrice) * (365 / days) * 100
+          ? (timeValue / effectivePanelSpot) * (365 / days) * 100
           : null;
       out.push({
         expiryKey: exp,
@@ -787,7 +741,7 @@ export function OptionsPage() {
     }
     out.sort((a, b) => a.expiryKey.localeCompare(b.expiryKey) || a.strike - b.strike);
     return out.slice(0, 30);
-  }, [calls, underlyingPrice]);
+  }, [calls, effectivePanelSpot]);
 
   const netCost = useMemo(() => {
     let net = 0;
@@ -806,8 +760,13 @@ export function OptionsPage() {
       <header className="page__header">
         <h1>Opciones</h1>
         <p className="page__subtitle">
-          Panel: cadena unificada. Estrategias: cadena Rava. Activo: <strong>{selectedUnderlying}</strong>
+          Panel: cadena unificada. Estrategias: misma cadena del panel. Activo: <strong>{selectedUnderlying}</strong>
         </p>
+        {chainIsIolPrimary && !loadingChain && !errorChain ? (
+          <p className="page__subtitle" style={{ marginTop: "0.35rem", fontWeight: 600 }}>
+            Universo operable: IOL
+          </p>
+        ) : null}
       </header>
 
       <div className="radar-toolbar options-toolbar" role="toolbar" aria-label="Opciones de cadena">
@@ -916,7 +875,7 @@ export function OptionsPage() {
                 aria-pressed={onlyWithVolume}
                 onClick={() => setOnlyWithVolume((v) => !v)}
               >
-                Con volumen{ravaRows.length ? ` (${formatInteger(filterCounts.withVolume)})` : ""}
+                Con volumen{mergedChain?.contracts?.length ? ` (${formatInteger(filterCounts.withVolume)})` : ""}
               </button>
               <button
                 type="button"
@@ -924,7 +883,7 @@ export function OptionsPage() {
                 aria-pressed={onlyWithTrades}
                 onClick={() => setOnlyWithTrades((v) => !v)}
               >
-                Con operaciones{ravaRows.length ? ` (${formatInteger(filterCounts.withTrades)})` : ""}
+                Con operaciones{mergedChain?.contracts?.length ? ` (${formatInteger(filterCounts.withTrades)})` : ""}
               </button>
               <button
                 type="button"
@@ -932,7 +891,7 @@ export function OptionsPage() {
                 aria-pressed={onlyAtm}
                 onClick={() => setOnlyAtm((v) => !v)}
               >
-                Solo ATM{ravaRows.length ? ` (${formatInteger(filterCounts.withAtm)})` : ""}
+                Solo ATM{mergedChain?.contracts?.length ? ` (${formatInteger(filterCounts.withAtm)})` : ""}
               </button>
             </div>
           </div>
@@ -1008,7 +967,11 @@ export function OptionsPage() {
 
       <div className="msg-muted" style={{ marginTop: "0.25rem" }}>
         <div>
-          Cadena desde el backend (Allaria + Rava).{" "}
+          {chainIsIolPrimary
+            ? mergedChain?.enrich_sources === true
+              ? "Cadena operable desde IOL (Allaria/Rava enriquecen campos por contrato). "
+              : "Cadena operable desde IOL (enriquecimiento Allaria/Rava desactivado). "
+            : "Cadena desde el backend (Allaria + Rava). "}
           {mergedChain && !loadingChain && !errorChain ? (
             <span>
               <strong>Subyacente (normalizado):</strong> {mergedChain.underlying}
@@ -1046,11 +1009,15 @@ export function OptionsPage() {
         </div>
         {activeTab === "strategies" ? (
           <div style={{ marginTop: "0.35rem" }}>
-            Estrategias usan la cadena Rava ({selectedUnderlyingMeta.ravaUnderlying}). Algunas series pueden no aparecer sin
-            actividad.
-            {!loadingRava && !errorRava && ravaRows.length > 0 ? (
+            Estrategias usan la misma cadena que el Panel (universo operable).{" "}
+            {chainIsIolPrimary ? (
+              <strong>Estrategias calculadas sobre universo IOL</strong>
+            ) : (
+              <strong>Estrategias calculadas sobre fallback Allaria/Rava</strong>
+            )}
+            {!loadingChain && !errorChain && (strategyRows.length > 0 || (mergedChain?.contracts.length ?? 0) > 0) ? (
               <div style={{ marginTop: "0.35rem" }}>
-                <strong>Total opciones (Rava):</strong> {ravaRows.length}
+                <strong>Total contratos:</strong> {mergedChain?.total ?? strategyRows.length}
                 {expirySummary.length > 0 ? (
                   <span>
                     {" "}
@@ -1076,7 +1043,16 @@ export function OptionsPage() {
         </p>
       )}
       {activeTab === "panel" && emptyHintPanel && <p>{emptyHintPanel}</p>}
-      {activeTab === "panel" && panelFilteredEmptyHint && <p>{panelFilteredEmptyHint}</p>}
+      {activeTab === "panel" && panelFilteredEmptyHint ? (
+        <div className="msg-muted" style={{ marginTop: "0.35rem" }}>
+          <p style={{ marginBottom: "0.35rem" }}>{panelFilteredEmptyHint}</p>
+          {volumeFilterHidesAllIolRows && mergedFilteredContracts.length === 0 ? (
+            <button type="button" className="options-filter-toggle" onClick={() => setHideZeroVolume(false)}>
+              Mostrar contratos sin volumen
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {activeTab === "panel" && !loadingChain && !errorChain && mergedFilteredContracts.length > 0 ? (
         <div className="table-wrap">
@@ -1092,6 +1068,7 @@ export function OptionsPage() {
                 <th>Ask</th>
                 <th>Último</th>
                 <th>Volumen</th>
+                <th>OI</th>
                 <th>Fuente</th>
               </tr>
             </thead>
@@ -1111,6 +1088,7 @@ export function OptionsPage() {
                     <td style={{ textAlign: "right" }}>{formatNumber(c.ask, 2)}</td>
                     <td style={{ textAlign: "right" }}>{formatNumber(c.last, 2)}</td>
                     <td style={{ textAlign: "right" }}>{formatInteger(c.volume)}</td>
+                    <td style={{ textAlign: "right" }}>{formatInteger(c.open_interest)}</td>
                     <td>{fmtCell(c.source)}</td>
                   </tr>
                 );
@@ -1122,13 +1100,13 @@ export function OptionsPage() {
 
       {activeTab === "strategies" ? (
         <div>
-          {loadingRava && <p>Cargando cadena Rava…</p>}
-          {errorRava && (
+          {loadingChain && <p>Cargando cadena…</p>}
+          {errorChain && (
             <p role="alert">
-              Error: {errorRava}
+              Error: {errorChain}
             </p>
           )}
-          {emptyHintStrategies && !loadingRava && !errorRava && <p>{emptyHintStrategies}</p>}
+          {emptyHintStrategies && !loadingChain && !errorChain && <p>{emptyHintStrategies}</p>}
           <section className="options-strategy-panel" aria-label="Crear estrategia manual">
               <button
                 type="button"
