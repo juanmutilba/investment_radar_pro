@@ -808,7 +808,7 @@ function coerceStringArray(v: unknown): string[] | null {
   return out;
 }
 
-/** Fila de contrato en GET /options/chain (merge Allaria + Rava). */
+/** Fila de contrato en GET /options/chain (IOL primario o merge Allaria + Rava). */
 export type OptionContractRow = {
   underlying: string;
   symbol: string;
@@ -822,21 +822,31 @@ export type OptionContractRow = {
   open_interest: number | null;
   source: string;
   field_sources: Record<string, string>;
+  /** True si el contrato pertenece al universo IOL (cadena operable IOL). */
+  iol_universe?: boolean;
 };
 
-export type OptionsChainResponse = {
+export interface OptionsChainResponse {
   underlying: string;
   total: number;
   contracts: OptionContractRow[];
   spot?: number | null;
   spot_source?: string | null;
   spot_symbol?: string | null;
-};
+  /** Si el backend enriqueció con Allaria/Rava (query enrich_sources). */
+  enrich_sources?: boolean;
+}
 
 function readOptionalChainSpot(v: unknown): number | null | undefined {
   if (v === undefined) return undefined;
   if (v === null) return null;
   if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const t = v.trim().replace(",", ".");
+    if (!t) return null;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+  }
   return null;
 }
 
@@ -847,8 +857,11 @@ function readOptionalChainStr(v: unknown): string | null | undefined {
   return null;
 }
 
-export async function fetchOptionsChain(underlying: string): Promise<OptionsChainResponse> {
-  const q = new URLSearchParams({ underlying: underlying.trim() });
+export async function fetchOptionsChain(underlying: string, enrichSources = false): Promise<OptionsChainResponse> {
+  const q = new URLSearchParams({
+    underlying: underlying.trim(),
+    enrich_sources: enrichSources ? "true" : "false",
+  });
   const res = await fetch(`${BASE}/options/chain?${q.toString()}`);
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
@@ -864,10 +877,13 @@ export async function fetchOptionsChain(underlying: string): Promise<OptionsChai
     spot?: unknown;
     spot_source?: unknown;
     spot_symbol?: unknown;
+    enrich_sources?: unknown;
   };
   if (typeof o.underlying !== "string" || typeof o.total !== "number" || !Array.isArray(o.contracts)) {
     throw new Error("Respuesta inesperada: options/chain");
   }
+  const enrichSourcesFlag =
+    o.enrich_sources === true || o.enrich_sources === false ? o.enrich_sources : false;
   return {
     underlying: o.underlying,
     total: o.total,
@@ -875,6 +891,7 @@ export async function fetchOptionsChain(underlying: string): Promise<OptionsChai
     spot: readOptionalChainSpot(o.spot),
     spot_source: readOptionalChainStr(o.spot_source),
     spot_symbol: readOptionalChainStr(o.spot_symbol),
+    enrich_sources: enrichSourcesFlag,
   };
 }
 

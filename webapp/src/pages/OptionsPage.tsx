@@ -463,10 +463,6 @@ export function OptionsPage() {
     return items.map(([k, count]) => ({ key: k, label: formatExpiryMonthLabel(k), count }));
   }, [mergedChain]);
 
-  const underlyingPrice = useMemo(() => {
-    return null;
-  }, []);
-
   const parsedManualSpot = useMemo(() => {
     const t = manualSpotInput.trim().replace(",", ".");
     if (!t) return null;
@@ -474,14 +470,25 @@ export function OptionsPage() {
     return Number.isFinite(n) && n > 0 ? n : null;
   }, [manualSpotInput]);
 
-  const apiChainSpot = useMemo(() => {
+  /** Spot numérico del GET /options/chain (solo > 0 es usable; string ya normalizado en api.ts). */
+  const apiChainSpot = useMemo((): number | null => {
     const s = mergedChain?.spot;
     if (typeof s === "number" && Number.isFinite(s) && s > 0) return s;
     return null;
-  }, [mergedChain?.spot]);
+  }, [mergedChain]);
 
-  /** Spot para moneyness: manual > GET /options/chain. */
-  const effectivePanelSpot = parsedManualSpot ?? apiChainSpot ?? underlyingPrice;
+  /**
+   * Manual > 0 gana; si no, spot del API si > 0; si no, null (sin fallback inventado).
+   */
+  const effectivePanelSpot = useMemo((): number | null => {
+    if (parsedManualSpot !== null && parsedManualSpot > 0) return parsedManualSpot;
+    if (apiChainSpot !== null && apiChainSpot > 0) return apiChainSpot;
+    return null;
+  }, [parsedManualSpot, apiChainSpot]);
+
+  useEffect(() => {
+    console.log("[OPTIONS_FRONT_SPOT]", mergedChain?.spot, mergedChain?.spot_source);
+  }, [mergedChain]);
 
   const filterCounts = useMemo(() => {
     let withVolume = 0;
@@ -850,13 +857,7 @@ export function OptionsPage() {
                 inputMode="decimal"
                 step="any"
                 min="0"
-                placeholder={
-                  apiChainSpot !== null
-                    ? String(apiChainSpot)
-                    : underlyingPrice !== null
-                      ? String(underlyingPrice)
-                      : "Ej. 8500"
-                }
+                placeholder={apiChainSpot !== null ? String(apiChainSpot) : "Ej. 8500"}
                 value={manualSpotInput}
                 onChange={(ev) => setManualSpotInput(ev.target.value)}
                 aria-label="Spot manual (opcional; prioridad sobre el del servidor)"
@@ -958,9 +959,21 @@ export function OptionsPage() {
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.15rem" }}>
-          <div className="options-underlying-label">Precio</div>
-          <div className="options-underlying-price">
-            {underlyingPrice !== null ? `$ ${formatNumber(underlyingPrice, 2)}` : "sin dato"}
+          <div className="options-underlying-label">Precio subyacente</div>
+          <div className="options-underlying-price" style={{ textAlign: "right" }}>
+            {effectivePanelSpot !== null && effectivePanelSpot > 0 ? (
+              <>
+                {(mergedChain?.spot_symbol ?? "").trim() || selectedUnderlying} ={" "}
+                {formatNumber(effectivePanelSpot, 2)}
+                {parsedManualSpot !== null ? (
+                  <> (manual)</>
+                ) : mergedChain?.spot_source ? (
+                  <> ({mergedChain.spot_source})</>
+                ) : null}
+              </>
+            ) : (
+              <span className="msg-muted">Precio subyacente no disponible</span>
+            )}
           </div>
         </div>
       </div>
@@ -977,13 +990,14 @@ export function OptionsPage() {
               <strong>Subyacente (normalizado):</strong> {mergedChain.underlying}
               {" — "}
               <strong>Spot subyacente:</strong>{" "}
-              {apiChainSpot !== null ? (
-                <>$ {formatNumber(apiChainSpot, 2)}</>
+              {effectivePanelSpot !== null && effectivePanelSpot > 0 ? (
+                <>$ {formatNumber(effectivePanelSpot, 2)}</>
               ) : (
-                <em>Spot no disponible</em>
+                <em>Precio subyacente no disponible</em>
               )}
               {" — "}
-              <strong>Fuente:</strong> {mergedChain.spot_source ?? "—"}
+              <strong>Fuente:</strong>{" "}
+              {parsedManualSpot !== null ? "manual" : (mergedChain.spot_source ?? "—")}
               {mergedChain.spot_symbol ? (
                 <>
                   {" "}
@@ -1521,7 +1535,7 @@ export function OptionsPage() {
                                 <tr key={`${x.expiryKey}-${x.strike}-${idx}`} className={mergedMoneynessRowClass(m)}>
                                   <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
                                   <td style={{ textAlign: "right" }}>
-                                    {underlyingPrice !== null ? formatNumber(underlyingPrice, 2) : "-"}
+                                    {effectivePanelSpot !== null ? formatNumber(effectivePanelSpot, 2) : "-"}
                                   </td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.strike, 2)}</td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.bid, 2)}</td>
