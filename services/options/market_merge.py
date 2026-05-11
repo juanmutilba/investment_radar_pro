@@ -5,7 +5,7 @@ Merge operativo Allaria + Rava por make_contract_key (bid/ask/volumen vs last).
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 from services.options.models import OptionChain, OptionContract
 from services.options.normalizer import make_contract_key, normalize_option_type, normalize_underlying
@@ -162,3 +162,206 @@ def build_merged_market_chain(
     merged = merge_option_market_data(p, s)
     u_norm = normalize_underlying(underlying) or str(underlying).strip().upper()
     return OptionChain(underlying=u_norm, contracts=merged)
+
+
+def _first_with_label(
+    order: tuple[tuple[Any, str], ...],
+) -> tuple[Any, str]:
+    for val, label in order:
+        if val is not None:
+            return val, label
+    return None, "none"
+
+
+def _merged_sources_labels(field_sources: dict[str, str]) -> list[str]:
+    """IOL es siempre el universo; Allaria/Rava solo si aportaron algún campo."""
+    out: list[str] = ["iol"]
+    for lab in ("allaria", "rava"):
+        if lab in field_sources.values():
+            out.append(lab)
+    return out
+
+
+def _numeric_positive(v: Any) -> bool:
+    if v is None:
+        return False
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return False
+    return x == x and x > 0
+
+
+def _iol_primary_pick_traded(
+    iol_val: Any,
+    allaria_val: Any,
+    rava_val: Any,
+    *,
+    order: tuple[Literal["allaria", "rava"], ...],
+) -> tuple[float | None, str, dict[str, str] | None]:
+    """
+    IOL solo si valor > 0; si no, primer fallback en ``order`` con valor > 0.
+    Devuelve (valor, field_source, field_fallback|None).
+    """
+    if _numeric_positive(iol_val):
+        try:
+            return float(iol_val), "iol", None
+        except (TypeError, ValueError):
+            pass
+
+    if iol_val is not None:
+        try:
+            z = float(iol_val)
+            fb_from: str = "iol_zero" if z == z and z <= 0 else "iol_none"
+        except (TypeError, ValueError):
+            fb_from = "iol_none"
+    else:
+        fb_from = "iol_none"
+
+    for lab in order:
+        val = allaria_val if lab == "allaria" else rava_val
+        if _numeric_positive(val):
+            try:
+                return float(val), lab, {"from": fb_from, "to": lab}
+            except (TypeError, ValueError):
+                continue
+    return None, "none", None
+
+
+def _iol_primary_open_interest(
+    iol_val: Any,
+    allaria_val: Any,
+    rava_val: Any,
+) -> tuple[float | None, str]:
+    """IOL si no es None (incluso 0); si no, Allaria > Rava con primer no-None."""
+    if iol_val is not None:
+        try:
+            return float(iol_val), "iol"
+        except (TypeError, ValueError):
+            pass
+    v, lab = _first_with_label(
+        (
+            (allaria_val, "allaria"),
+            (rava_val, "rava"),
+        )
+    )
+    if v is not None:
+        try:
+            return float(v), lab
+        except (TypeError, ValueError):
+            pass
+    return None, "none"
+
+
+def build_iol_primary_market_chain(
+    underlying: str,
+    iol_contracts: list[OptionContract],
+    allaria_contracts: list[OptionContract],
+    rava_contracts: list[OptionContract],
+) -> OptionChain:
+    """
+    Universo estructural = IOL; Allaria/Rava solo rellenan campos faltantes por misma ``make_contract_key``.
+    No se agregan filas que no estén en IOL.
+    """
+    iol_p = _prep_contracts_for_keys(underlying, iol_contracts)
+    a_p = _prep_contracts_for_keys(underlying, allaria_contracts)
+    r_p = _prep_contracts_for_keys(underlying, rava_contracts)
+    idx_a = _index_by_key(a_p)
+    idx_r = _index_by_key(r_p)
+
+    matched_a = 0
+    matched_r = 0
+    out: list[OptionContract] = []
+    fb_bid = fb_ask = fb_last = fb_vol = 0
+
+    for c in iol_p:
+        k = make_contract_key(c)
+        ca = idx_a.get(k)
+        cr = idx_r.get(k)
+        if ca is not None:
+            matched_a += 1
+        if cr is not None:
+            matched_r += 1
+
+        ab = ca.bid if ca else None
+        rb = cr.bid if cr else None
+        bid, bid_fs, bid_fb = _iol_primary_pick_traded(c.bid, ab, rb, order=("allaria", "rava"))
+        if bid_fb is not None:
+            fb_bid += 1
+
+        aa = ca.ask if ca else None
+        ra = cr.ask if cr else None
+        ask, ask_fs, ask_fb = _iol_primary_pick_traded(c.ask, aa, ra, order=("allaria", "rava"))
+        if ask_fb is not None:
+            fb_ask += 1
+
+        al = ca.last if ca else None
+        rl = cr.last if cr else None
+        last, last_fs, last_fb = _iol_primary_pick_traded(c.last, al, rl, order=("rava", "allaria"))
+        if last_fb is not None:
+            fb_last += 1
+
+        av = ca.volume if ca else None
+        rv = cr.volume if cr else None
+        volume, vol_fs, vol_fb = _iol_primary_pick_traded(c.volume, av, rv, order=("allaria", "rava"))
+        if vol_fb is not None:
+            fb_vol += 1
+
+        ao = ca.open_interest if ca else None
+        ro = cr.open_interest if cr else None
+        oi, oi_fs = _iol_primary_open_interest(c.open_interest, ao, ro)
+
+        field_sources: dict[str, str] = {
+            "bid": bid_fs,
+            "ask": ask_fs,
+            "last": last_fs,
+            "volume": vol_fs,
+            "open_interest": oi_fs,
+        }
+        merged_sources = _merged_sources_labels(field_sources)
+
+        field_fallbacks: dict[str, Any] = {}
+        if bid_fb is not None:
+            field_fallbacks["bid"] = bid_fb
+        if ask_fb is not None:
+            field_fallbacks["ask"] = ask_fb
+        if last_fb is not None:
+            field_fallbacks["last"] = last_fb
+        if vol_fb is not None:
+            field_fallbacks["volume"] = vol_fb
+
+        raw_out: dict[str, Any] = dict(c.raw) if isinstance(c.raw, dict) else {}
+        raw_out["field_sources"] = field_sources
+        raw_out["merged_sources"] = merged_sources
+        raw_out["iol_universe"] = True
+        if field_fallbacks:
+            raw_out["field_fallbacks"] = field_fallbacks
+
+        out.append(
+            replace(
+                c,
+                bid=bid,
+                ask=ask,
+                last=last,
+                volume=volume,
+                open_interest=oi,
+                source="iol_primary",
+                raw=raw_out,
+            )
+        )
+
+    out.sort(
+        key=lambda x: (
+            x.expiry or "",
+            x.option_type or "",
+            x.strike is None,
+            x.strike or 0.0,
+            x.symbol or "",
+        )
+    )
+    _log(
+        f"iol_primary total_iol={len(iol_p)} matched_allaria={matched_a} matched_rava={matched_r} out={len(out)} "
+        f"fallback_bid={fb_bid} fallback_ask={fb_ask} fallback_last={fb_last} fallback_volume={fb_vol}"
+    )
+    u_norm = normalize_underlying(underlying) or str(underlying).strip().upper()
+    return OptionChain(underlying=u_norm, contracts=out)
