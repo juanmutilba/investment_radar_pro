@@ -4,8 +4,10 @@ Servicio interno: cadena de opciones merged (Allaria + Rava) con fallback por fu
 
 from __future__ import annotations
 
+import time
+
 from services.market_data.facade import get_argentina_price
-from services.market_data.providers.iol import get_iol_quote, is_iol_enabled
+from services.market_data.providers.iol import ensure_iol_credentials_from_env, get_iol_quote, is_iol_enabled
 from services.market_data.providers.yahoo_spot import yahoo_last_price
 from services.options.chain_builder import build_master_chain
 from services.options.market_merge import build_iol_primary_market_chain, build_merged_market_chain
@@ -23,6 +25,28 @@ def _log(msg: str) -> None:
 
 def _log_spot(msg: str) -> None:
     print(f"[OPTIONS_SPOT] {msg}", flush=True)
+
+
+def _log_timing(msg: str) -> None:
+    print(f"[OPTIONS_TIMING] {msg}", flush=True)
+
+
+def _log_cache(msg: str) -> None:
+    print(f"[OPTIONS_CACHE] {msg}", flush=True)
+
+
+OPTIONS_CHAIN_CACHE_TTL_SECONDS = 15.0
+_options_chain_cache: dict[tuple[str, bool], tuple[float, OptionChain]] = {}
+
+
+def clear_options_chain_cache() -> None:
+    """Vacía la caché en RAM de cadenas de opciones (tests / debug)."""
+    _options_chain_cache.clear()
+
+
+def _options_chain_cache_key(underlying: str, enrich_sources: bool) -> tuple[str, bool]:
+    u_norm = normalize_underlying(underlying) or str(underlying or "").strip().upper()
+    return (u_norm, enrich_sources)
 
 
 def _empty_chain(underlying: str) -> OptionChain:
@@ -62,18 +86,27 @@ def resolve_option_chain_spot(underlying: str | None) -> tuple[float | None, str
     )
     if not sym:
         _log_spot("abort empty_spot_symbol fallback_applied=none")
+        _log_timing("spot_iol_ms=0.0")
+        _log_timing("spot_yahoo_ms=0.0")
         return None, None, None
+
+    spot_iol_ms = 0.0
+    spot_yahoo_ms = 0.0
 
     # 1) IOL primero (precio válido > 0)
     _log_spot(f"iol_attempt ticker={sym}")
     if not is_iol_enabled():
         _log_spot(f"iol_miss ticker={sym} reason=disabled")
+        _log_timing("spot_iol_ms=0.0")
     else:
+        t_iol = time.perf_counter()
         try:
             iq = get_iol_quote(sym)
         except Exception as ex:
             iq = None
             _log_spot(f"iol_miss ticker={sym} reason=exception detail={type(ex).__name__}")
+        spot_iol_ms = (time.perf_counter() - t_iol) * 1000.0
+        _log_timing(f"spot_iol_ms={spot_iol_ms:.1f}")
         if iq is not None and iq.is_valid and iq.value is not None:
             try:
                 val_iol = float(iq.value)
@@ -81,17 +114,21 @@ def resolve_option_chain_spot(underlying: str | None) -> tuple[float | None, str
                 val_iol = None
             if val_iol is not None and val_iol == val_iol and val_iol > 0:
                 _log_spot(f"iol_ok ticker={sym} price={val_iol!r} source=IOL")
+                _log_timing("spot_yahoo_ms=0.0")
                 return val_iol, "IOL", sym
         _log_spot(f"iol_miss ticker={sym} reason=no_valid_quote")
 
     # 2) Yahoo .BA (fallback explícito)
     if ysym:
         _log_spot(f"yahoo_fallback ticker={ysym}")
+        t_y = time.perf_counter()
         try:
             yq = yahoo_last_price(ysym, "ARS")
         except Exception as ex:
             yq = None
             _log_spot(f"yahoo_miss ticker={ysym} reason=exception detail={type(ex).__name__}")
+        spot_yahoo_ms = (time.perf_counter() - t_y) * 1000.0
+        _log_timing(f"spot_yahoo_ms={spot_yahoo_ms:.1f}")
         if yq is not None and yq.is_valid and yq.value is not None:
             try:
                 val_y = float(yq.value)
@@ -101,6 +138,8 @@ def resolve_option_chain_spot(underlying: str | None) -> tuple[float | None, str
                 _log_spot(f"yahoo_ok ticker={ysym} price={val_y!r} source=Yahoo")
                 return val_y, "Yahoo", ysym
         _log_spot(f"yahoo_miss ticker={ysym} reason=no_valid_price")
+    else:
+        _log_timing("spot_yahoo_ms=0.0")
 
     # 3) Fallbacks existentes (export → IOL → Yahoo ticker BYMA)
     try:
@@ -173,53 +212,147 @@ def _legacy_merge_chain(
         return OptionChain(underlying=u_norm, contracts=[])
 
 
-def get_options_chain(underlying: str) -> OptionChain:
+def _compute_options_chain(underlying: str, *, enrich_sources: bool) -> OptionChain:
     """
-    Si IOL devuelve contratos, universo operable = IOL y Allaria/Rava solo enriquecen por clave.
-    Si IOL no está disponible o devuelve 0 contratos, merge clásico Allaria + Rava.
+    Construye la cadena sin consultar caché (llamar solo en miss).
     """
-    _log(f"start underlying={underlying!r}")
+    t_all = time.perf_counter()
+    _log(f"start underlying={underlying!r} enrich_sources={enrich_sources}")
 
     ci: list[OptionContract] = []
+    t0 = time.perf_counter()
     try:
         ci = fetch_iol_option_contracts(underlying)
     except Exception as e:
         _log(f"error iol={e!r}")
+    fetch_iol_ms = (time.perf_counter() - t0) * 1000.0
+    _log_timing(f"fetch_iol_options_ms={fetch_iol_ms:.1f}")
 
     ca: list[OptionContract] = []
     cr: list[OptionContract] = []
     ok_a = False
     ok_r = False
+    fetch_allaria_ms = 0.0
+    fetch_rava_ms = 0.0
+    merge_ms = 0.0
 
     if len(ci) > 0:
         _log(f"iol available contracts={len(ci)} using_iol_primary=true")
-        try:
-            ca = fetch_allaria_option_contracts(underlying)
-            ok_a = True
-        except Exception as e:
-            _log(f"error allaria(enrich)={e!r}")
-        try:
-            cr = fetch_rava_option_contracts(underlying)
-            ok_r = True
-        except Exception as e:
-            _log(f"error rava(enrich)={e!r}")
+        if enrich_sources:
+            t0 = time.perf_counter()
+            try:
+                ca = fetch_allaria_option_contracts(underlying)
+                ok_a = True
+            except Exception as e:
+                _log(f"error allaria(enrich)={e!r}")
+            fetch_allaria_ms = (time.perf_counter() - t0) * 1000.0
+            _log_timing(f"fetch_allaria_ms={fetch_allaria_ms:.1f}")
+
+            t0 = time.perf_counter()
+            try:
+                cr = fetch_rava_option_contracts(underlying)
+                ok_r = True
+            except Exception as e:
+                _log(f"error rava(enrich)={e!r}")
+            fetch_rava_ms = (time.perf_counter() - t0) * 1000.0
+            _log_timing(f"fetch_rava_ms={fetch_rava_ms:.1f}")
+        else:
+            _log("enrich_sources=false skip_allaria_rava")
+            fetch_allaria_ms = 0.0
+            fetch_rava_ms = 0.0
+            _log_timing("fetch_allaria_ms=0.0")
+            _log_timing("fetch_rava_ms=0.0")
+
+        t_merge = time.perf_counter()
         try:
             chain = build_iol_primary_market_chain(underlying, ci, ca, cr)
+            merge_ms = (time.perf_counter() - t_merge) * 1000.0
             _log(f"end iol_primary underlying={underlying!r} contracts={len(chain.contracts)}")
+            _log_timing(f"merge_ms={merge_ms:.1f}")
+            _log_timing(
+                f"get_options_chain_total_ms={(time.perf_counter() - t_all) * 1000.0:.1f} "
+                f"underlying={underlying!r}"
+            )
             return chain
         except Exception as e:
             _log(f"error iol_primary_build={e!r} fallback_allaria_rava=true")
-            return _legacy_merge_chain(underlying, ca, cr, ok_a, ok_r)
+            chain = _legacy_merge_chain(underlying, ca, cr, ok_a, ok_r)
+            merge_ms = (time.perf_counter() - t_merge) * 1000.0
+            _log_timing(f"merge_ms={merge_ms:.1f}")
+            _log_timing(
+                f"get_options_chain_total_ms={(time.perf_counter() - t_all) * 1000.0:.1f} "
+                f"underlying={underlying!r}"
+            )
+            return chain
 
     _log("iol unavailable fallback_allaria_rava=true")
+    t0 = time.perf_counter()
     try:
         ca = fetch_allaria_option_contracts(underlying)
         ok_a = True
     except Exception as e:
         _log(f"error allaria={e!r}")
+    fetch_allaria_ms = (time.perf_counter() - t0) * 1000.0
+    _log_timing(f"fetch_allaria_ms={fetch_allaria_ms:.1f}")
+
+    t0 = time.perf_counter()
     try:
         cr = fetch_rava_option_contracts(underlying)
         ok_r = True
     except Exception as e:
         _log(f"error rava={e!r}")
-    return _legacy_merge_chain(underlying, ca, cr, ok_a, ok_r)
+    fetch_rava_ms = (time.perf_counter() - t0) * 1000.0
+    _log_timing(f"fetch_rava_ms={fetch_rava_ms:.1f}")
+
+    t_merge = time.perf_counter()
+    chain = _legacy_merge_chain(underlying, ca, cr, ok_a, ok_r)
+    merge_ms = (time.perf_counter() - t_merge) * 1000.0
+    _log_timing(f"merge_ms={merge_ms:.1f}")
+    _log_timing(
+        f"get_options_chain_total_ms={(time.perf_counter() - t_all) * 1000.0:.1f} "
+        f"underlying={underlying!r}"
+    )
+    return chain
+
+
+def get_options_chain(underlying: str, *, enrich_sources: bool = True) -> OptionChain:
+    """
+    Si IOL devuelve contratos, universo operable = IOL y Allaria/Rava solo enriquecen por clave
+    (salvo ``enrich_sources=False``, útil para acortar latencia).
+    Si IOL no está disponible o devuelve 0 contratos, merge clásico Allaria + Rava.
+
+    Respuestas con al menos un contrato se memorizan en RAM ``OPTIONS_CHAIN_CACHE_TTL_SECONDS``.
+    """
+    ensure_iol_credentials_from_env()
+    t_all = time.perf_counter()
+    t_lookup = time.perf_counter()
+    key = _options_chain_cache_key(underlying, enrich_sources)
+    u_key, enrich_key = key
+    mono_now = time.monotonic()
+    ent = _options_chain_cache.get(key)
+    if ent is not None:
+        ts_mono, cached_chain = ent
+        age_seconds = mono_now - ts_mono
+        if age_seconds < OPTIONS_CHAIN_CACHE_TTL_SECONDS:
+            lookup_ms = (time.perf_counter() - t_lookup) * 1000.0
+            _log_cache(
+                f"hit underlying={u_key!r} enrich={enrich_key} age_seconds={age_seconds:.2f}"
+            )
+            _log_timing(f"cache_lookup_ms={lookup_ms:.3f} cache_hit=true")
+            _log_timing(
+                f"get_options_chain_total_ms={(time.perf_counter() - t_all) * 1000.0:.1f} "
+                f"underlying={underlying!r}"
+            )
+            return cached_chain
+        _log_cache(
+            f"expired underlying={u_key!r} enrich={enrich_key} age_seconds={age_seconds:.2f}"
+        )
+
+    _log_cache(f"miss underlying={u_key!r} enrich={enrich_key}")
+    lookup_ms = (time.perf_counter() - t_lookup) * 1000.0
+    _log_timing(f"cache_lookup_ms={lookup_ms:.3f} cache_hit=false")
+
+    chain = _compute_options_chain(underlying, enrich_sources=enrich_sources)
+    if len(chain.contracts) > 0:
+        _options_chain_cache[key] = (time.monotonic(), chain)
+    return chain
