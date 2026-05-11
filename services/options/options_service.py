@@ -5,6 +5,8 @@ Servicio interno: cadena de opciones merged (Allaria + Rava) con fallback por fu
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from services.market_data.facade import get_argentina_price
 from services.market_data.providers.iol import ensure_iol_credentials_from_env, get_iol_quote, is_iol_enabled
@@ -313,6 +315,117 @@ def _compute_options_chain(underlying: str, *, enrich_sources: bool) -> OptionCh
         f"underlying={underlying!r}"
     )
     return chain
+
+
+def _parallel_worker_chain(underlying: str, enrich_sources: bool) -> tuple[OptionChain, float]:
+    """Ejecuta en hilo: construye cadena sin caché. Devuelve (cadena, ms)."""
+    t0 = time.perf_counter()
+    try:
+        ch = _compute_options_chain(underlying, enrich_sources=enrich_sources)
+        return ch, (time.perf_counter() - t0) * 1000.0
+    except Exception as e:
+        _log(f"parallel_chain_worker_error={e!r}")
+        return _empty_chain(underlying), (time.perf_counter() - t0) * 1000.0
+
+
+def _parallel_worker_spot(underlying: str) -> tuple[tuple[float | None, str | None, str | None], float]:
+    """Ejecuta en hilo: resuelve spot. Devuelve ((spot, source, symbol), ms)."""
+    t0 = time.perf_counter()
+    try:
+        r = resolve_option_chain_spot(underlying)
+        return r, (time.perf_counter() - t0) * 1000.0
+    except Exception as e:
+        _log_spot(f"parallel_spot_worker_error={type(e).__name__}: {e}")
+        return (None, None, None), (time.perf_counter() - t0) * 1000.0
+
+
+def get_options_chain_with_spot(
+    underlying: str, *, enrich_sources: bool = False
+) -> tuple[OptionChain, dict[str, Any]]:
+    """
+    Cadena (con caché TTL como ``get_options_chain``) + spot del subyacente.
+
+    En miss de caché, la cadena y el spot se resuelven en paralelo (hasta 2 hilos).
+    Si falla uno de los dos, el otro sigue disponible en la respuesta.
+    """
+    ensure_iol_credentials_from_env()
+    t_ws0 = time.perf_counter()
+    t_lookup = time.perf_counter()
+    key = _options_chain_cache_key(underlying, enrich_sources)
+    u_key, enrich_key = key
+    mono_now = time.monotonic()
+    ent = _options_chain_cache.get(key)
+
+    if ent is not None:
+        ts_mono, cached_chain = ent
+        age_seconds = mono_now - ts_mono
+        if age_seconds < OPTIONS_CHAIN_CACHE_TTL_SECONDS:
+            lookup_ms = (time.perf_counter() - t_lookup) * 1000.0
+            _log_cache(
+                f"hit underlying={u_key!r} enrich={enrich_key} age_seconds={age_seconds:.2f}"
+            )
+            _log_timing(f"cache_lookup_ms={lookup_ms:.3f} cache_hit=true")
+            chain = cached_chain
+            t_spot = time.perf_counter()
+            try:
+                spot, spot_source, spot_symbol = resolve_option_chain_spot(underlying)
+            except Exception as e:
+                _log_spot(f"spot_after_cache_hit_error={type(e).__name__}: {e}")
+                spot, spot_source, spot_symbol = None, None, None
+            spot_ms = (time.perf_counter() - t_spot) * 1000.0
+            _log_timing("parallel_chain_ms=0.0")
+            _log_timing(f"parallel_spot_ms={spot_ms:.1f}")
+            _log_timing(f"chain_with_spot_total_ms={(time.perf_counter() - t_ws0) * 1000.0:.1f}")
+            return chain, {
+                "spot": spot,
+                "spot_source": spot_source,
+                "spot_symbol": spot_symbol,
+            }
+
+        _log_cache(
+            f"expired underlying={u_key!r} enrich={enrich_key} age_seconds={age_seconds:.2f}"
+        )
+
+    _log_cache(f"miss underlying={u_key!r} enrich={enrich_key}")
+    lookup_ms = (time.perf_counter() - t_lookup) * 1000.0
+    _log_timing(f"cache_lookup_ms={lookup_ms:.3f} cache_hit=false")
+
+    t_parallel_wall = time.perf_counter()
+    chain_ms = 0.0
+    spot_ms = 0.0
+    chain: OptionChain = _empty_chain(underlying)
+    spot: float | None = None
+    spot_source: str | None = None
+    spot_symbol: str | None = None
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fut_chain = ex.submit(_parallel_worker_chain, underlying, enrich_sources)
+        fut_spot = ex.submit(_parallel_worker_spot, underlying)
+        try:
+            chain, chain_ms = fut_chain.result()
+        except Exception as e:
+            _log(f"parallel_chain_future_error={e!r}")
+            chain = _empty_chain(underlying)
+            chain_ms = (time.perf_counter() - t_parallel_wall) * 1000.0
+        try:
+            (spot, spot_source, spot_symbol), spot_ms = fut_spot.result()
+        except Exception as e:
+            _log_spot(f"parallel_spot_future_error={type(e).__name__}: {e}")
+            spot, spot_source, spot_symbol = None, None, None
+            spot_ms = (time.perf_counter() - t_parallel_wall) * 1000.0
+
+    _log_timing(f"parallel_chain_ms={chain_ms:.1f}")
+    _log_timing(f"parallel_spot_ms={spot_ms:.1f}")
+
+    if len(chain.contracts) > 0:
+        _options_chain_cache[key] = (time.monotonic(), chain)
+
+    _log_timing(f"chain_with_spot_total_ms={(time.perf_counter() - t_ws0) * 1000.0:.1f}")
+    return chain, {
+        "spot": spot,
+        "spot_source": spot_source,
+        "spot_symbol": spot_symbol,
+    }
 
 
 def get_options_chain(underlying: str, *, enrich_sources: bool = True) -> OptionChain:

@@ -51,14 +51,15 @@ async def lifespan(_app: FastAPI):
     iol_p_present = bool(os.getenv("IOL_PASSWORD", "").strip())
     iol_enabled_after = False
     try:
-        from services.market_data.providers.iol import configure_iol_credentials, is_iol_enabled
+        from services.market_data.providers.iol import ensure_iol_credentials_from_env, is_iol_enabled
 
-        iol_user = os.getenv("IOL_USERNAME", "").strip()
-        iol_pass = os.getenv("IOL_PASSWORD", "").strip()
-        configure_iol_credentials(iol_user, iol_pass)
+        ensure_iol_credentials_from_env()
         iol_enabled_after = is_iol_enabled()
-    except Exception:
-        pass
+    except Exception as ex:
+        print(
+            f"[IOL_STARTUP_DEBUG] ensure_iol_credentials_failed={type(ex).__name__}: {ex}",
+            flush=True,
+        )
     print(
         "[IOL_STARTUP_DEBUG] username_present=%s password_present=%s enabled_after_config=%s"
         % (iol_u_present, iol_p_present, iol_enabled_after),
@@ -481,15 +482,23 @@ def iol_options_raw(symbol: str):
 @app.get("/options/chain")
 def options_chain(
     underlying: str = Query(default="GGAL", description="Subyacente (ej. GGAL, YPFD, ALUA)"),
+    enrich_sources: bool = Query(
+        False,
+        description="Si true, enriquece IOL con Allaria/Rava por contrato. Default false (más rápido).",
+    ),
 ):
     """
-    Cadena merged Allaria + Rava (mismo criterio que services.options.options_service).
-    No incluye raw completo; sí field_sources si el merge lo definió.
+    Cadena de opciones (IOL primario si hay contratos IOL; si no, merge Allaria + Rava).
+    No incluye raw completo; sí field_sources / iol_universe cuando aplica.
     """
     from services.options.normalizer import normalize_option_type
-    from services.options.options_service import get_options_chain
+    from services.options.options_service import get_options_chain_with_spot
 
-    chain = get_options_chain(underlying)
+    t0 = time.perf_counter()
+    chain, spot_info = get_options_chain_with_spot(underlying, enrich_sources=enrich_sources)
+    spot = spot_info.get("spot")
+    spot_source = spot_info.get("spot_source")
+    spot_symbol = spot_info.get("spot_symbol")
     contracts_sorted = sorted(
         chain.contracts,
         key=lambda c: (
@@ -502,10 +511,12 @@ def options_chain(
     items: list[dict[str, Any]] = []
     for c in contracts_sorted:
         fs: dict[str, Any] | None = None
+        iol_u = False
         if isinstance(c.raw, dict):
             v = c.raw.get("field_sources")
             if isinstance(v, dict):
                 fs = dict(v)
+            iol_u = bool(c.raw.get("iol_universe"))
         items.append(
             {
                 "underlying": c.underlying,
@@ -520,13 +531,28 @@ def options_chain(
                 "open_interest": c.open_interest,
                 "source": c.source,
                 "field_sources": fs if fs is not None else {},
+                "iol_universe": iol_u,
             }
         )
 
-    print(f"[OPTIONS_API] chain underlying={underlying!r} total={len(items)}", flush=True)
+    chain_total_ms = (time.perf_counter() - t0) * 1000.0
+    print(
+        f"[OPTIONS_API_TIMING] chain_total_ms={chain_total_ms:.1f} underlying={underlying!r} "
+        f"total={len(items)} enrich_sources={enrich_sources}",
+        flush=True,
+    )
+    print(
+        f"[OPTIONS_API] chain underlying={underlying!r} normalized={chain.underlying!r} "
+        f"spot={spot!r} spot_symbol={spot_symbol!r} total={len(items)} enrich_sources={enrich_sources}",
+        flush=True,
+    )
     return {
         "underlying": chain.underlying,
+        "spot": spot,
+        "spot_source": spot_source,
+        "spot_symbol": spot_symbol,
         "total": len(items),
+        "enrich_sources": enrich_sources,
         "contracts": items,
     }
 
