@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   fetchLatestRadarArgentina,
@@ -352,6 +352,8 @@ export function OptionsPage() {
   const [mergedChain, setMergedChain] = useState<OptionsChainResponse | null>(null);
   const [loadingChain, setLoadingChain] = useState(true);
   const [errorChain, setErrorChain] = useState<string | null>(null);
+  /** Invalida respuestas viejas (cambio de activo, desmontaje, StrictMode). */
+  const optionsChainReqRef = useRef(0);
 
   const [ravaRows, setRavaRows] = useState<FlatRow[]>([]);
   const [loadingRava, setLoadingRava] = useState(false);
@@ -372,24 +374,26 @@ export function OptionsPage() {
   const underlyingRadarSymbol = selectedUnderlyingMeta.radarTicker;
 
   useEffect(() => {
-    let cancelled = false;
+    const reqId = ++optionsChainReqRef.current;
     setLoadingChain(true);
     setErrorChain(null);
+    console.log("[OPTIONS_FRONT] fetch chain", selectedUnderlying);
     fetchOptionsChain(selectedUnderlying)
       .then((res) => {
-        if (cancelled) return;
+        if (reqId !== optionsChainReqRef.current) return;
         setMergedChain(res);
       })
       .catch((e: unknown) => {
-        if (cancelled) return;
+        if (reqId !== optionsChainReqRef.current) return;
         setErrorChain(e instanceof Error ? e.message : String(e));
         setMergedChain(null);
       })
       .finally(() => {
-        if (!cancelled) setLoadingChain(false);
+        if (reqId !== optionsChainReqRef.current) return;
+        setLoadingChain(false);
       });
     return () => {
-      cancelled = true;
+      optionsChainReqRef.current += 1;
     };
   }, [selectedUnderlying]);
 
@@ -1003,42 +1007,45 @@ export function OptionsPage() {
       </div>
 
       <div className="msg-muted" style={{ marginTop: "0.25rem" }}>
-        {activeTab === "panel" ? (
-          <div>
-            Cadena desde el backend (Allaria + Rava).{" "}
-            {mergedChain && !loadingChain && !errorChain ? (
-              <span>
-                <strong>Subyacente (normalizado):</strong> {mergedChain.underlying}
-                {" — "}
-                <strong>Spot subyacente:</strong>{" "}
-                {apiChainSpot !== null ? (
-                  <>$ {formatNumber(apiChainSpot, 2)}</>
-                ) : (
-                  <em>Spot no disponible</em>
-                )}
-                {" — "}
-                <strong>Fuente:</strong> {mergedChain.spot_source ?? "—"}
-                {mergedChain.spot_symbol ? (
-                  <>
-                    {" "}
-                    (<code>{mergedChain.spot_symbol}</code>)
-                  </>
-                ) : null}
-                {" — "}
-                <strong>Total contratos:</strong> {mergedChain.total}
-                {" — "}
-                <strong>Filtrados:</strong> {mergedFilteredContracts.length}
-                {hideZeroVolume ? (
-                  <>
-                    {" — "}
-                    <em>Ocultando volumen 0</em>
-                  </>
-                ) : null}
-              </span>
-            ) : null}
-          </div>
-        ) : (
-          <div>
+        <div>
+          Cadena desde el backend (Allaria + Rava).{" "}
+          {mergedChain && !loadingChain && !errorChain ? (
+            <span>
+              <strong>Subyacente (normalizado):</strong> {mergedChain.underlying}
+              {" — "}
+              <strong>Spot subyacente:</strong>{" "}
+              {apiChainSpot !== null ? (
+                <>$ {formatNumber(apiChainSpot, 2)}</>
+              ) : (
+                <em>Spot no disponible</em>
+              )}
+              {" — "}
+              <strong>Fuente:</strong> {mergedChain.spot_source ?? "—"}
+              {mergedChain.spot_symbol ? (
+                <>
+                  {" "}
+                  (<code>{mergedChain.spot_symbol}</code>)
+                </>
+              ) : null}
+              {" — "}
+              <strong>Total contratos:</strong> {mergedChain.total}
+              {activeTab === "panel" ? (
+                <>
+                  {" — "}
+                  <strong>Filtrados:</strong> {mergedFilteredContracts.length}
+                  {hideZeroVolume ? (
+                    <>
+                      {" — "}
+                      <em>Ocultando volumen 0</em>
+                    </>
+                  ) : null}
+                </>
+              ) : null}
+            </span>
+          ) : null}
+        </div>
+        {activeTab === "strategies" ? (
+          <div style={{ marginTop: "0.35rem" }}>
             Estrategias usan la cadena Rava ({selectedUnderlyingMeta.ravaUnderlying}). Algunas series pueden no aparecer sin
             actividad.
             {!loadingRava && !errorRava && ravaRows.length > 0 ? (
@@ -1059,13 +1066,13 @@ export function OptionsPage() {
               </div>
             ) : null}
           </div>
-        )}
+        ) : null}
       </div>
 
-      {activeTab === "panel" && loadingChain && <p>Cargando…</p>}
-      {activeTab === "panel" && errorChain && (
+      {loadingChain && <p>Cargando cadena…</p>}
+      {errorChain && (
         <p role="alert">
-          Error: {errorChain}
+          Error cadena: {errorChain}
         </p>
       )}
       {activeTab === "panel" && emptyHintPanel && <p>{emptyHintPanel}</p>}
