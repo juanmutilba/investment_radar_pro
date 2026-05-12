@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timezone
 
 from core.alerts_engine import collect_detected_alerts, generate_alerts
-from core.config import EXPORT_FOLDER, OUTPUT_EXCEL
+from core.config import EXPORT_FOLDER, fresh_export_paths
 from core.history import find_previous_export, merge_history
 from core.signals import classify_priority
 from data.cedear_mapping import get_active_cedear_usa_tickers, normalize_usa_ticker_for_cedear_lookup
@@ -70,7 +70,8 @@ def run_full_scan(*, verbose: bool = True, pause_after_usa_s: float = 2.0) -> di
         print("\nCorriendo motor Argentina...")
     arg_df, arg_universo, arg_sectores = run_argentina_engine()
 
-    previous_file = find_previous_export(EXPORT_FOLDER, exclude_path=OUTPUT_EXCEL)
+    export_xlsx, export_csv = fresh_export_paths()
+    previous_file = find_previous_export(EXPORT_FOLDER, exclude_path=export_xlsx)
 
     usa_df = _prepare_dataframe(usa_df, previous_file, "Radar_Completo")
     arg_df = _prepare_dataframe(arg_df, previous_file, "Radar_Argentina_Completo")
@@ -115,6 +116,8 @@ def run_full_scan(*, verbose: bool = True, pause_after_usa_s: float = 2.0) -> di
         "arg_top10": arg_top10,
         "arg_alerts": arg_alerts,
         "previous_file": previous_file,
+        "_export_xlsx_path": export_xlsx,
+        "_export_csv_path": export_csv,
     }
 
 
@@ -152,7 +155,8 @@ def run_full_scan_timed(*, verbose: bool = True, pause_after_usa_s: float = 2.0)
     arg_df, arg_universo, arg_sectores = run_argentina_engine()
     arg_scan_s = time.perf_counter() - t0
 
-    previous_file = find_previous_export(EXPORT_FOLDER, exclude_path=OUTPUT_EXCEL)
+    export_xlsx, export_csv = fresh_export_paths()
+    previous_file = find_previous_export(EXPORT_FOLDER, exclude_path=export_xlsx)
 
     t0 = time.perf_counter()
     usa_df = _prepare_dataframe(usa_df, previous_file, "Radar_Completo")
@@ -205,6 +209,8 @@ def run_full_scan_timed(*, verbose: bool = True, pause_after_usa_s: float = 2.0)
         "arg_top10": arg_top10,
         "arg_alerts": arg_alerts,
         "previous_file": previous_file,
+        "_export_xlsx_path": export_xlsx,
+        "_export_csv_path": export_csv,
     }
 
     usa_total_activos = _count_nonempty_rows_df(usa_df)

@@ -438,6 +438,21 @@ tr.moneyness-row-none td:first-child {
   font-weight: 600;
 }
 
+.options-desacople-iv-pos {
+  color: rgba(22, 101, 52, 0.96);
+  font-weight: 600;
+}
+
+.options-desacople-iv-neg {
+  color: rgba(185, 28, 28, 0.94);
+  font-weight: 600;
+}
+
+.options-desacople-iv-neu {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
 .options-tabs {
   display: flex;
   gap: 0.5rem;

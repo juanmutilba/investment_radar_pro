@@ -21,6 +21,16 @@ TIMESTAMP = datetime.now().strftime('%Y-%m-%d_%H-%M')
 OUTPUT_EXCEL = EXPORT_FOLDER / f'radar_{TIMESTAMP}.xlsx'
 OUTPUT_CSV = EXPORT_FOLDER / f'radar_{TIMESTAMP}.csv'
 
+
+def fresh_export_paths() -> tuple[Path, Path]:
+    """
+    Rutas nuevas por cada scan (evita reutilizar el mismo archivo mientras corre el API
+    y reduce bloqueos si un export anterior quedó abierto en Excel).
+    """
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    xlsx = EXPORT_FOLDER / f"radar_{ts}.xlsx"
+    return xlsx, xlsx.with_suffix(".csv")
+
 PRICE_HISTORY_PERIOD = '1y'
 RSI_WINDOW = 14
 MA_SHORT = 50

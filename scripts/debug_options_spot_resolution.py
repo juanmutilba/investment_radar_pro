@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 import sys
 import warnings
 from pathlib import Path
@@ -41,18 +42,26 @@ def _row(underlying: str) -> None:
     spot_sym = option_underlying_to_spot_symbol(underlying)
     yahoo_sym = option_underlying_to_yahoo_symbol(underlying)
     iol_val = None
+    iol_quote_ms = 0.0
     if spot_sym and is_iol_enabled():
+        t_i = time.perf_counter()
         iq = get_iol_quote(spot_sym)
+        iol_quote_ms = (time.perf_counter() - t_i) * 1000.0
         iol_val = iq.value if iq is not None else None
 
     yahoo_val = None
+    yahoo_quote_ms = 0.0
     if yahoo_sym:
+        t_y = time.perf_counter()
         yq = yahoo_last_price(yahoo_sym, "ARS")
+        yahoo_quote_ms = (time.perf_counter() - t_y) * 1000.0
         yahoo_val = yq.value
 
     # Fallbacks clásicos (sin Yahoo .BA prioritario)
     q = get_argentina_price(spot_sym, prefer_export=True, options_spot_yahoo_symbol=None)
-    spot, src, sym_used = resolve_option_chain_spot(underlying)
+    t_r = time.perf_counter()
+    spot, src, sym_used, meta = resolve_option_chain_spot(underlying)
+    total_ms = (time.perf_counter() - t_r) * 1000.0
     print(f"underlying={underlying!r}", flush=True)
     print(f"  spot_symbol (BYMA)     = {spot_sym!r}", flush=True)
     print(f"  yahoo_symbol           = {yahoo_sym!r}", flush=True)
@@ -61,7 +70,11 @@ def _row(underlying: str) -> None:
     print(f"  classic_fallback.source= {q.source!r}", flush=True)
     print(f"  classic_fallback.value = {q.value!r}", flush=True)
     print(f"  classic_fallback.symbol_used = {q.symbol_used!r}", flush=True)
-    print(f"  resolve_option_chain_spot    = spot={spot!r} spot_source={src!r} spot_symbol={sym_used!r}", flush=True)
+    print(
+        f"  resolve_option_chain_spot    = spot={spot!r} spot_source={src!r} spot_symbol={sym_used!r} meta={meta!r}",
+        flush=True,
+    )
+    print(f"  iol_quote_ms={iol_quote_ms:.1f} yahoo_quote_ms={yahoo_quote_ms:.1f} total_ms={total_ms:.1f}", flush=True)
     print("", flush=True)
 
 

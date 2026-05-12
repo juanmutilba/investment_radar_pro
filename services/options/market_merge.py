@@ -10,6 +10,8 @@ from typing import Any, Literal
 from services.options.models import OptionChain, OptionContract
 from services.options.normalizer import make_contract_key, normalize_option_type, normalize_underlying
 
+BidaskSourceMode = Literal["iol_live", "allaria_fallback", "rava_fallback", "none"]
+
 
 def _log(msg: str) -> None:
     print(f"[OPTIONS_MERGE] {msg}", flush=True)
@@ -228,6 +230,61 @@ def _iol_primary_pick_traded(
     return None, "none", None
 
 
+def _iol_primary_volume(
+    iol_val: Any,
+    allaria_val: Any,
+    rava_val: Any,
+) -> tuple[float | None, str, dict[str, str] | None]:
+    """
+    Volumen: prioriza IOL si viene informado (incluye 0); si no, Allaria → Rava.
+    """
+    if iol_val is not None:
+        try:
+            x = float(iol_val)
+            if x == x:
+                return x, "iol", None
+        except (TypeError, ValueError):
+            pass
+    fb_from = "iol_none"
+    for val, lab in ((allaria_val, "allaria"), (rava_val, "rava")):
+        if val is not None:
+            try:
+                y = float(val)
+                if y == y:
+                    return y, lab, {"from": fb_from, "to": lab}
+            except (TypeError, ValueError):
+                continue
+    return None, "none", None
+
+
+def _compute_bidask_source_mode(
+    bid: float | None,
+    ask: float | None,
+    bid_fs: str,
+    ask_fs: str,
+) -> BidaskSourceMode:
+    """
+    Resume el origen de las puntas (solo lados > 0 cuentan).
+    Si hubo aporte de Allaria en cualquier lado → ``allaria_fallback`` salvo que ambos lados sean solo IOL.
+    """
+    bp = _numeric_positive(bid)
+    ap = _numeric_positive(ask)
+    if not bp and not ap:
+        return "none"
+    sources: set[str] = set()
+    if bp:
+        sources.add(bid_fs)
+    if ap:
+        sources.add(ask_fs)
+    if sources <= {"iol"}:
+        return "iol_live"
+    if "allaria" in sources:
+        return "allaria_fallback"
+    if "rava" in sources:
+        return "rava_fallback"
+    return "none"
+
+
 def _iol_primary_open_interest(
     iol_val: Any,
     allaria_val: Any,
@@ -260,8 +317,12 @@ def build_iol_primary_market_chain(
     rava_contracts: list[OptionContract],
 ) -> OptionChain:
     """
-    Universo estructural = IOL; Allaria/Rava solo rellenan campos faltantes por misma ``make_contract_key``.
-    No se agregan filas que no estén en IOL.
+    Universo estructural = IOL; Allaria/Rava rellenan por ``make_contract_key`` sin agregar filas.
+
+    Bid/ask: IOL solo si > 0; si no, Allaria > Rava. Last: IOL > 0 si no Rava > Allaria.
+    Volumen: valor IOL si está informado (incluye 0); si no, Allaria → Rava.
+
+    ``raw`` incluye ``field_sources``, ``bidask_source_mode`` (iol_live | allaria_fallback | rava_fallback | none).
     """
     iol_p = _prep_contracts_for_keys(underlying, iol_contracts)
     a_p = _prep_contracts_for_keys(underlying, allaria_contracts)
@@ -273,6 +334,7 @@ def build_iol_primary_market_chain(
     matched_r = 0
     out: list[OptionContract] = []
     fb_bid = fb_ask = fb_last = fb_vol = 0
+    n_ba_iol = n_ba_allaria = n_ba_rava = n_ba_none = 0
 
     for c in iol_p:
         k = make_contract_key(c)
@@ -303,7 +365,7 @@ def build_iol_primary_market_chain(
 
         av = ca.volume if ca else None
         rv = cr.volume if cr else None
-        volume, vol_fs, vol_fb = _iol_primary_pick_traded(c.volume, av, rv, order=("allaria", "rava"))
+        volume, vol_fs, vol_fb = _iol_primary_volume(c.volume, av, rv)
         if vol_fb is not None:
             fb_vol += 1
 
@@ -337,6 +399,17 @@ def build_iol_primary_market_chain(
         if field_fallbacks:
             raw_out["field_fallbacks"] = field_fallbacks
 
+        ba_mode = _compute_bidask_source_mode(bid, ask, bid_fs, ask_fs)
+        raw_out["bidask_source_mode"] = ba_mode
+        if ba_mode == "iol_live":
+            n_ba_iol += 1
+        elif ba_mode == "allaria_fallback":
+            n_ba_allaria += 1
+        elif ba_mode == "rava_fallback":
+            n_ba_rava += 1
+        else:
+            n_ba_none += 1
+
         out.append(
             replace(
                 c,
@@ -362,6 +435,10 @@ def build_iol_primary_market_chain(
     _log(
         f"iol_primary total_iol={len(iol_p)} matched_allaria={matched_a} matched_rava={matched_r} out={len(out)} "
         f"fallback_bid={fb_bid} fallback_ask={fb_ask} fallback_last={fb_last} fallback_volume={fb_vol}"
+    )
+    _log(
+        f"iol_bidask_real={n_ba_iol} allaria_bidask_fallback={n_ba_allaria} "
+        f"rava_bidask_fallback={n_ba_rava} none_bidask={n_ba_none}"
     )
     u_norm = normalize_underlying(underlying) or str(underlying).strip().upper()
     return OptionChain(underlying=u_norm, contracts=out)

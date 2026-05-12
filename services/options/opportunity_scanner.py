@@ -163,7 +163,7 @@ def _bull_spread_notes(debit: float) -> str:
 
 def scan_options_opportunities(underlying: str) -> dict[str, Any]:
     chain = get_options_chain(underlying)
-    spot, _spot_src, _spot_sym = resolve_option_chain_spot(underlying)
+    spot, _spot_src, _spot_sym, _meta = resolve_option_chain_spot(underlying)
     generated_at = datetime.now(timezone.utc).isoformat()
 
     quality_flags = _quality_scan(chain.contracts)

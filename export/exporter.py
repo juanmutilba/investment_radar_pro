@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 from openpyxl import load_workbook
 
@@ -63,9 +65,22 @@ def export_all(outputs: dict) -> tuple[str, str]:
     arg_top10 = outputs["arg_top10"]
     arg_alerts = outputs["arg_alerts"]
 
-    usa_df.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
+    xlsx_path = outputs.pop("_export_xlsx_path", None)
+    csv_path = outputs.pop("_export_csv_path", None)
+    if xlsx_path is not None:
+        excel_out = Path(xlsx_path)
+    else:
+        excel_out = Path(OUTPUT_EXCEL)
+    if csv_path is not None:
+        csv_out = Path(csv_path)
+    else:
+        csv_out = Path(OUTPUT_CSV)
 
-    with pd.ExcelWriter(OUTPUT_EXCEL, engine="openpyxl") as writer:
+    print(f"[EXPORT] CSV → {csv_out}", flush=True)
+    usa_df.to_csv(csv_out, index=False, encoding="utf-8-sig")
+
+    print(f"[EXPORT] Excel (escribiendo hojas) → {excel_out}", flush=True)
+    with pd.ExcelWriter(excel_out, engine="openpyxl") as writer:
         # USA
         build_operativo_view(usa_df).to_excel(
             writer, sheet_name="Radar_Operativo", index=False
@@ -86,8 +101,18 @@ def export_all(outputs: dict) -> tuple[str, str]:
         arg_top10.to_excel(writer, sheet_name="Top_10_Argentina", index=False)
         arg_alerts.to_excel(writer, sheet_name="Alertas_Argentina", index=False)
 
-    wb = load_workbook(OUTPUT_EXCEL)
+    print("[EXPORT] Formateando celdas (openpyxl)…", flush=True)
+    wb = load_workbook(excel_out)
     format_workbook(wb)
-    wb.save(OUTPUT_EXCEL)
+    print("[EXPORT] Guardando libro…", flush=True)
+    try:
+        wb.save(excel_out)
+    except OSError as e:
+        raise OSError(
+            f"No se pudo guardar el Excel ({excel_out}). "
+            "¿Está el archivo abierto en Excel u otro programa? Cerralo y reintentá. "
+            f"Detalle: {e}"
+        ) from e
 
-    return str(OUTPUT_EXCEL), str(OUTPUT_CSV)
+    print("[EXPORT] Listo.", flush=True)
+    return str(excel_out.resolve()), str(csv_out.resolve())

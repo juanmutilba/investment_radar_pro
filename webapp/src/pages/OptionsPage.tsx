@@ -10,6 +10,11 @@ import {
   type RadarRow,
 } from "@/services/api";
 import { formatTrend, getRaw } from "@/components/radar/radarTableCore";
+import {
+  impliedVolatilityAnnualPercent,
+  IV_RISK_FREE_RATE_ANNUAL,
+  optionMarkPriceForIv,
+} from "@/utils/impliedVolatility";
 
 type OptionUnderlying = { value: string; label: string; radarTicker: string; ravaUnderlying: string };
 
@@ -30,6 +35,9 @@ const ENRICH_CHAIN_SOURCES = true;
 /** Máximo de especies por request GET /options/quotes (prioridad operable). */
 const IOL_QUOTES_VISIBLE_CAP = 12;
 
+/** Nominal por contrato (BYMA acciones) para capital comprometido en tablas de estrategia. */
+const OPTIONS_STRATEGY_LOT_SIZE = 100;
+
 /** Edad máxima (ms) de última puntada IOL útil para mostrar OK vs OLD en columna Estado. */
 const IOL_QUOTE_UI_FRESH_MS = 30_000;
 
@@ -42,6 +50,9 @@ const PANEL_QUOTE_STATUS_TOOLTIP: Record<PanelQuoteStatusCode, string> = {
   OLD: "Cotización desactualizada",
 };
 
+const OPTIONS_DESACOPLE_IV_COL_TOOLTIP =
+  "Diferencia relativa contra la IV promedio del mismo vencimiento y tipo. Verde = prima cara relativa; rojo = prima barata relativa.";
+
 type FlatRow = {
   activo: string;
   tipo: "CALL" | "PUT";
@@ -53,7 +64,7 @@ type FlatRow = {
 type StrategyType = "Bull Call Spread" | "Bear Put Spread" | "Covered Call" | "Protective Put" | "Collar";
 type LegAction = "BUY" | "SELL";
 type ActiveTab = "panel" | "strategies";
-type StrategiesFilter = "" | "Bull Call Spread" | "Covered Call";
+type StrategiesFilter = "" | "Bull Call Spread" | "Covered Call" | "Cash Secured Put";
 
 type StrategyLeg = {
   action: LegAction;
@@ -95,6 +106,65 @@ function formatNumber(value: number | null | undefined, decimals = 2): string {
 function formatInteger(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";
   return value.toLocaleString("es-AR", { maximumFractionDigits: 0 });
+}
+
+function callPutKindFromContractTypeUpper(ou: string): "CALL" | "PUT" | null {
+  const t = ou.trim().toUpperCase();
+  if (t.includes("PUT") && !t.includes("CALL")) return "PUT";
+  if (t.includes("CALL")) return "CALL";
+  return null;
+}
+
+function ivAvgBucketKey(expiryYyyyMmDd: string, kind: "CALL" | "PUT"): string {
+  return `${expiryYyyyMmDd}_${kind}`;
+}
+
+export function formatIvVsVto(diff: number | null): string {
+  if (diff === null || !Number.isFinite(diff)) return "—";
+  const sign = diff > 0 ? "+" : "";
+  return `${sign}${formatNumber(diff, 1)} pp`;
+}
+
+export function ivVsVtoDiffFromMap(
+  avgMap: Map<string, number>,
+  expiryYyyyMmDd: string,
+  optionTypeUpper: string,
+  ivPct: number | null,
+): number | null {
+  if (!expiryYyyyMmDd || ivPct === null || !Number.isFinite(ivPct)) return null;
+  const kind = callPutKindFromContractTypeUpper(optionTypeUpper);
+  if (!kind) return null;
+  const avg = avgMap.get(ivAvgBucketKey(expiryYyyyMmDd, kind));
+  if (avg === undefined || !Number.isFinite(avg)) return null;
+  return ivPct - avg;
+}
+
+/** ((ivPct / avgIv) − 1) × 100; mismo mapa de promedios por vencimiento + CALL/PUT. */
+function desacopleIvPctRelFromMap(
+  avgMap: Map<string, number>,
+  expiryYyyyMmDd: string,
+  optionTypeUpper: string,
+  ivPct: number | null,
+): number | null {
+  if (!expiryYyyyMmDd || ivPct === null || !Number.isFinite(ivPct) || ivPct <= 0) return null;
+  const kind = callPutKindFromContractTypeUpper(optionTypeUpper);
+  if (!kind) return null;
+  const avg = avgMap.get(ivAvgBucketKey(expiryYyyyMmDd, kind));
+  if (avg === undefined || !Number.isFinite(avg) || avg <= 0) return null;
+  return (ivPct / avg - 1) * 100;
+}
+
+function formatDesacopleIvPct(pct: number | null): string {
+  if (pct === null || !Number.isFinite(pct)) return "—";
+  const sign = pct > 0 ? "+" : "";
+  return `${sign}${formatNumber(pct, 1)}%`;
+}
+
+function desacopleIvPctCellClass(pct: number | null): string {
+  if (pct === null || !Number.isFinite(pct)) return "";
+  if (pct > 10) return "options-desacople-iv-pos";
+  if (pct < -10) return "options-desacople-iv-neg";
+  return "options-desacople-iv-neu";
 }
 
 function formatTrendLabel(value: unknown): string {
@@ -275,6 +345,56 @@ function iolRealQuoteUsedForRow(row: OptionContractRow, quotes: Record<string, I
     Number.isFinite(Number(q.cantidad_operaciones)) &&
     Number(q.cantidad_operaciones) > 0;
   return qb || qa || qv || qo;
+}
+
+/** IV % anual (misma lógica en panel y oportunidades): mark bid/ask/último + BS. */
+function impliedVolAnnualPercentFromInputs(
+  bid: number | null,
+  ask: number | null,
+  last: number | null,
+  spot: number | null,
+  strike: number | null,
+  daysToExpiry: number | null,
+  optionTypeLabel: string,
+): number | null {
+  const mark = optionMarkPriceForIv(bid, ask, last);
+  const ou = optionTypeLabel.trim().toUpperCase();
+  let call: boolean | null = null;
+  if (ou.includes("PUT") && !ou.includes("CALL")) call = false;
+  else if (ou.includes("CALL")) call = true;
+  if (call === null) return null;
+  if (spot === null || !Number.isFinite(spot) || spot <= 0) return null;
+  if (strike === null || !Number.isFinite(strike) || strike <= 0) return null;
+  if (daysToExpiry === null || daysToExpiry <= 0) return null;
+  if (mark === null || mark <= 0) return null;
+  return impliedVolatilityAnnualPercent({
+    spot,
+    strike,
+    markPrice: mark,
+    timeYears: daysToExpiry / 365,
+    call,
+  });
+}
+
+function impliedVolAnnualPercentForContract(
+  row: OptionContractRow,
+  quotes: Record<string, IolOptionQuotePayload>,
+  spot: number | null,
+  daysToExpiry: number | null,
+): number | null {
+  const bid = getEffectiveBid(row, quotes);
+  const ask = getEffectiveAsk(row, quotes);
+  const last = typeof row.last === "number" && Number.isFinite(row.last) && row.last > 0 ? row.last : null;
+  const strike = typeof row.strike === "number" && Number.isFinite(row.strike) ? row.strike : null;
+  return impliedVolAnnualPercentFromInputs(
+    bid,
+    ask,
+    last,
+    spot,
+    strike,
+    daysToExpiry,
+    mergedContractTypeUpper(row),
+  );
 }
 
 function panelRowQuoteStatus(
@@ -543,6 +663,7 @@ export function OptionsPage() {
   const [showManualStrategy, setShowManualStrategy] = useState(false);
   const [showBullCallSpread, setShowBullCallSpread] = useState(false);
   const [showCoveredCall, setShowCoveredCall] = useState(false);
+  const [showCashSecuredPut, setShowCashSecuredPut] = useState(false);
   const [selectedLegs, setSelectedLegs] = useState<StrategyLeg[]>([]);
   const [mergedChain, setMergedChain] = useState<OptionsChainResponse | null>(null);
   const [loadingChain, setLoadingChain] = useState(false);
@@ -555,6 +676,8 @@ export function OptionsPage() {
   const selectedUnderlyingRef = useRef("");
   const [iolQuotes, setIolQuotes] = useState<Record<string, IolOptionQuotePayload>>({});
   const [loadingIolQuotes, setLoadingIolQuotes] = useState(false);
+  /** Hubo al menos un batch /options/quotes aplicado para la cadena actual (texto “Puntas visibles actualizadas”). */
+  const [visibleQuotesBatchApplied, setVisibleQuotesBatchApplied] = useState(false);
   const [loadingUnderlyingContext, setLoadingUnderlyingContext] = useState(false);
   const [underlyingSignal, setUnderlyingSignal] = useState<string | null>(null);
   const [underlyingTrendRaw, setUnderlyingTrendRaw] = useState<unknown>(null);
@@ -719,6 +842,29 @@ export function OptionsPage() {
     return null;
   }, [parsedManualSpot, apiChainSpot]);
 
+  const ivAvgPctByExpiryType = useMemo(() => {
+    const buckets = new Map<string, number[]>();
+    for (const c of mergedChain?.contracts ?? []) {
+      const ek = expiryKeyFromMergedContract(c);
+      if (!ek) continue;
+      const kind = callPutKindFromContractTypeUpper(mergedContractTypeUpper(c));
+      if (!kind) continue;
+      const dte = daysBetweenTodayAndExpiry(ek);
+      const iv = impliedVolAnnualPercentForContract(c, iolQuotes, effectivePanelSpot, dte);
+      if (iv === null || !Number.isFinite(iv)) continue;
+      const k = ivAvgBucketKey(ek, kind);
+      const arr = buckets.get(k) ?? [];
+      arr.push(iv);
+      buckets.set(k, arr);
+    }
+    const out = new Map<string, number>();
+    for (const [k, arr] of buckets.entries()) {
+      if (arr.length < 3) continue;
+      out.set(k, arr.reduce((s, v) => s + v, 0) / arr.length);
+    }
+    return out;
+  }, [mergedChain, effectivePanelSpot, iolQuotes]);
+
   const contractBySymbol = useMemo(() => {
     const m = new Map<string, OptionContractRow>();
     for (const c of mergedChain?.contracts ?? []) {
@@ -854,6 +1000,7 @@ export function OptionsPage() {
     iolQuotesReqRef.current += 1;
     iolQuoteResponseSeenRef.current = {};
     iolLastGoodQuoteAtRef.current = {};
+    setVisibleQuotesBatchApplied(false);
     setLoadingIolQuotes(false);
     setLoadingChain(true);
     setErrorChain(null);
@@ -898,6 +1045,7 @@ export function OptionsPage() {
       setErrorChain(null);
       setIolQuotes({});
       setLoadingIolQuotes(false);
+      setVisibleQuotesBatchApplied(false);
       void loadChain(v);
     },
     [loadChain],
@@ -980,6 +1128,7 @@ export function OptionsPage() {
         statusCalculated,
       });
     }
+    setVisibleQuotesBatchApplied(true);
     setIolQuotes(data);
   }, []);
 
@@ -1187,6 +1336,8 @@ export function OptionsPage() {
       tnaPct: number | null;
       breakEven: number | null;
       moneyness: string | null;
+      ivPct: number | null;
+      desacopleIvPct: number | null;
     }[] = [];
     for (const r of calls) {
       const exp = expiryKeyFromRaw(r.raw);
@@ -1218,6 +1369,20 @@ export function OptionsPage() {
           ? (timeValue / effectivePanelSpot) * (365 / days) * 100
           : null;
 
+      const ivPct = co
+        ? impliedVolAnnualPercentForContract(co, iolQuotes, effectivePanelSpot, days)
+        : impliedVolAnnualPercentFromInputs(
+            toNumberOrNull(r.raw.bid),
+            toNumberOrNull(r.raw.ask),
+            toNumberOrNull(r.raw.ultimo),
+            effectivePanelSpot,
+            typeof r.strike === "number" && Number.isFinite(r.strike) ? r.strike : null,
+            days,
+            "CALL",
+          );
+
+      const desacopleIvPct = desacopleIvPctRelFromMap(ivAvgPctByExpiryType, exp, "CALL", ivPct);
+
       out.push({
         expiryKey: exp,
         strike: r.strike,
@@ -1228,11 +1393,82 @@ export function OptionsPage() {
         tnaPct,
         breakEven,
         moneyness: moneyStatus(r.raw),
+        ivPct,
+        desacopleIvPct,
       });
     }
     out.sort((a, b) => a.expiryKey.localeCompare(b.expiryKey) || a.strike - b.strike);
     return out.slice(0, 30);
-  }, [calls, effectivePanelSpot, iolQuotes, contractBySymbol]);
+  }, [calls, effectivePanelSpot, iolQuotes, contractBySymbol, ivAvgPctByExpiryType]);
+
+  const cashSecuredPuts = useMemo(() => {
+    const out: {
+      expiryKey: string;
+      contract: OptionContractRow;
+      strike: number;
+      prima: number;
+      breakEven: number;
+      breakEvenVsSpotPct: number | null;
+      distStrikePct: number | null;
+      capital: number;
+      rendSimplePct: number;
+      tnaPct: number | null;
+      vol: number | null;
+      days: number | null;
+      ivPct: number | null;
+      desacopleIvPct: number | null;
+    }[] = [];
+    for (const r of puts) {
+      const exp = expiryKeyFromRaw(r.raw);
+      if (!exp) continue;
+      const sym = (typeof r.raw.simbolo === "string" ? r.raw.simbolo : "").trim().toUpperCase();
+      const co = sym ? contractBySymbol.get(sym) : undefined;
+      if (!co) continue;
+      const primaEff = getEffectiveBid(co, iolQuotes);
+      if (primaEff === null || primaEff <= 0) continue;
+      const strike = r.strike;
+      let days = daysToExpiryRaw(r.raw);
+      if (days === null) days = daysBetweenTodayAndExpiry(exp);
+      const spotOk = effectivePanelSpot !== null && effectivePanelSpot > 0;
+      const spotNum = effectivePanelSpot;
+      const distStrikePct =
+        spotOk && spotNum !== null ? (strike / spotNum - 1) * 100 : null;
+      const breakEven = strike - primaEff;
+      const breakEvenVsSpotPct =
+        spotOk && spotNum !== null && primaEff > 0 && spotNum > 0 && Number.isFinite(breakEven)
+          ? ((breakEven / spotNum) - 1) * 100
+          : null;
+      const capital = strike * OPTIONS_STRATEGY_LOT_SIZE;
+      const rendSimplePct = (primaEff / strike) * 100;
+      const tnaPct =
+        spotOk && days !== null && days > 0 ? rendSimplePct * (365 / days) : null;
+      const ivPct = impliedVolAnnualPercentForContract(co, iolQuotes, effectivePanelSpot, days);
+      const desacopleIvPct = desacopleIvPctRelFromMap(
+        ivAvgPctByExpiryType,
+        exp,
+        mergedContractTypeUpper(co),
+        ivPct,
+      );
+      out.push({
+        expiryKey: exp,
+        contract: co,
+        strike,
+        prima: primaEff,
+        breakEven,
+        breakEvenVsSpotPct,
+        distStrikePct,
+        capital,
+        rendSimplePct,
+        tnaPct,
+        vol: getEffectiveVolume(co, iolQuotes),
+        days,
+        ivPct,
+        desacopleIvPct,
+      });
+    }
+    out.sort((a, b) => a.expiryKey.localeCompare(b.expiryKey) || a.strike - b.strike);
+    return out.slice(0, 30);
+  }, [puts, effectivePanelSpot, iolQuotes, contractBySymbol, ivAvgPctByExpiryType]);
 
   const netCost = useMemo(() => {
     let net = 0;
@@ -1651,7 +1887,16 @@ export function OptionsPage() {
       ) : null}
 
       {activeTab === "panel" && !loadingChain && !errorChain && mergedFilteredContracts.length > 0 ? (
-        <div className="table-wrap">
+        <>
+          {chainIsIolPrimary && iolQuoteSymbolList.length > 0 && (loadingIolQuotes || visibleQuotesBatchApplied) ? (
+            <p
+              className="msg-muted"
+              style={{ fontSize: "0.74rem", margin: "0.1rem 0 0.3rem", lineHeight: 1.35, opacity: 0.88 }}
+            >
+              {loadingIolQuotes ? "Actualizando puntas visibles..." : "Puntas visibles actualizadas"}
+            </p>
+          ) : null}
+          <div className="table-wrap">
           <table>
             <thead>
               <tr>
@@ -1667,10 +1912,15 @@ export function OptionsPage() {
                   Estado
                 </th>
                 <th>Último</th>
+                <th style={{ textAlign: "right" }} title={`IV implícita anual aprox. (Black–Scholes; r = ${(IV_RISK_FREE_RATE_ANNUAL * 100).toFixed(0)} %)`}>
+                  IV %
+                </th>
+                <th style={{ textAlign: "right" }} title={OPTIONS_DESACOPLE_IV_COL_TOOLTIP}>
+                  Desacople IV %
+                </th>
                 <th title="Volumen (cadena o cotización IOL)">Volumen</th>
                 <th>Op.</th>
                 <th>OI</th>
-                <th>Fuente</th>
               </tr>
             </thead>
             <tbody>
@@ -1697,6 +1947,12 @@ export function OptionsPage() {
                     lastGoodAt: quoteLastGood,
                     nowMs: quoteStatusNow,
                   });
+                  const ekIv = expiryKeyFromMergedContract(c);
+                  const dteIv = ekIv ? daysBetweenTodayAndExpiry(ekIv) : null;
+                  const ivPct = impliedVolAnnualPercentForContract(c, iolQuotes, effectivePanelSpot, dteIv);
+                  const desacopleIvPct = ekIv
+                    ? desacopleIvPctRelFromMap(ivAvgPctByExpiryType, ekIv, mergedContractTypeUpper(c), ivPct)
+                    : null;
                   return (
                     <tr key={`${c.symbol}-${i}`} className={mergedMoneynessRowClass(m)}>
                       <td>{fmtCell(c.symbol)}</td>
@@ -1725,12 +1981,20 @@ export function OptionsPage() {
                         </span>
                       </td>
                       <td style={{ textAlign: "right" }}>{formatNumber(c.last, 2)}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {ivPct !== null && Number.isFinite(ivPct) ? `${formatNumber(ivPct, 1)}%` : "—"}
+                      </td>
+                      <td
+                        style={{ textAlign: "right" }}
+                        className={desacopleIvPctCellClass(desacopleIvPct)}
+                      >
+                        {formatDesacopleIvPct(desacopleIvPct)}
+                      </td>
                       <td style={{ textAlign: "right" }} title={qt ?? undefined}>
                         {formatInteger(vol)}
                       </td>
                       <td style={{ textAlign: "right" }}>{ops === null ? "—" : formatInteger(ops)}</td>
                       <td style={{ textAlign: "right" }}>{formatInteger(c.open_interest)}</td>
-                      <td>{fmtCell(c.source)}</td>
                     </tr>
                   );
                 });
@@ -1738,6 +2002,7 @@ export function OptionsPage() {
             </tbody>
           </table>
         </div>
+        </>
       ) : null}
 
       {activeTab === "strategies" ? (
@@ -1905,6 +2170,9 @@ export function OptionsPage() {
                     </div>
                     <div className="msg-muted" style={{ marginBottom: "0.5rem" }}>
                       Usá estos botones para sumar patas al constructor manual.
+                      {strategiesFilter === "Cash Secured Put" ? (
+                        <span> En este modo solo se listan PUTs (venta de put cubierta por caja).</span>
+                      ) : null}
                     </div>
                     <div className="table-wrap">
                       <table className="strategy-leg-table">
@@ -1922,7 +2190,8 @@ export function OptionsPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {calls.slice(0, 40).map((r, i) => {
+                          {strategiesFilter !== "Cash Secured Put"
+                            ? calls.slice(0, 40).map((r, i) => {
                             const o = r.raw;
                             const key = `add-calls-${r.expiryCode}-${r.strike}-${i}`;
                             const canAdd = typeof o.simbolo === "string" && o.simbolo.trim();
@@ -1959,8 +2228,9 @@ export function OptionsPage() {
                                 </td>
                               </tr>
                             );
-                          })}
-                          {puts.slice(0, 40).map((r, i) => {
+                          })
+                            : null}
+                          {puts.slice(0, strategiesFilter === "Cash Secured Put" ? 80 : 40).map((r, i) => {
                             const o = r.raw;
                             const key = `add-puts-${r.expiryCode}-${r.strike}-${i}`;
                             const canAdd = typeof o.simbolo === "string" && o.simbolo.trim();
@@ -2034,6 +2304,7 @@ export function OptionsPage() {
                     <option value="">Todas</option>
                     <option value="Bull Call Spread">Bull Call Spread</option>
                     <option value="Covered Call">Covered Call</option>
+                    <option value="Cash Secured Put">Cash Secured Put</option>
                   </select>
                 </label>
               </div>
@@ -2146,6 +2417,12 @@ export function OptionsPage() {
                                 <th style={{ textAlign: "right" }}>Subyacente</th>
                                 <th style={{ textAlign: "right" }}>Strike</th>
                                 <th style={{ textAlign: "right" }}>Prima</th>
+                                <th style={{ textAlign: "right" }} title={`IV implícita anual aprox. (Black–Scholes; r = ${(IV_RISK_FREE_RATE_ANNUAL * 100).toFixed(0)} %)`}>
+                                  IV %
+                                </th>
+                                <th style={{ textAlign: "right" }} title={OPTIONS_DESACOPLE_IV_COL_TOOLTIP}>
+                                  Desacople IV %
+                                </th>
                                 <th style={{ textAlign: "right" }}>Intrínseco</th>
                                 <th style={{ textAlign: "right" }}>Valor tiempo</th>
                                 <th style={{ textAlign: "right" }}>Días</th>
@@ -2167,6 +2444,15 @@ export function OptionsPage() {
                                   </td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.strike, 2)}</td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.bid, 2)}</td>
+                                  <td style={{ textAlign: "right" }}>
+                                    {x.ivPct !== null && Number.isFinite(x.ivPct) ? `${formatNumber(x.ivPct, 1)}%` : "—"}
+                                  </td>
+                                  <td
+                                    style={{ textAlign: "right" }}
+                                    className={desacopleIvPctCellClass(x.desacopleIvPct)}
+                                  >
+                                    {formatDesacopleIvPct(x.desacopleIvPct)}
+                                  </td>
                                   <td style={{ textAlign: "right", color: "var(--text-muted)" }}>
                                     {x.intrinsic !== null && x.intrinsic > 0 ? formatNumber(x.intrinsic, 2) : "-"}
                                   </td>
@@ -2196,6 +2482,146 @@ export function OptionsPage() {
                                 </tr>
                               );
                               })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {strategiesFilter === "" || strategiesFilter === "Cash Secured Put" ? (
+                <div style={{ marginTop: "0.95rem" }}>
+                  <button
+                    type="button"
+                    className="strategy-collapsible-header"
+                    onClick={() => setShowCashSecuredPut((v) => !v)}
+                    aria-expanded={showCashSecuredPut}
+                  >
+                    <div className="strategy-collapsible-title">
+                      <span style={{ width: "1.15rem", display: "inline-block" }}>
+                        {showCashSecuredPut ? "−" : "+"}
+                      </span>
+                      Cash Secured Put
+                    </div>
+                    <div className="strategy-collapsible-summary">
+                      {cashSecuredPuts.length} oportunidades
+                    </div>
+                  </button>
+                  {showCashSecuredPut ? (
+                    <div className="strategy-collapsible-body">
+                      <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.45rem", fontSize: "0.82rem" }}>
+                        Venta de put cubierta por caja: prima = bid efectivo; capital ≈ strike × lote (
+                        {formatInteger(OPTIONS_STRATEGY_LOT_SIZE)}).
+                      </p>
+                      {cashSecuredPuts.length === 0 ? (
+                        <div className="msg-muted">Sin puts con bid &gt; 0 en el feed actual.</div>
+                      ) : (
+                        <div className="table-wrap">
+                          <table className="strategy-opportunities-table">
+                            <thead>
+                              <tr>
+                                <th>Vencimiento</th>
+                                <th>Ticker</th>
+                                <th style={{ textAlign: "right" }}>Strike</th>
+                                <th style={{ textAlign: "right" }}>Prima</th>
+                                <th style={{ textAlign: "right" }} title={`IV implícita anual aprox. (Black–Scholes; r = ${(IV_RISK_FREE_RATE_ANNUAL * 100).toFixed(0)} %)`}>
+                                  IV %
+                                </th>
+                                <th style={{ textAlign: "right" }} title={OPTIONS_DESACOPLE_IV_COL_TOOLTIP}>
+                                  Desacople IV %
+                                </th>
+                                <th style={{ textAlign: "right" }}>Break-even</th>
+                                <th
+                                  style={{ textAlign: "right" }}
+                                  title="((break-even / spot) − 1) × 100. Negativo: asignación por debajo del spot."
+                                >
+                                  BE vs Spot
+                                </th>
+                                <th style={{ textAlign: "right" }} title="(strike / spot − 1) × 100">
+                                  Δ strike %
+                                </th>
+                                <th style={{ textAlign: "right" }}>Capital</th>
+                                <th style={{ textAlign: "right" }} title="Prima / strike">
+                                  Rend. simple
+                                </th>
+                                <th
+                                  style={{ textAlign: "right" }}
+                                  title="Anualización lineal del rendimiento simple; requiere spot y días al vencimiento"
+                                >
+                                  TNA
+                                </th>
+                                <th style={{ textAlign: "right" }}>Días</th>
+                                <th style={{ textAlign: "right" }}>Volumen</th>
+                                <th>Estado</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(() => {
+                                void iolQuoteStatusTick;
+                                const quoteResponseSeen = { ...iolQuoteResponseSeenRef.current };
+                                const quoteLastGood = { ...iolLastGoodQuoteAtRef.current };
+                                const nowMs = Date.now();
+                                return cashSecuredPuts.map((x, idx) => {
+                                  const m = getMoneynessFromValues(x.strike, "PUT", effectivePanelSpot);
+                                  const quoteSt = panelRowQuoteStatus(x.contract, {
+                                    chainIsIolPrimary,
+                                    quoteFetchSymbolSet: iolQuoteFetchSymbolSet,
+                                    iolQuotes,
+                                    loadingIolQuotes,
+                                    responseSeen: quoteResponseSeen,
+                                    lastGoodAt: quoteLastGood,
+                                    nowMs,
+                                  });
+                                  return (
+                                    <tr
+                                      key={`csp-${(x.contract.symbol ?? "").trim()}-${x.expiryKey}-${x.strike}-${idx}`}
+                                      className={mergedMoneynessRowClass(m)}
+                                    >
+                                      <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
+                                      <td>{fmtCell(x.contract.symbol)}</td>
+                                      <td style={{ textAlign: "right" }}>{formatNumber(x.strike, 2)}</td>
+                                      <td style={{ textAlign: "right" }}>{formatNumber(x.prima, 2)}</td>
+                                      <td style={{ textAlign: "right" }}>
+                                        {x.ivPct !== null && Number.isFinite(x.ivPct) ? `${formatNumber(x.ivPct, 1)}%` : "—"}
+                                      </td>
+                                      <td
+                                        style={{ textAlign: "right" }}
+                                        className={desacopleIvPctCellClass(x.desacopleIvPct)}
+                                      >
+                                        {formatDesacopleIvPct(x.desacopleIvPct)}
+                                      </td>
+                                      <td style={{ textAlign: "right" }}>{formatNumber(x.breakEven, 2)}</td>
+                                      <td style={{ textAlign: "right" }}>
+                                        {x.breakEvenVsSpotPct !== null
+                                          ? `${formatNumber(x.breakEvenVsSpotPct, 2)}%`
+                                          : "-"}
+                                      </td>
+                                      <td style={{ textAlign: "right" }}>
+                                        {x.distStrikePct !== null ? `${formatNumber(x.distStrikePct, 2)}%` : "-"}
+                                      </td>
+                                      <td style={{ textAlign: "right" }}>${formatNumber(x.capital, 2)}</td>
+                                      <td style={{ textAlign: "right" }}>{`${formatNumber(x.rendSimplePct, 2)}%`}</td>
+                                      <td style={{ textAlign: "right" }}>
+                                        {x.tnaPct !== null ? `${formatNumber(x.tnaPct, 2)}%` : "-"}
+                                      </td>
+                                      <td style={{ textAlign: "right" }}>
+                                        {x.days !== null ? formatInteger(x.days) : "-"}
+                                      </td>
+                                      <td style={{ textAlign: "right" }}>{formatInteger(x.vol)}</td>
+                                      <td>
+                                        <span
+                                          className={`options-quote-status-badge options-quote-status-${quoteSt.toLowerCase()}`}
+                                          title={PANEL_QUOTE_STATUS_TOOLTIP[quoteSt]}
+                                        >
+                                          {quoteSt}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                });
+                              })()}
                             </tbody>
                           </table>
                         </div>

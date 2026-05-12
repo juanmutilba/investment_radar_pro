@@ -10,6 +10,7 @@ _UNDERLYING_TO_OPTION_PREFIX: dict[str, str] = {
     "GGAL": "GFG",
 }
 
+
 def normalize_underlying(value: str | None) -> str | None:
     """
     Normaliza subyacente para la cadena maestra de opciones (uppercase).
