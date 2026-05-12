@@ -1077,3 +1077,115 @@ export async function postIolReconnect(): Promise<{ ok: boolean; message: string
     message: typeof o.message === "string" ? o.message : "IOL reconnect requested",
   };
 }
+
+/** GET /options/iv-smile — puntos IV % por strike agrupados por vencimiento y tipo. */
+export type IvSmilePoint = {
+  strike: number;
+  iv_pct: number;
+  moneyness: string;
+  symbol: string;
+  volume?: number;
+  bid?: number | null;
+  iv_diff_vs_avg?: number | null;
+  iv_diff_vs_avg_pct?: number | null;
+  rich_iv?: boolean;
+  cheap_iv?: boolean;
+};
+
+export type IvSmileGroup = {
+  underlying: string;
+  expiration: string;
+  option_type: string;
+  avg_iv_pct?: number | null;
+  min_iv_pct?: number | null;
+  max_iv_pct?: number | null;
+  points: IvSmilePoint[];
+};
+
+export type IvSmileResponse = {
+  items: IvSmileGroup[];
+};
+
+export async function fetchIvSmile(underlying: string): Promise<IvSmileResponse> {
+  const q = new URLSearchParams({ underlying: underlying.trim() });
+  const res = await fetch(`${BASE}/options/iv-smile?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object" || !("items" in data)) {
+    throw new Error("Respuesta inesperada: /options/iv-smile");
+  }
+  const itemsRaw = (data as { items?: unknown }).items;
+  if (!Array.isArray(itemsRaw)) {
+    throw new Error("Respuesta inesperada: /options/iv-smile (items)");
+  }
+  const items: IvSmileGroup[] = [];
+  for (const g of itemsRaw) {
+    if (g === null || typeof g !== "object") continue;
+    const o = g as Record<string, unknown>;
+    const ptsRaw = o.points;
+    const points: IvSmilePoint[] = [];
+    if (Array.isArray(ptsRaw)) {
+      for (const p of ptsRaw) {
+        if (p === null || typeof p !== "object") continue;
+        const pr = p as Record<string, unknown>;
+        const strike = typeof pr.strike === "number" ? pr.strike : Number(pr.strike);
+        const iv_pct = typeof pr.iv_pct === "number" ? pr.iv_pct : Number(pr.iv_pct);
+        if (!Number.isFinite(strike) || !Number.isFinite(iv_pct)) continue;
+        const vol = pr.volume === undefined ? undefined : typeof pr.volume === "number" ? pr.volume : Number(pr.volume);
+        const bidRaw = pr.bid;
+        const bid =
+          bidRaw === null || bidRaw === undefined
+            ? null
+            : typeof bidRaw === "number"
+              ? bidRaw
+              : Number(bidRaw);
+        const ivd = pr.iv_diff_vs_avg;
+        const ivdp = pr.iv_diff_vs_avg_pct;
+        points.push({
+          strike,
+          iv_pct,
+          moneyness: typeof pr.moneyness === "string" ? pr.moneyness : String(pr.moneyness ?? ""),
+          symbol: typeof pr.symbol === "string" ? pr.symbol : String(pr.symbol ?? ""),
+          volume: Number.isFinite(vol as number) ? (vol as number) : 0,
+          bid: bid !== null && Number.isFinite(bid) && bid > 0 ? bid : null,
+          iv_diff_vs_avg:
+            ivd === null || ivd === undefined ? null : typeof ivd === "number" ? ivd : Number(ivd),
+          iv_diff_vs_avg_pct:
+            ivdp === null || ivdp === undefined ? null : typeof ivdp === "number" ? ivdp : Number(ivdp),
+          rich_iv: Boolean(pr.rich_iv),
+          cheap_iv: Boolean(pr.cheap_iv),
+        });
+      }
+    }
+    const avgRaw = o.avg_iv_pct;
+    const minRaw = o.min_iv_pct;
+    const maxRaw = o.max_iv_pct;
+    items.push({
+      underlying: typeof o.underlying === "string" ? o.underlying : String(o.underlying ?? ""),
+      expiration: typeof o.expiration === "string" ? o.expiration : String(o.expiration ?? ""),
+      option_type: typeof o.option_type === "string" ? o.option_type : String(o.option_type ?? ""),
+      avg_iv_pct:
+        avgRaw === null || avgRaw === undefined
+          ? null
+          : typeof avgRaw === "number"
+            ? avgRaw
+            : Number(avgRaw),
+      min_iv_pct:
+        minRaw === null || minRaw === undefined
+          ? null
+          : typeof minRaw === "number"
+            ? minRaw
+            : Number(minRaw),
+      max_iv_pct:
+        maxRaw === null || maxRaw === undefined
+          ? null
+          : typeof maxRaw === "number"
+            ? maxRaw
+            : Number(maxRaw),
+      points,
+    });
+  }
+  return { items };
+}

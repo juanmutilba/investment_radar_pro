@@ -479,6 +479,29 @@ def iol_reconnect():
     return {"ok": True, "message": "IOL reconnect requested"}
 
 
+@app.get("/options/iv-smile")
+def options_iv_smile(
+    underlying: str = Query(..., min_length=1, description="Subyacente ByMA (ej. GGAL)"),
+):
+    """
+    Curva de IV por strike (misma lógica de mark/BS que el panel; bid/ask/último de la cadena mergeada).
+    """
+    from services.options.options_service import get_options_chain_with_spot
+    from services.options.volatility import build_iv_smile, iv_smile_input_rows_from_chain
+
+    u = (underlying or "").strip().upper()
+    chain, spot_info = get_options_chain_with_spot(u, enrich_sources=False)
+    spot = spot_info.get("spot")
+    try:
+        s_num = float(spot) if spot is not None else None
+    except (TypeError, ValueError):
+        s_num = None
+    if s_num is None or not (s_num > 0) or s_num != s_num:
+        s_num = None
+    rows = iv_smile_input_rows_from_chain(chain, s_num)
+    return {"items": build_iv_smile(rows)}
+
+
 @app.get("/options/iol/raw/{symbol}")
 def iol_options_raw(symbol: str):
     """

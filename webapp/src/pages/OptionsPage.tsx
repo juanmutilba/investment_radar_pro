@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   fetchIolStatus,
+  fetchIvSmile,
   fetchLatestRadarArgentina,
   fetchOptionsChain,
   fetchOptionsQuotes,
   postIolReconnect,
   type IolOptionQuotePayload,
   type IolStatusPayload,
+  type IvSmileGroup,
+  type IvSmilePoint,
   type OptionContractRow,
   type OptionsChainResponse,
   type RadarRow,
@@ -66,8 +69,8 @@ type FlatRow = {
 
 type StrategyType = "Bull Call Spread" | "Bear Put Spread" | "Covered Call" | "Protective Put" | "Collar";
 type LegAction = "BUY" | "SELL";
-type ActiveTab = "panel" | "strategies";
-type StrategiesFilter = "" | "Bull Call Spread" | "Covered Call" | "Cash Secured Put";
+type ActiveTab = "panel" | "strategies" | "ivSmile";
+type StrategiesFilter = "" | "Bull Call Spread" | "Covered Call" | "CALL Descubierta" | "Cash Secured Put";
 
 type StrategyLeg = {
   action: LegAction;
@@ -660,6 +663,160 @@ function iolUiNeedsReconnect(st: IolStatusPayload | null): boolean {
   return iolAuthLikeMessage(st.message);
 }
 
+const OPTIONS_NAKED_CALL_RISK_TOOLTIP =
+  "La pérdida potencial crece si el subyacente sube sin cobertura.";
+
+function smileMoneynessKind(m: string): "ATM" | "ITM" | "OTM" | "OTHER" {
+  const u = m.toUpperCase();
+  if (u.includes("ATM")) return "ATM";
+  if (u.includes("ITM")) return "ITM";
+  if (u.includes("OTM")) return "OTM";
+  return "OTHER";
+}
+
+function formatIvSmileDiffPct(pct: number | null | undefined): string {
+  if (pct === null || pct === undefined || !Number.isFinite(pct)) return "—";
+  const sign = pct > 0 ? "+" : "";
+  return `${sign}${formatNumber(pct, 0)}%`;
+}
+
+function ivSmileDiffCellClass(pct: number | null | undefined): string {
+  if (pct === null || pct === undefined || !Number.isFinite(pct)) return "";
+  if (pct >= 10) return "options-iv-smile-diff-rich";
+  if (pct <= -10) return "options-iv-smile-diff-cheap";
+  return "options-iv-smile-diff-neu";
+}
+
+function IvSmileSvgChart({
+  points,
+  spot,
+  avgIvPct,
+}: {
+  points: IvSmilePoint[];
+  spot: number | null;
+  avgIvPct: number | null;
+}) {
+  if (points.length === 0) return <p className="msg-muted">Sin puntos para graficar.</p>;
+  const w = 720;
+  const h = 248;
+  const padL = 56;
+  const padR = 18;
+  const padT = 22;
+  const padB = 48;
+  const sk = points.map((p) => p.strike);
+  const iv = points.map((p) => p.iv_pct);
+  let minK = Math.min(...sk);
+  let maxK = Math.max(...sk);
+  let minV = Math.min(...iv);
+  let maxV = Math.max(...iv);
+  if (avgIvPct !== null && Number.isFinite(avgIvPct)) {
+    minV = Math.min(minV, avgIvPct);
+    maxV = Math.max(maxV, avgIvPct);
+  }
+  if (minK === maxK) {
+    minK -= 1;
+    maxK += 1;
+  }
+  const spanV = maxV - minV || 1;
+  const padV = Math.max(spanV * 0.1, 0.8);
+  minV -= padV;
+  maxV += padV;
+  const innerW = w - padL - padR;
+  const innerH = h - padT - padB;
+  const xOf = (strike: number) => padL + ((strike - minK) / (maxK - minK)) * innerW;
+  const yOf = (v: number) => padT + innerH - ((v - minV) / (maxV - minV)) * innerH;
+  const pts = points.map((p) => ({ x: xOf(p.strike), y: yOf(p.iv_pct), p }));
+  const poly = pts.map((t) => `${t.x.toFixed(1)},${t.y.toFixed(1)}`).join(" ");
+  const spotInRange = spot !== null && Number.isFinite(spot) && spot > 0 && spot >= minK && spot <= maxK;
+  const xSpot = spotInRange ? xOf(spot) : null;
+  const yAvg =
+    avgIvPct !== null && Number.isFinite(avgIvPct) && avgIvPct >= minV && avgIvPct <= maxV
+      ? yOf(avgIvPct)
+      : null;
+  const yTicks = [minV, (minV + maxV) / 2, maxV];
+  const xTicks = [minK, (minK + maxK) / 2, maxK];
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="options-iv-smile-chart" width="100%" height={h} role="img" aria-label="IV por strike">
+      <text x={padL} y={16} fontSize="11" className="options-iv-smile-chart__title">
+        IV % vs strike
+      </text>
+      {yTicks.map((yv, i) => (
+        <text
+          key={`yl-${i}`}
+          x={padL - 6}
+          y={yOf(yv) + 3}
+          fontSize="9"
+          textAnchor="end"
+          className="options-iv-smile-chart__tick"
+        >
+          {formatNumber(yv, 0)}%
+        </text>
+      ))}
+      {xTicks.map((xv, i) => (
+        <text
+          key={`xl-${i}`}
+          x={xOf(xv)}
+          y={h - 10}
+          fontSize="9"
+          textAnchor="middle"
+          className="options-iv-smile-chart__tick"
+        >
+          {formatNumber(xv, 0)}
+        </text>
+      ))}
+      <line
+        x1={padL}
+        y1={padT + innerH}
+        x2={padL + innerW}
+        y2={padT + innerH}
+        className="options-iv-smile-chart__axis"
+      />
+      <line x1={padL} y1={padT} x2={padL} y2={padT + innerH} className="options-iv-smile-chart__axis" />
+      {yAvg !== null ? (
+        <line
+          x1={padL}
+          y1={yAvg}
+          x2={padL + innerW}
+          y2={yAvg}
+          className="options-iv-smile-chart__avg-line"
+        />
+      ) : null}
+      {avgIvPct !== null && Number.isFinite(avgIvPct) ? (
+        <text x={padL + innerW - 4} y={(yAvg ?? padT + innerH / 2) - 6} fontSize="9" textAnchor="end" className="options-iv-smile-chart__avg-label">
+          Prom. IV {formatNumber(avgIvPct, 1)}%
+        </text>
+      ) : null}
+      {xSpot !== null ? (
+        <line x1={xSpot} y1={padT} x2={xSpot} y2={padT + innerH} className="options-iv-smile-chart__atm-line" />
+      ) : null}
+      {xSpot !== null ? (
+        <text x={xSpot + 4} y={padT + 12} fontSize="9" className="options-iv-smile-chart__atm-label">
+          ATM
+        </text>
+      ) : null}
+      <polyline fill="none" className="options-iv-smile-chart__line" strokeLinejoin="round" points={poly} />
+      {pts.map((t, idx) => {
+        const k = smileMoneynessKind(t.p.moneyness);
+        const dotClass =
+          k === "ATM"
+            ? "options-iv-smile-dot--atm"
+            : k === "OTM"
+              ? "options-iv-smile-dot--otm"
+              : k === "ITM"
+                ? "options-iv-smile-dot--itm"
+                : "options-iv-smile-dot--neu";
+        const tip = `Strike: ${formatNumber(t.p.strike, 2)}\nIV: ${formatNumber(t.p.iv_pct, 1)}%\nEspecie: ${t.p.symbol?.trim() || "—"}\nMoneyness: ${t.p.moneyness}`;
+        return (
+          <g key={`ivpt-${idx}-${t.p.symbol}-${t.p.strike}-${t.p.iv_pct}`}>
+            <title>{tip}</title>
+            <circle cx={t.x} cy={t.y} r={5} className={`options-iv-smile-dot ${dotClass}`} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 type OptionTypeFilter = "all" | "CALL" | "PUT";
 type PanelSortMode = "expiry_type_strike" | "symbol" | "volume_desc" | "last_desc";
 
@@ -680,6 +837,7 @@ export function OptionsPage() {
   const [showManualStrategy, setShowManualStrategy] = useState(false);
   const [showBullCallSpread, setShowBullCallSpread] = useState(false);
   const [showCoveredCall, setShowCoveredCall] = useState(false);
+  const [showNakedShortCall, setShowNakedShortCall] = useState(false);
   const [showCashSecuredPut, setShowCashSecuredPut] = useState(false);
   const [selectedLegs, setSelectedLegs] = useState<StrategyLeg[]>([]);
   const [mergedChain, setMergedChain] = useState<OptionsChainResponse | null>(null);
@@ -701,6 +859,11 @@ export function OptionsPage() {
   const [iolStatus, setIolStatus] = useState<IolStatusPayload | null>(null);
   const [iolReconnecting, setIolReconnecting] = useState(false);
   const [iolReconnectHint, setIolReconnectHint] = useState<string | null>(null);
+  const [ivSmileItems, setIvSmileItems] = useState<IvSmileGroup[]>([]);
+  const [ivSmileLoading, setIvSmileLoading] = useState(false);
+  const [ivSmileErr, setIvSmileErr] = useState<string | null>(null);
+  const [smileExpiry, setSmileExpiry] = useState("");
+  const [smileSide, setSmileSide] = useState<"CALL" | "PUT">("CALL");
 
   selectedUnderlyingRef.current = selectedUnderlying;
 
@@ -746,6 +909,39 @@ export function OptionsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (activeTab !== "ivSmile") return;
+    const u = selectedUnderlying.trim();
+    if (!u) {
+      setIvSmileItems([]);
+      setIvSmileErr(null);
+      return;
+    }
+    let cancelled = false;
+    setIvSmileLoading(true);
+    setIvSmileErr(null);
+    void fetchIvSmile(u)
+      .then((data) => {
+        if (cancelled) return;
+        setIvSmileItems(data.items);
+        setSmileExpiry((prev) => {
+          const exps = [...new Set(data.items.map((it) => it.expiration))].filter(Boolean).sort();
+          if (exps.length === 0) return "";
+          if (prev && exps.includes(prev)) return prev;
+          return exps[0] ?? "";
+        });
+      })
+      .catch((e) => {
+        if (!cancelled) setIvSmileErr(e instanceof Error ? e.message : "Error al cargar sonrisa IV");
+      })
+      .finally(() => {
+        if (!cancelled) setIvSmileLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, selectedUnderlying]);
+
   const onIolReconnect = useCallback(async () => {
     setIolReconnecting(true);
     setIolReconnectHint(null);
@@ -759,6 +955,23 @@ export function OptionsPage() {
       setIolReconnecting(false);
     }
   }, []);
+
+  const smileExpiryOptions = useMemo(
+    () => [...new Set(ivSmileItems.map((i) => i.expiration))].filter(Boolean).sort(),
+    [ivSmileItems],
+  );
+
+  const ivSmileActiveGroup = useMemo((): IvSmileGroup | null => {
+    if (!smileExpiry || ivSmileItems.length === 0) return null;
+    return ivSmileItems.find((it) => it.expiration === smileExpiry && it.option_type === smileSide) ?? null;
+  }, [ivSmileItems, smileExpiry, smileSide]);
+
+  const ivSmileActivePoints = useMemo(() => ivSmileActiveGroup?.points ?? [], [ivSmileActiveGroup]);
+
+  const ivSmileActiveAvgIvPct = useMemo((): number | null => {
+    const v = ivSmileActiveGroup?.avg_iv_pct;
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  }, [ivSmileActiveGroup]);
 
   // Estrategias usan la misma cadena que el Panel: mergedChain (GET /options/chain).
 
@@ -893,6 +1106,46 @@ export function OptionsPage() {
     if (apiChainSpot !== null && apiChainSpot > 0) return apiChainSpot;
     return null;
   }, [parsedManualSpot, apiChainSpot]);
+
+  const ivSmileRichOpportunities = useMemo(() => {
+    type Row = {
+      symbol: string;
+      strike: number;
+      iv_pct: number;
+      iv_diff_vs_avg_pct: number;
+      bid: number;
+      distPct: number | null;
+      expiration: string;
+    };
+    const spot = effectivePanelSpot;
+    const rows: Row[] = [];
+    for (const g of ivSmileItems) {
+      for (const p of g.points) {
+        if (!p.rich_iv) continue;
+        const vol = p.volume ?? 0;
+        if (vol <= 0) continue;
+        const bid = p.bid;
+        if (bid === null || bid === undefined || !(bid > 0)) continue;
+        const dp = p.iv_diff_vs_avg_pct;
+        if (dp === null || dp === undefined || !Number.isFinite(dp)) continue;
+        let distPct: number | null = null;
+        if (spot !== null && spot > 0) {
+          distPct = (Math.abs(p.strike - spot) / spot) * 100;
+        }
+        rows.push({
+          symbol: (p.symbol ?? "").trim() || "—",
+          strike: p.strike,
+          iv_pct: p.iv_pct,
+          iv_diff_vs_avg_pct: dp,
+          bid,
+          distPct,
+          expiration: g.expiration,
+        });
+      }
+    }
+    rows.sort((a, b) => b.iv_diff_vs_avg_pct - a.iv_diff_vs_avg_pct);
+    return rows.slice(0, 50);
+  }, [ivSmileItems, effectivePanelSpot]);
 
   const ivAvgPctByExpiryType = useMemo(() => {
     const buckets = new Map<string, number[]>();
@@ -1522,6 +1775,52 @@ export function OptionsPage() {
     return out.slice(0, 30);
   }, [puts, effectivePanelSpot, iolQuotes, contractBySymbol, ivAvgPctByExpiryType]);
 
+  const nakedShortCalls = useMemo(() => {
+    const out: {
+      expiryKey: string;
+      strike: number;
+      prima: number;
+      premiumPct: number;
+      tnaPct: number;
+      breakEven: number;
+      distPct: number;
+      days: number | null;
+      symbol: string | null;
+    }[] = [];
+    for (const r of calls) {
+      const exp = expiryKeyFromRaw(r.raw);
+      if (!exp) continue;
+      const sym = (typeof r.raw.simbolo === "string" ? r.raw.simbolo : "").trim().toUpperCase();
+      const co = sym ? contractBySymbol.get(sym) : undefined;
+      const primaEff = co ? getEffectiveBid(co, iolQuotes) : toNumberOrNull(r.raw.bid);
+      if (primaEff === null || primaEff <= 0) continue;
+      const strike = r.strike;
+      if (!(strike > 0)) continue;
+      let days = daysToExpiryRaw(r.raw);
+      if (days === null) days = daysBetweenTodayAndExpiry(exp);
+      if (days === null || days <= 0) continue;
+      const spotNum = effectivePanelSpot;
+      if (spotNum === null || !(spotNum > 0)) continue;
+      const premiumPct = (primaEff / spotNum) * 100;
+      const breakEven = strike + primaEff;
+      const distPct = ((strike - spotNum) / spotNum) * 100;
+      const tnaPct = (primaEff / strike) * (365 / days) * 100;
+      out.push({
+        expiryKey: exp,
+        strike,
+        prima: primaEff,
+        premiumPct,
+        tnaPct,
+        breakEven,
+        distPct,
+        days,
+        symbol: typeof r.raw.simbolo === "string" ? r.raw.simbolo.trim() : null,
+      });
+    }
+    out.sort((a, b) => b.tnaPct - a.tnaPct || b.distPct - a.distPct);
+    return out.slice(0, 30);
+  }, [calls, effectivePanelSpot, iolQuotes, contractBySymbol]);
+
   const netCost = useMemo(() => {
     let net = 0;
     let ok = false;
@@ -1762,6 +2061,18 @@ export function OptionsPage() {
         >
           ESTRATEGIAS
         </button>
+        <button
+          type="button"
+          className={`options-tab${activeTab === "ivSmile" ? " options-tab-active" : ""}`}
+          role="tab"
+          aria-selected={activeTab === "ivSmile"}
+          onClick={() => {
+            setActiveTab("ivSmile");
+            setSelectedExpiry("");
+          }}
+        >
+          SONRISA IV
+        </button>
       </div>
 
       <div className="options-underlying-card" aria-label="Subyacente">
@@ -1784,7 +2095,7 @@ export function OptionsPage() {
             <span className="options-underlying-badge options-underlying-badge-neutral" title="Ticker en Radar Argentina">
               Radar: {underlyingRadarSymbol}
             </span>
-            {activeTab === "strategies" ? (
+            {activeTab === "strategies" || activeTab === "ivSmile" ? (
               <span className="options-underlying-badge options-underlying-badge-neutral" title="Ticker Rava (cadena)">
                 Rava: {selectedUnderlyingMeta.ravaUnderlying}
               </span>
@@ -1948,6 +2259,158 @@ export function OptionsPage() {
           Error cadena: {errorChain}
         </p>
       )}
+      {activeTab === "ivSmile" ? (
+        <div className="options-section" style={{ marginTop: "0.35rem" }}>
+          <div className="options-section-title">Sonrisa IV</div>
+          {!selectedUnderlying.trim() ? (
+            <p className="msg-muted">Elegí un activo para ver la curva.</p>
+          ) : ivSmileLoading ? (
+            <p className="msg-muted">Cargando curva IV…</p>
+          ) : ivSmileErr ? (
+            <p role="alert">Error: {ivSmileErr}</p>
+          ) : (
+            <>
+              <div className="radar-toolbar options-toolbar" style={{ marginBottom: "0.65rem" }} role="toolbar" aria-label="Filtros sonrisa IV">
+                <label className="radar-toolbar__field">
+                  <span className="radar-toolbar__label">Vencimiento</span>
+                  <select
+                    className="radar-toolbar__select"
+                    value={smileExpiry}
+                    onChange={(ev) => setSmileExpiry(ev.target.value)}
+                    disabled={smileExpiryOptions.length === 0}
+                    aria-label="Vencimiento curva IV"
+                  >
+                    {smileExpiryOptions.length === 0 ? (
+                      <option value="">—</option>
+                    ) : null}
+                    {smileExpiryOptions.map((ex) => (
+                      <option key={ex} value={ex}>
+                        {formatExpiryMonthLabel(ex)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="radar-toolbar__field">
+                  <span className="radar-toolbar__label">Tipo</span>
+                  <select
+                    className="radar-toolbar__select"
+                    value={smileSide}
+                    onChange={(ev) => setSmileSide(ev.target.value as "CALL" | "PUT")}
+                    aria-label="Tipo opción curva IV"
+                  >
+                    <option value="CALL">CALL</option>
+                    <option value="PUT">PUT</option>
+                  </select>
+                </label>
+              </div>
+              <p className="msg-muted" style={{ fontSize: "0.8rem", marginBottom: "0.5rem" }}>
+                IV según bid/ask/último de la cadena y spot del servidor (GET /options/iv-smile). Sin batch de puntas IOL.
+              </p>
+              <IvSmileSvgChart points={ivSmileActivePoints} spot={effectivePanelSpot} avgIvPct={ivSmileActiveAvgIvPct} />
+              <div className="table-wrap" style={{ marginTop: "0.65rem" }}>
+                <table className="strategy-opportunities-table">
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "right" }}>Strike</th>
+                      <th style={{ textAlign: "right" }}>IV %</th>
+                      <th style={{ textAlign: "right" }} title="Diferencia relativa vs IV promedio del mismo vencimiento y tipo (±10 % = cara / barata)">
+                        Dif. IV
+                      </th>
+                      <th style={{ width: "6.5rem" }} />
+                      <th>Moneyness</th>
+                      <th>Especie</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ivSmileActivePoints.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="msg-muted">
+                          Sin datos para esta combinación.
+                        </td>
+                      </tr>
+                    ) : (
+                      ivSmileActivePoints.map((p) => {
+                        const dp = p.iv_diff_vs_avg_pct;
+                        const diffCls = ivSmileDiffCellClass(dp);
+                        return (
+                          <tr key={`${p.symbol}-${p.strike}-${p.iv_pct}`}>
+                            <td style={{ textAlign: "right" }}>{formatNumber(p.strike, 2)}</td>
+                            <td style={{ textAlign: "right" }}>{`${formatNumber(p.iv_pct, 1)}%`}</td>
+                            <td style={{ textAlign: "right" }} className={diffCls}>
+                              {formatIvSmileDiffPct(dp)}
+                            </td>
+                            <td>
+                              {p.rich_iv ? (
+                                <span className="options-iv-smile-pill options-iv-smile-pill--rich">Cara</span>
+                              ) : p.cheap_iv ? (
+                                <span className="options-iv-smile-pill options-iv-smile-pill--cheap">Barata</span>
+                              ) : null}
+                            </td>
+                            <td>{p.moneyness}</td>
+                            <td>
+                              <code style={{ fontSize: "0.78rem" }}>{p.symbol?.trim() ? p.symbol : "—"}</code>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="options-iv-smile-opps" style={{ marginTop: "1rem" }}>
+                <div className="options-section-title">Oportunidades IV</div>
+                <p className="msg-muted" style={{ fontSize: "0.78rem", marginBottom: "0.45rem" }}>
+                  CALL/PUT con IV cara vs su curva (rich_iv), volumen &gt; 0 y bid &gt; 0 en cadena. Orden: mayor diferencia vs promedio del grupo.
+                </p>
+                <div className="table-wrap">
+                  <table className="strategy-opportunities-table">
+                    <thead>
+                      <tr>
+                        <th>Vencimiento</th>
+                        <th>Especie</th>
+                        <th style={{ textAlign: "right" }}>Strike</th>
+                        <th style={{ textAlign: "right" }}>IV %</th>
+                        <th style={{ textAlign: "right" }}>Dif. vs prom.</th>
+                        <th style={{ textAlign: "right" }}>Prima (bid)</th>
+                        <th style={{ textAlign: "right" }} title="Distancia strike vs spot (panel / cadena)">
+                          Dist. spot %
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ivSmileRichOpportunities.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="msg-muted">
+                            Sin coincidencias con los filtros (o cargá cadena y sonrisa para este activo).
+                          </td>
+                        </tr>
+                      ) : (
+                        ivSmileRichOpportunities.map((r, i) => (
+                          <tr key={`${r.expiration}-${r.symbol}-${r.strike}-${i}`}>
+                            <td>{formatExpiryMonthLabel(r.expiration)}</td>
+                            <td>
+                              <code style={{ fontSize: "0.78rem" }}>{r.symbol}</code>
+                            </td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(r.strike, 2)}</td>
+                            <td style={{ textAlign: "right" }}>{`${formatNumber(r.iv_pct, 1)}%`}</td>
+                            <td style={{ textAlign: "right" }} className="options-iv-smile-diff-rich">
+                              {formatIvSmileDiffPct(r.iv_diff_vs_avg_pct)}
+                            </td>
+                            <td style={{ textAlign: "right" }}>$ {formatNumber(r.bid, 2)}</td>
+                            <td style={{ textAlign: "right" }}>
+                              {r.distPct !== null ? `${formatNumber(r.distPct, 1)}%` : "—"}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
       {activeTab === "panel" && emptyHintPanel && <p>{emptyHintPanel}</p>}
       {activeTab === "panel" && panelFilteredEmptyHint ? (
         <div className="msg-muted" style={{ marginTop: "0.35rem" }}>
@@ -2378,6 +2841,7 @@ export function OptionsPage() {
                     <option value="">Todas</option>
                     <option value="Bull Call Spread">Bull Call Spread</option>
                     <option value="Covered Call">Covered Call</option>
+                    <option value="CALL Descubierta">CALL Descubierta</option>
                     <option value="Cash Secured Put">Cash Secured Put</option>
                   </select>
                 </label>
@@ -2556,6 +3020,87 @@ export function OptionsPage() {
                                 </tr>
                               );
                               })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {strategiesFilter === "" || strategiesFilter === "CALL Descubierta" ? (
+                <div style={{ marginTop: "0.95rem" }}>
+                  <button
+                    type="button"
+                    className="strategy-collapsible-header"
+                    onClick={() => setShowNakedShortCall((v) => !v)}
+                    aria-expanded={showNakedShortCall}
+                  >
+                    <div className="strategy-collapsible-title">
+                      <span style={{ width: "1.15rem", display: "inline-block" }}>
+                        {showNakedShortCall ? "−" : "+"}
+                      </span>
+                      CALL Descubierta
+                    </div>
+                    <div className="strategy-collapsible-summary">
+                      {nakedShortCalls.length} oportunidades
+                    </div>
+                  </button>
+                  {showNakedShortCall ? (
+                    <div className="strategy-collapsible-body">
+                      <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.45rem", fontSize: "0.82rem" }}>
+                        Venta de call sin cobertura de acciones: prima = bid efectivo; métricas orientativas (sin margen
+                        ni griegas).
+                      </p>
+                      <span
+                        className="options-naked-call-risk-badge"
+                        title={OPTIONS_NAKED_CALL_RISK_TOOLTIP}
+                      >
+                        ⚠ Riesgo teórico ilimitado
+                      </span>
+                      {nakedShortCalls.length === 0 ? (
+                        <div className="msg-muted" style={{ marginTop: "0.5rem" }}>
+                          Sin calls con bid &gt; 0, spot &gt; 0 y días al vencimiento &gt; 0 en el feed actual.
+                        </div>
+                      ) : (
+                        <div className="table-wrap" style={{ marginTop: "0.55rem" }}>
+                          <table className="strategy-opportunities-table">
+                            <thead>
+                              <tr>
+                                <th>Vencimiento</th>
+                                <th style={{ textAlign: "right" }}>Strike</th>
+                                <th style={{ textAlign: "right" }}>Prima</th>
+                                <th style={{ textAlign: "right" }} title="Prima / spot × 100">
+                                  Prima %
+                                </th>
+                                <th style={{ textAlign: "right" }} title="(prima/strike)×(365/días)×100">
+                                  TNA %
+                                </th>
+                                <th style={{ textAlign: "right" }} title="Strike + prima">
+                                  Break-even
+                                </th>
+                                <th style={{ textAlign: "right" }} title="(strike − spot) / spot × 100">
+                                  Δ vs spot %
+                                </th>
+                                <th style={{ textAlign: "right" }}>Días</th>
+                                <th>Ticker</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {nakedShortCalls.map((x, idx) => (
+                                <tr key={`nsc-${x.expiryKey}-${x.strike}-${idx}`}>
+                                  <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
+                                  <td style={{ textAlign: "right" }}>{formatNumber(x.strike, 2)}</td>
+                                  <td style={{ textAlign: "right" }}>{formatNumber(x.prima, 2)}</td>
+                                  <td style={{ textAlign: "right" }}>{`${formatNumber(x.premiumPct, 2)}%`}</td>
+                                  <td style={{ textAlign: "right" }}>{`${formatNumber(x.tnaPct, 2)}%`}</td>
+                                  <td style={{ textAlign: "right" }}>{formatNumber(x.breakEven, 2)}</td>
+                                  <td style={{ textAlign: "right" }}>{`${formatNumber(x.distPct, 2)}%`}</td>
+                                  <td style={{ textAlign: "right" }}>{x.days !== null ? formatInteger(x.days) : "—"}</td>
+                                  <td>{fmtCell(x.symbol)}</td>
+                                </tr>
+                              ))}
                             </tbody>
                           </table>
                         </div>
