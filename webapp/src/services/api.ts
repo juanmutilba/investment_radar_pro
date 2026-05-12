@@ -824,6 +824,8 @@ export type OptionContractRow = {
   field_sources: Record<string, string>;
   /** True si el contrato pertenece al universo IOL (cadena operable IOL). */
   iol_universe?: boolean;
+  /** Origen efectivo de puntas (merge IOL + Allaria/Rava). */
+  bidask_source_mode?: "iol_live" | "allaria_fallback" | "rava_fallback" | "none" | null;
 };
 
 export interface OptionsChainResponse {
@@ -893,6 +895,36 @@ export async function fetchOptionsChain(underlying: string, enrichSources = fals
     spot_symbol: readOptionalChainStr(o.spot_symbol),
     enrich_sources: enrichSourcesFlag,
   };
+}
+
+/** Cotización individual IOL (batch) GET /options/quotes. */
+export type IolOptionQuotePayload = {
+  bid?: number | null;
+  ask?: number | null;
+  puntas?: unknown;
+  volume?: number | null;
+  cantidad_operaciones?: number | null;
+  fecha_hora?: string | null;
+  error?: string | null;
+};
+
+export async function fetchOptionsQuotes(symbols: string[]): Promise<Record<string, IolOptionQuotePayload>> {
+  const uniq = Array.from(new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean)));
+  if (!uniq.length) return {};
+  const q = new URLSearchParams({ symbols: uniq.join(",") });
+  const res = await fetch(`${BASE}/options/quotes?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object") {
+    throw new Error("Respuesta inesperada: options/quotes");
+  }
+  const o = data as { quotes?: unknown };
+  if (!o.quotes || typeof o.quotes !== "object" || Array.isArray(o.quotes)) {
+    throw new Error("Respuesta inesperada: options/quotes (quotes)");
+  }
+  return o.quotes as Record<string, IolOptionQuotePayload>;
 }
 
 /** Cadena GET /options/rava/chain (objeto anidado por vencimiento → calls/puts → strike). */

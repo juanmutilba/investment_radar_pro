@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   fetchLatestRadarArgentina,
   fetchOptionsChain,
+  fetchOptionsQuotes,
+  type IolOptionQuotePayload,
   type OptionContractRow,
   type OptionsChainResponse,
   type RadarRow,
@@ -172,10 +174,70 @@ function mergedContractTypeUpper(c: OptionContractRow): string {
   return (c.option_type ?? "").toString().trim().toUpperCase();
 }
 
-function mergedContractVolume(c: OptionContractRow): number {
+function mergedContractVolumeRaw(c: OptionContractRow): number {
   const v = c.volume;
   if (typeof v === "number" && Number.isFinite(v)) return v;
   return 0;
+}
+
+function getLiveQuote(
+  row: OptionContractRow,
+  quotes: Record<string, IolOptionQuotePayload>,
+): IolOptionQuotePayload | undefined {
+  const s = (row.symbol ?? "").trim().toUpperCase();
+  if (!s) return undefined;
+  return quotes[s];
+}
+
+function displayBid(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): number | null {
+  const q = getLiveQuote(row, quotes);
+  if (q && !q.error && typeof q.bid === "number" && Number.isFinite(q.bid) && q.bid > 0) return q.bid;
+  const m = typeof row.bid === "number" && Number.isFinite(row.bid) ? row.bid : null;
+  return m;
+}
+
+function displayAsk(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): number | null {
+  const q = getLiveQuote(row, quotes);
+  if (q && !q.error && typeof q.ask === "number" && Number.isFinite(q.ask) && q.ask > 0) return q.ask;
+  const m = typeof row.ask === "number" && Number.isFinite(row.ask) ? row.ask : null;
+  return m;
+}
+
+function displayVolume(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): number {
+  const q = getLiveQuote(row, quotes);
+  if (q && !q.error && q.volume !== undefined && q.volume !== null) {
+    const v = typeof q.volume === "number" ? q.volume : Number(q.volume);
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  return mergedContractVolumeRaw(row);
+}
+
+function displayOperations(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): number | null {
+  const q = getLiveQuote(row, quotes);
+  if (!q || q.error) return null;
+  if (q.cantidad_operaciones !== undefined && q.cantidad_operaciones !== null) {
+    const n =
+      typeof q.cantidad_operaciones === "number" ? q.cantidad_operaciones : Number(q.cantidad_operaciones);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function displayQuoteTime(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): string | null {
+  const q = getLiveQuote(row, quotes);
+  if (!q || q.error) return null;
+  const fh = q.fecha_hora;
+  if (typeof fh === "string" && fh.trim()) return fh.trim();
+  return null;
+}
+
+function iolLiveQuoteUsedForRow(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): boolean {
+  const q = getLiveQuote(row, quotes);
+  if (!q || q.error) return false;
+  const qb = typeof q.bid === "number" && Number.isFinite(q.bid) && q.bid > 0;
+  const qa = typeof q.ask === "number" && Number.isFinite(q.ask) && q.ask > 0;
+  const qv = q.volume !== undefined && q.volume !== null && Number.isFinite(Number(q.volume)) && Number(q.volume) > 0;
+  return qb || qa || qv;
 }
 
 function mergedContractLastSortKey(c: OptionContractRow): number {
@@ -281,6 +343,24 @@ function mergedMoneynessBadgeText(m: MoneynessKind): string {
   }
 }
 
+/** Badge BA: cotización individual IOL vs merge cadena. */
+function displayBaSourceBadge(c: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): { label: string; title: string } {
+  if (iolLiveQuoteUsedForRow(c, quotes)) {
+    return { label: "IOL LIVE", title: "Datos desde GET /Titulos/.../Cotizacion (IOL) para esta especie" };
+  }
+  const m = (c.bidask_source_mode ?? "").trim();
+  switch (m) {
+    case "iol_live":
+      return { label: "IOL", title: "Puntas desde cadena/merge IOL" };
+    case "allaria_fallback":
+      return { label: "ALL", title: "Puntas desde Allaria" };
+    case "rava_fallback":
+      return { label: "RAV", title: "Puntas desde Rava" };
+    default:
+      return { label: "—", title: "Sin bid/ask útiles" };
+  }
+}
+
 type OptionTypeFilter = "all" | "CALL" | "PUT";
 type PanelSortMode = "expiry_type_strike" | "symbol" | "volume_desc" | "last_desc";
 
@@ -295,6 +375,9 @@ export function OptionsPage() {
   const [onlyWithVolume, setOnlyWithVolume] = useState(false);
   const [onlyWithTrades, setOnlyWithTrades] = useState(false);
   const [onlyAtm, setOnlyAtm] = useState(false);
+  /** Si true, la cadena GET /options/chain incluye merge Allaria/Rava (más lento). */
+  const [enrichChainSources, setEnrichChainSources] = useState(true);
+  const [showBidAskSource, setShowBidAskSource] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>("panel");
   const [strategyType, setStrategyType] = useState<StrategyType>("Bull Call Spread");
   const [strategiesFilter, setStrategiesFilter] = useState<StrategiesFilter>("");
@@ -303,10 +386,14 @@ export function OptionsPage() {
   const [showCoveredCall, setShowCoveredCall] = useState(false);
   const [selectedLegs, setSelectedLegs] = useState<StrategyLeg[]>([]);
   const [mergedChain, setMergedChain] = useState<OptionsChainResponse | null>(null);
-  const [loadingChain, setLoadingChain] = useState(true);
+  const [loadingChain, setLoadingChain] = useState(false);
   const [errorChain, setErrorChain] = useState<string | null>(null);
+  const [hasRequestedChain, setHasRequestedChain] = useState(false);
   /** Invalida respuestas viejas (cambio de activo, desmontaje, StrictMode). */
   const optionsChainReqRef = useRef(0);
+  const iolQuotesReqRef = useRef(0);
+  const iolQuoteSymbolListRef = useRef<string[]>([]);
+  const [iolQuotes, setIolQuotes] = useState<Record<string, IolOptionQuotePayload>>({});
   const [loadingUnderlyingContext, setLoadingUnderlyingContext] = useState(false);
   const [underlyingSignal, setUnderlyingSignal] = useState<string | null>(null);
   const [underlyingTrendRaw, setUnderlyingTrendRaw] = useState<unknown>(null);
@@ -329,35 +416,17 @@ export function OptionsPage() {
   const underlyingRadarSymbol = selectedUnderlyingMeta.radarTicker;
 
   useEffect(() => {
-    const reqId = ++optionsChainReqRef.current;
-    setLoadingChain(true);
+    setMergedChain(null);
+    setHasRequestedChain(false);
     setErrorChain(null);
-    console.log("[OPTIONS_FRONT] fetch chain", selectedUnderlying);
-    fetchOptionsChain(selectedUnderlying, false)
-      .then((res) => {
-        if (reqId !== optionsChainReqRef.current) return;
-        setMergedChain(res);
-      })
-      .catch((e: unknown) => {
-        if (reqId !== optionsChainReqRef.current) return;
-        setErrorChain(e instanceof Error ? e.message : String(e));
-        setMergedChain(null);
-      })
-      .finally(() => {
-        if (reqId !== optionsChainReqRef.current) return;
-        setLoadingChain(false);
-      });
-    return () => {
-      optionsChainReqRef.current += 1;
-    };
+    setIolQuotes({});
+    iolQuotesReqRef.current += 1;
+    setSelectedExpiry("");
+    setOptionTypeFilter("all");
   }, [selectedUnderlying]);
 
   useEffect(() => {
     setManualSpotInput("");
-  }, [selectedUnderlying]);
-
-  useEffect(() => {
-    setSelectedExpiry("");
   }, [selectedUnderlying]);
 
   // Estrategias usan la misma cadena que el Panel: mergedChain (GET /options/chain).
@@ -432,16 +501,18 @@ export function OptionsPage() {
   }, [underlyingTrendLabel]);
 
   const emptyHintPanel = useMemo(() => {
+    if (!hasRequestedChain) return null;
     if (loadingChain || errorChain) return null;
     if ((mergedChain?.contracts.length ?? 0) === 0) return "Sin contratos para este subyacente.";
     return null;
-  }, [loadingChain, errorChain, mergedChain]);
+  }, [hasRequestedChain, loadingChain, errorChain, mergedChain]);
 
   const emptyHintStrategies = useMemo(() => {
+    if (!hasRequestedChain) return null;
     if (loadingChain || errorChain) return null;
     if ((mergedChain?.contracts.length ?? 0) === 0) return "Sin contratos para este subyacente.";
     return null;
-  }, [loadingChain, errorChain, mergedChain]);
+  }, [hasRequestedChain, loadingChain, errorChain, mergedChain]);
 
   const expiryOptions = useMemo(() => {
     const set = new Set<string>();
@@ -495,7 +566,7 @@ export function OptionsPage() {
     let withTrades = 0;
     let withAtm = 0;
     for (const c of mergedChain?.contracts ?? []) {
-      const vol = typeof c.volume === "number" && Number.isFinite(c.volume) ? c.volume : 0;
+      const vol = displayVolume(c, iolQuotes);
       if (vol > 0) withVolume += 1;
       const last = typeof c.last === "number" && Number.isFinite(c.last) ? c.last : 0;
       if (last > 0) withTrades += 1;
@@ -503,7 +574,7 @@ export function OptionsPage() {
       if (m === "ATM") withAtm += 1;
     }
     return { withVolume, withTrades, withAtm };
-  }, [mergedChain, effectivePanelSpot]);
+  }, [mergedChain, effectivePanelSpot, iolQuotes]);
 
   const mergedFilteredContracts = useMemo(() => {
     const list = mergedChain?.contracts ?? [];
@@ -520,7 +591,7 @@ export function OptionsPage() {
         const t = mergedContractTypeUpper(c);
         if (!t.includes("PUT")) return false;
       }
-      if (hideZeroVolume && mergedContractVolume(c) <= 0) return false;
+      if (hideZeroVolume && displayVolume(c, iolQuotes) <= 0) return false;
       return true;
     });
     return filtered.slice().sort((a, b) => {
@@ -531,8 +602,8 @@ export function OptionsPage() {
           return sortMergedDefault(a, b);
         }
         case "volume_desc": {
-          const va = mergedContractVolume(a);
-          const vb = mergedContractVolume(b);
+          const va = displayVolume(a, iolQuotes);
+          const vb = displayVolume(b, iolQuotes);
           if (vb !== va) return vb - va;
           return tieBreakExpiryTypeStrike(a, b);
         }
@@ -546,7 +617,77 @@ export function OptionsPage() {
           return sortMergedDefault(a, b);
       }
     });
-  }, [mergedChain, selectedExpiry, optionTypeFilter, hideZeroVolume, panelSort]);
+  }, [mergedChain, selectedExpiry, optionTypeFilter, hideZeroVolume, panelSort, iolQuotes]);
+
+  const iolQuoteSymbolList = useMemo(
+    () =>
+      mergedFilteredContracts
+        .slice(0, 28)
+        .map((c) => (c.symbol ?? "").trim().toUpperCase())
+        .filter(Boolean),
+    [mergedFilteredContracts],
+  );
+
+  const iolQuoteKey = iolQuoteSymbolList.join("|");
+
+  iolQuoteSymbolListRef.current = iolQuoteSymbolList;
+
+  const loadChain = useCallback(() => {
+    const reqId = ++optionsChainReqRef.current;
+    iolQuotesReqRef.current += 1;
+    setLoadingChain(true);
+    setErrorChain(null);
+    setIolQuotes({});
+    setHasRequestedChain(true);
+    fetchOptionsChain(selectedUnderlying, enrichChainSources)
+      .then((res) => {
+        if (reqId !== optionsChainReqRef.current) return;
+        setMergedChain(res);
+      })
+      .catch((e: unknown) => {
+        if (reqId !== optionsChainReqRef.current) return;
+        setErrorChain(e instanceof Error ? e.message : String(e));
+        setMergedChain(null);
+      })
+      .finally(() => {
+        if (reqId !== optionsChainReqRef.current) return;
+        setLoadingChain(false);
+      });
+  }, [selectedUnderlying, enrichChainSources]);
+
+  const refreshVisibleQuotes = useCallback(() => {
+    const syms = iolQuoteSymbolListRef.current;
+    if (!mergedChain || syms.length === 0 || !chainIsIolPrimary) return;
+    const req = ++iolQuotesReqRef.current;
+    fetchOptionsQuotes(syms)
+      .then((data) => {
+        if (req !== iolQuotesReqRef.current) return;
+        setIolQuotes(data);
+      })
+      .catch(() => {
+        if (req !== iolQuotesReqRef.current) return;
+        setIolQuotes({});
+      });
+  }, [mergedChain, chainIsIolPrimary]);
+
+  useEffect(() => {
+    if (!hasRequestedChain || !mergedChain || loadingChain) return;
+    if (!enrichChainSources || !chainIsIolPrimary) return;
+    if (iolQuoteSymbolList.length === 0) return;
+    const req = ++iolQuotesReqRef.current;
+    const tmo = window.setTimeout(() => {
+      fetchOptionsQuotes(iolQuoteSymbolList)
+        .then((data) => {
+          if (req !== iolQuotesReqRef.current) return;
+          setIolQuotes(data);
+        })
+        .catch(() => {
+          if (req !== iolQuotesReqRef.current) return;
+          setIolQuotes({});
+        });
+    }, 280);
+    return () => window.clearTimeout(tmo);
+  }, [hasRequestedChain, mergedChain, loadingChain, enrichChainSources, chainIsIolPrimary, iolQuoteKey, activeTab]);
 
   const panelFilteredEmptyHint = useMemo(() => {
     if (loadingChain || errorChain) return null;
@@ -554,20 +695,20 @@ export function OptionsPage() {
     if (raw.length === 0) return null;
     if (mergedFilteredContracts.length > 0) return null;
     if (hideZeroVolume) {
-      const allVolZero = raw.every((c) => mergedContractVolume(c) <= 0);
+      const allVolZero = raw.every((c) => displayVolume(c, iolQuotes) <= 0);
       if (allVolZero) {
         return "No hay contratos con volumen > 0 para estos filtros. Desactivá «Ocultar volumen 0» para ver la cadena.";
       }
     }
     return "Sin resultados con los filtros actuales.";
-  }, [loadingChain, errorChain, mergedChain, mergedFilteredContracts.length, hideZeroVolume]);
+  }, [loadingChain, errorChain, mergedChain, mergedFilteredContracts.length, hideZeroVolume, iolQuotes]);
 
   const volumeFilterHidesAllIolRows = useMemo(() => {
     if (!hideZeroVolume) return false;
     const raw = mergedChain?.contracts ?? [];
     if (raw.length === 0) return false;
-    return raw.every((c) => mergedContractVolume(c) <= 0);
-  }, [hideZeroVolume, mergedChain]);
+    return raw.every((c) => displayVolume(c, iolQuotes) <= 0);
+  }, [hideZeroVolume, mergedChain, iolQuotes]);
 
   const strategyRows = useMemo((): FlatRow[] => {
     const rows: FlatRow[] = [];
@@ -586,10 +727,12 @@ export function OptionsPage() {
         raw: {
           simbolo: c.symbol,
           expiry_date: c.expiry,
-          bid: c.bid,
-          ask: c.ask,
+          bid: displayBid(c, iolQuotes),
+          ask: displayAsk(c, iolQuotes),
           ultimo: c.last,
-          volumen_float: c.volume,
+          volumen_float: displayVolume(c, iolQuotes),
+          cantidad_operaciones: displayOperations(c, iolQuotes),
+          quote_fecha_hora: displayQuoteTime(c, iolQuotes),
           open_interest: c.open_interest,
           source: c.source,
           field_sources: c.field_sources,
@@ -598,7 +741,7 @@ export function OptionsPage() {
     }
     rows.sort((a, b) => a.strike - b.strike);
     return rows;
-  }, [mergedChain, selectedUnderlying]);
+  }, [mergedChain, selectedUnderlying, iolQuotes]);
 
   const filteredRows = useMemo(() => {
     return strategyRows.filter((r) => {
@@ -798,7 +941,7 @@ export function OptionsPage() {
             className="radar-toolbar__select"
             value={selectedExpiry}
             onChange={(ev) => setSelectedExpiry(ev.target.value)}
-            disabled={expiryOptions.length === 0}
+            disabled={!hasRequestedChain || expiryOptions.length === 0}
             aria-label="Vencimiento"
           >
             <option value="">Todos los vencimientos</option>
@@ -823,6 +966,28 @@ export function OptionsPage() {
                 <option value="CALL">CALL</option>
                 <option value="PUT">PUT</option>
               </select>
+            </label>
+            <label className="radar-toolbar__field" style={{ flexDirection: "row", alignItems: "center", gap: "0.45rem" }}>
+              <input
+                type="checkbox"
+                checked={enrichChainSources}
+                onChange={(ev) => setEnrichChainSources(ev.target.checked)}
+                aria-label="Traer puntas reales IOL y enriquecer cadena con Allaria y Rava"
+              />
+              <span className="radar-toolbar__label" style={{ margin: 0 }}>
+                Traer puntas reales IOL
+              </span>
+            </label>
+            <label className="radar-toolbar__field" style={{ flexDirection: "row", alignItems: "center", gap: "0.45rem" }}>
+              <input
+                type="checkbox"
+                checked={showBidAskSource}
+                onChange={(ev) => setShowBidAskSource(ev.target.checked)}
+                aria-label="Mostrar columna origen de bid ask"
+              />
+              <span className="radar-toolbar__label" style={{ margin: 0 }}>
+                Origen BA
+              </span>
             </label>
             <label className="radar-toolbar__field" style={{ flexDirection: "row", alignItems: "center", gap: "0.45rem" }}>
               <input
@@ -896,6 +1061,32 @@ export function OptionsPage() {
               </button>
             </div>
           </div>
+        ) : null}
+      </div>
+
+      <div style={{ marginTop: "0.5rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+        <div className="options-chain-actions" style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+          {!hasRequestedChain && !loadingChain ? (
+            <p className="msg-muted" style={{ margin: 0, flex: "1 1 14rem" }}>
+              Seleccioná un activo arriba y cargá la cadena de opciones.
+            </p>
+          ) : null}
+          <button type="button" className="options-filter-toggle" onClick={() => void loadChain()} disabled={loadingChain}>
+            Cargar cadena
+          </button>
+          <button
+            type="button"
+            className="options-filter-toggle"
+            onClick={() => void refreshVisibleQuotes()}
+            disabled={!mergedChain || loadingChain || !chainIsIolPrimary || iolQuoteSymbolList.length === 0}
+          >
+            Actualizar puntas visibles
+          </button>
+        </div>
+        {activeTab === "panel" ? (
+          <p className="msg-muted" style={{ margin: 0, fontSize: "0.8rem" }}>
+            Consulta IOL por especie solo para las filas visibles.
+          </p>
         ) : null}
       </div>
 
@@ -980,45 +1171,47 @@ export function OptionsPage() {
 
       <div className="msg-muted" style={{ marginTop: "0.25rem" }}>
         <div>
-          {chainIsIolPrimary
-            ? mergedChain?.enrich_sources === true
-              ? "Cadena operable desde IOL (Allaria/Rava enriquecen campos por contrato). "
-              : "Cadena operable desde IOL (enriquecimiento Allaria/Rava desactivado). "
-            : "Cadena desde el backend (Allaria + Rava). "}
-          {mergedChain && !loadingChain && !errorChain ? (
-            <span>
-              <strong>Subyacente (normalizado):</strong> {mergedChain.underlying}
-              {" — "}
-              <strong>Spot subyacente:</strong>{" "}
-              {effectivePanelSpot !== null && effectivePanelSpot > 0 ? (
-                <>$ {formatNumber(effectivePanelSpot, 2)}</>
-              ) : (
-                <em>Precio subyacente no disponible</em>
-              )}
-              {" — "}
-              <strong>Fuente:</strong>{" "}
-              {parsedManualSpot !== null ? "manual" : (mergedChain.spot_source ?? "—")}
-              {mergedChain.spot_symbol ? (
-                <>
-                  {" "}
-                  (<code>{mergedChain.spot_symbol}</code>)
-                </>
-              ) : null}
-              {" — "}
-              <strong>Total contratos:</strong> {mergedChain.total}
-              {activeTab === "panel" ? (
-                <>
-                  {" — "}
-                  <strong>Filtrados:</strong> {mergedFilteredContracts.length}
-                  {hideZeroVolume ? (
-                    <>
-                      {" — "}
-                      <em>Ocultando volumen 0</em>
-                    </>
-                  ) : null}
-                </>
-              ) : null}
-            </span>
+          {hasRequestedChain && mergedChain && !loadingChain && !errorChain ? (
+            <>
+              {chainIsIolPrimary
+                ? mergedChain.enrich_sources === true
+                  ? "Cadena operable desde IOL (Allaria/Rava en cadena + puntas IOL por especie si está activo). "
+                  : "Cadena operable desde IOL (sin merge Allaria/Rava en cadena). "
+                : "Cadena desde el backend (Allaria + Rava). "}
+              <span>
+                <strong>Subyacente (normalizado):</strong> {mergedChain.underlying}
+                {" — "}
+                <strong>Spot subyacente:</strong>{" "}
+                {effectivePanelSpot !== null && effectivePanelSpot > 0 ? (
+                  <>$ {formatNumber(effectivePanelSpot, 2)}</>
+                ) : (
+                  <em>Precio subyacente no disponible</em>
+                )}
+                {" — "}
+                <strong>Fuente:</strong>{" "}
+                {parsedManualSpot !== null ? "manual" : (mergedChain.spot_source ?? "—")}
+                {mergedChain.spot_symbol ? (
+                  <>
+                    {" "}
+                    (<code>{mergedChain.spot_symbol}</code>)
+                  </>
+                ) : null}
+                {" — "}
+                <strong>Total contratos:</strong> {mergedChain.total}
+                {activeTab === "panel" ? (
+                  <>
+                    {" — "}
+                    <strong>Filtrados:</strong> {mergedFilteredContracts.length}
+                    {hideZeroVolume ? (
+                      <>
+                        {" — "}
+                        <em>Ocultando volumen 0</em>
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
+              </span>
+            </>
           ) : null}
         </div>
         {activeTab === "strategies" ? (
@@ -1029,7 +1222,7 @@ export function OptionsPage() {
             ) : (
               <strong>Estrategias calculadas sobre fallback Allaria/Rava</strong>
             )}
-            {!loadingChain && !errorChain && (strategyRows.length > 0 || (mergedChain?.contracts.length ?? 0) > 0) ? (
+            {!loadingChain && !errorChain && hasRequestedChain && (strategyRows.length > 0 || (mergedChain?.contracts.length ?? 0) > 0) ? (
               <div style={{ marginTop: "0.35rem" }}>
                 <strong>Total contratos:</strong> {mergedChain?.total ?? strategyRows.length}
                 {expirySummary.length > 0 ? (
@@ -1050,7 +1243,7 @@ export function OptionsPage() {
         ) : null}
       </div>
 
-      {loadingChain && <p>Cargando cadena…</p>}
+      {loadingChain && hasRequestedChain ? <p>Cargando cadena…</p> : null}
       {errorChain && (
         <p role="alert">
           Error cadena: {errorChain}
@@ -1080,8 +1273,10 @@ export function OptionsPage() {
                 <th>Moneyness</th>
                 <th>Bid</th>
                 <th>Ask</th>
+                {showBidAskSource ? <th className="options-ba-col">BA</th> : null}
                 <th>Último</th>
-                <th>Volumen</th>
+                <th title="Volumen (cadena o cotización IOL)">Volumen</th>
+                <th>Op.</th>
                 <th>OI</th>
                 <th>Fuente</th>
               </tr>
@@ -1089,6 +1284,13 @@ export function OptionsPage() {
             <tbody>
               {mergedFilteredContracts.map((c, i) => {
                 const m = getMoneyness(c, effectivePanelSpot);
+                const bid = displayBid(c, iolQuotes);
+                const ask = displayAsk(c, iolQuotes);
+                const vol = displayVolume(c, iolQuotes);
+                const ops = displayOperations(c, iolQuotes);
+                const qt = displayQuoteTime(c, iolQuotes);
+                const live = iolLiveQuoteUsedForRow(c, iolQuotes);
+                const ba = displayBaSourceBadge(c, iolQuotes);
                 return (
                   <tr key={`${c.symbol}-${i}`} className={mergedMoneynessRowClass(m)}>
                     <td>{fmtCell(c.symbol)}</td>
@@ -1098,10 +1300,23 @@ export function OptionsPage() {
                     <td>
                       <span className={mergedMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
                     </td>
-                    <td style={{ textAlign: "right" }}>{formatNumber(c.bid, 2)}</td>
-                    <td style={{ textAlign: "right" }}>{formatNumber(c.ask, 2)}</td>
+                    <td style={{ textAlign: "right" }}>{formatNumber(bid, 2)}</td>
+                    <td style={{ textAlign: "right" }}>{formatNumber(ask, 2)}</td>
+                    {showBidAskSource ? (
+                      <td className="options-ba-col">
+                        <span
+                          className={`options-ba-badge${live ? " options-ba-badge-iol-live" : ""}`}
+                          title={ba.title}
+                        >
+                          {ba.label}
+                        </span>
+                      </td>
+                    ) : null}
                     <td style={{ textAlign: "right" }}>{formatNumber(c.last, 2)}</td>
-                    <td style={{ textAlign: "right" }}>{formatInteger(c.volume)}</td>
+                    <td style={{ textAlign: "right" }} title={qt ?? undefined}>
+                      {formatInteger(vol)}
+                    </td>
+                    <td style={{ textAlign: "right" }}>{ops === null ? "—" : formatInteger(ops)}</td>
                     <td style={{ textAlign: "right" }}>{formatInteger(c.open_interest)}</td>
                     <td>{fmtCell(c.source)}</td>
                   </tr>
@@ -1114,7 +1329,7 @@ export function OptionsPage() {
 
       {activeTab === "strategies" ? (
         <div>
-          {loadingChain && <p>Cargando cadena…</p>}
+          {loadingChain && hasRequestedChain ? <p>Cargando cadena…</p> : null}
           {errorChain && (
             <p role="alert">
               Error: {errorChain}
