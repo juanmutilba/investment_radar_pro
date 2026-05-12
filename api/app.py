@@ -499,6 +499,18 @@ def options_chain(
     spot = spot_info.get("spot")
     spot_source = spot_info.get("spot_source")
     spot_symbol = spot_info.get("spot_symbol")
+    print(
+        "[OPTIONS_SPOT]"
+        f" underlying={underlying!r}"
+        f" spot={spot!r}"
+        f" source={spot_source!r}"
+        f" cache_hit={spot_info.get('spot_cache_hit')!r}"
+        f" fetch_ms={spot_info.get('spot_fetch_ms')!r}"
+        f" symbol_used={spot_info.get('spot_symbol_used')!r}"
+        f" updated_at={spot_info.get('spot_updated_at')!r}"
+        f" detail={spot_info.get('spot_source_detail')!r}",
+        flush=True,
+    )
     contracts_sorted = sorted(
         chain.contracts,
         key=lambda c: (
@@ -551,7 +563,7 @@ def options_chain(
         f"spot={spot!r} spot_symbol={spot_symbol!r} total={len(items)} enrich_sources={enrich_sources}",
         flush=True,
     )
-    return {
+    out: dict[str, Any] = {
         "underlying": chain.underlying,
         "spot": spot,
         "spot_source": spot_source,
@@ -560,6 +572,20 @@ def options_chain(
         "enrich_sources": enrich_sources,
         "contracts": items,
     }
+    for k in (
+        "spot_source_detail",
+        "spot_cache_hit",
+        "spot_fetch_ms",
+        "spot_symbol_used",
+        "spot_updated_at",
+    ):
+        if k not in spot_info:
+            continue
+        v = spot_info[k]
+        if v is None:
+            continue
+        out[k] = v
+    return out
 
 
 @app.get("/options/quotes")

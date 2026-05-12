@@ -835,8 +835,42 @@ export interface OptionsChainResponse {
   spot?: number | null;
   spot_source?: string | null;
   spot_symbol?: string | null;
+  /** Detalle de ruta de resolución (opcional). */
+  spot_source_detail?: string | null;
+  /** True si el precio subyacente salió de caché RAM de cotización IOL (misma corrida). */
+  spot_cache_hit?: boolean | null;
+  /** Milisegundos de resolución de spot en el worker (aprox.). */
+  spot_fetch_ms?: number | null;
+  /** Símbolo efectivo usado para el spot (p. ej. ticker BYMA). */
+  spot_symbol_used?: string | null;
+  /**
+   * Marca temporal del spot si el proveedor la expone (ISO).
+   * También se rellena `spot_as_of` desde alias legacy en JSON.
+   */
+  spot_updated_at?: string | null;
+  /**
+   * Si el backend envía marca temporal del spot (opcional; nombres alternativos se mapean aquí).
+   */
+  spot_as_of?: string | null;
   /** Si el backend enriqueció con Allaria/Rava (query enrich_sources). */
   enrich_sources?: boolean;
+}
+
+function readOptionalChainBool(v: unknown): boolean | undefined {
+  if (v === true) return true;
+  if (v === false) return false;
+  return undefined;
+}
+
+function readOptionalChainNumber(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const t = v.trim().replace(",", ".");
+    if (!t) return null;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
 
 function readOptionalChainSpot(v: unknown): number | null | undefined {
@@ -856,6 +890,14 @@ function readOptionalChainStr(v: unknown): string | null | undefined {
   if (v === undefined) return undefined;
   if (v === null) return null;
   if (typeof v === "string") return v;
+  return null;
+}
+
+function firstNonEmptyChainStr(...candidates: unknown[]): string | null {
+  for (const c of candidates) {
+    const s = readOptionalChainStr(c);
+    if (typeof s === "string" && s.trim()) return s.trim();
+  }
   return null;
 }
 
@@ -879,6 +921,14 @@ export async function fetchOptionsChain(underlying: string, enrichSources = fals
     spot?: unknown;
     spot_source?: unknown;
     spot_symbol?: unknown;
+    spot_source_detail?: unknown;
+    spot_cache_hit?: unknown;
+    spot_fetch_ms?: unknown;
+    spot_symbol_used?: unknown;
+    spot_as_of?: unknown;
+    spot_updated_at?: unknown;
+    spot_time?: unknown;
+    as_of?: unknown;
     enrich_sources?: unknown;
   };
   if (typeof o.underlying !== "string" || typeof o.total !== "number" || !Array.isArray(o.contracts)) {
@@ -886,6 +936,8 @@ export async function fetchOptionsChain(underlying: string, enrichSources = fals
   }
   const enrichSourcesFlag =
     o.enrich_sources === true || o.enrich_sources === false ? o.enrich_sources : false;
+  const spot_as_of = firstNonEmptyChainStr(o.spot_as_of, o.spot_updated_at, o.spot_time, o.as_of);
+  const spot_updated_at = firstNonEmptyChainStr(o.spot_updated_at, o.spot_as_of, o.spot_time, o.as_of);
   return {
     underlying: o.underlying,
     total: o.total,
@@ -893,6 +945,12 @@ export async function fetchOptionsChain(underlying: string, enrichSources = fals
     spot: readOptionalChainSpot(o.spot),
     spot_source: readOptionalChainStr(o.spot_source),
     spot_symbol: readOptionalChainStr(o.spot_symbol),
+    spot_source_detail: firstNonEmptyChainStr(o.spot_source_detail),
+    spot_cache_hit: readOptionalChainBool(o.spot_cache_hit) ?? null,
+    spot_fetch_ms: readOptionalChainNumber(o.spot_fetch_ms),
+    spot_symbol_used: firstNonEmptyChainStr(o.spot_symbol_used),
+    spot_updated_at: spot_updated_at ?? null,
+    spot_as_of: spot_as_of ?? null,
     enrich_sources: enrichSourcesFlag,
   };
 }

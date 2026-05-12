@@ -33,6 +33,88 @@ OPTIONS_IOL_QUOTE_CACHE_TTL_SECONDS = float(os.environ.get("OPTIONS_IOL_QUOTE_CA
 _CACHE_LOCK = threading.Lock()
 
 
+def _options_quote_verbose_debug_enabled() -> bool:
+    return (os.environ.get("OPTIONS_IOL_QUOTE_VERBOSE", "") or "").strip() == "1"
+
+
+def _log_options_quote_debug(
+    sym: str,
+    *,
+    status_label: str,
+    http_status: int,
+    data: dict[str, Any] | None,
+    q: IolOptionQuote,
+) -> None:
+    """Diagnóstico /options/quotes: solo con OPTIONS_IOL_QUOTE_VERBOSE=1."""
+    if not _options_quote_verbose_debug_enabled():
+        return
+    keys_top: list[str] = []
+    keys_sub: list[str] = []
+    bid_raw: Any = None
+    ask_raw: Any = None
+    ultimo_raw: Any = None
+    vol_raw: Any = None
+    ops_raw: Any = None
+    source_s: Any = None
+    as_of_s: Any = None
+    if isinstance(data, dict) and data:
+        keys_top = sorted(str(k) for k in data.keys())[:35]
+        for nest in ("cotizacion", "Cotizacion"):
+            sub = data.get(nest)
+            if isinstance(sub, dict):
+                keys_sub = sorted(str(k) for k in sub.keys())[:35]
+                break
+        row = _row_from_cotizacion_payload(data)
+        flat = _flatten_row(row)
+        keys_bid = (
+            "precioCompra",
+            "PrecioCompra",
+            "precioCompraD",
+            "bid",
+            "Bid",
+            "pCompra",
+            "precioCompraDinamico",
+            "PrecioCompraDinamico",
+        )
+        keys_ask = (
+            "precioVenta",
+            "PrecioVenta",
+            "precioVentaD",
+            "ask",
+            "Ask",
+            "pVenta",
+            "precioVentaDinamico",
+            "PrecioVentaDinamico",
+        )
+        bid_raw = _pick_first(flat, keys_bid)
+        ask_raw = _pick_first(flat, keys_ask)
+        ultimo_raw = _pick_first(
+            flat,
+            ("ultimoPrecio", "UltimoPrecio", "ultimo", "Ultimo", "last", "Last", "cierre", "Cierre"),
+        )
+        vol_raw = _pick_first(
+            flat,
+            ("volumenNominal", "VolumenNominal", "volumen", "Volumen", "volume", "Volume"),
+        )
+        ops_raw = _pick_first(
+            flat,
+            ("cantidadOperaciones", "CantidadOperaciones", "operaciones", "Operaciones"),
+        )
+        source_s = _pick_first(flat, ("source", "Source", "fuente", "Fuente", "mercado", "Mercado"))
+        as_of_s = _pick_first(flat, ("as_of", "AsOf", "fechaHora", "FechaHora", "fecha", "Fecha"))
+
+    print(
+        "[OPTIONS_QUOTE_DEBUG] "
+        f"symbol={sym!r} status={status_label!r} http_status={http_status} "
+        f"keys_top={keys_top!r} keys_cotizacion={keys_sub!r} "
+        f"bid_raw={bid_raw!r} ask_raw={ask_raw!r} bid_parsed={q.bid!r} ask_parsed={q.ask!r} "
+        f"ultimoPrecio={ultimo_raw!r} volumen={vol_raw!r} operaciones={ops_raw!r} "
+        f"source={source_s!r} as_of={as_of_s!r} error={q.error!r} "
+        f"parsed_volume={q.volume!r} parsed_ops={q.cantidad_operaciones!r}",
+        flush=True,
+    )
+
+
 @dataclass
 class IolOptionQuote:
     symbol: str
@@ -167,6 +249,7 @@ def fetch_iol_option_quote(symbol: str, *, timeout: float = 2.5) -> IolOptionQuo
             exp, cached = hit
             if now < exp:
                 _log("cache_hit symbol=%r ttl_left_s=%.2f" % (sym, exp - now))
+                _log_options_quote_debug(sym, status_label="cache_hit", http_status=0, data=None, q=cached)
                 return cached
 
     status, data, err = _http_get_cotizacion(sym, timeout=timeout)
@@ -184,6 +267,7 @@ def fetch_iol_option_quote(symbol: str, *, timeout: float = 2.5) -> IolOptionQuo
             error=err,
         )
         _log("symbol=%r status=%s ms=%.0f error=%r" % (sym, status, ms, err))
+        _log_options_quote_debug(sym, status_label=str(err), http_status=status, data=data, q=q)
     else:
         assert data is not None
         q = _parse_cotizacion_json(sym, data)
@@ -191,6 +275,7 @@ def fetch_iol_option_quote(symbol: str, *, timeout: float = 2.5) -> IolOptionQuo
             "symbol=%r status=%s ms=%.0f bid=%r ask=%r vol=%r ops=%r"
             % (sym, status, ms, q.bid, q.ask, q.volume, q.cantidad_operaciones)
         )
+        _log_options_quote_debug(sym, status_label="http_ok", http_status=status, data=data, q=q)
 
     with _CACHE_LOCK:
         _CACHE[sym] = (now + ttl, q)
@@ -236,6 +321,13 @@ def fetch_iol_option_quotes_batch(symbols: list[str], *, max_workers: int = 5) -
                     error=f"{type(ex).__name__}: {ex}",
                 )
                 _log("batch symbol=%r exception=%r" % (s, out[s].error))
+                _log_options_quote_debug(
+                    s,
+                    status_label=f"exception:{type(ex).__name__}",
+                    http_status=0,
+                    data=None,
+                    q=out[s],
+                )
     _log("batch done symbols=%s total_ms=%.0f" % (len(seen), (time.perf_counter() - t0) * 1000.0))
     return out
 

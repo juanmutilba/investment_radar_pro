@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import os
 import time
 from typing import Any, Literal
 
@@ -103,6 +104,20 @@ def configure_iol_credentials(username: str, password: str) -> None:
 
 def is_iol_enabled() -> bool:
     return _creds is not None and bool(_creds.username) and bool(_creds.password)
+
+
+def ensure_iol_credentials_from_env() -> None:
+    """
+    Si no hay credenciales en memoria, intenta ``IOL_USERNAME`` / ``IOL_PASSWORD`` desde ``os.environ``.
+
+    No hace nada si IOL ya está habilitado (evita reconfigurar en cada request y vaciar cachés).
+    """
+    if is_iol_enabled():
+        return
+    u = os.getenv("IOL_USERNAME", "").strip()
+    p = os.getenv("IOL_PASSWORD", "").strip()
+    if u and p:
+        configure_iol_credentials(u, p)
 
 
 def get_iol_token() -> str | None:
@@ -248,10 +263,13 @@ def read_iol_quote_ram_only(ticker: str) -> IolRamRead:
     return None
 
 
-def get_iol_quote(ticker: str) -> PriceQuote | None:
+def get_iol_quote(ticker: str, *, bypass_positive_ram_cache: bool = False) -> PriceQuote | None:
     """
     Retorna PriceQuote válido (precio > 0) si IOL está habilitado y responde; None en caso contrario.
     Caché en memoria por proceso: aciertos reutilizan quote; fallos reutilizan None sin HTTP.
+
+    ``bypass_positive_ram_cache`` (p. ej. spot de cadena de opciones): ignora aciertos en RAM positiva
+    y fuerza consulta HTTP para no arrastrar precio viejo mientras la cadena sigue en TTL cache.
     """
     t0 = time.perf_counter()
 
@@ -270,7 +288,7 @@ def get_iol_quote(ticker: str) -> PriceQuote | None:
     ram = read_iol_quote_ram_only(t)
     if ram == "negative":
         return None
-    if isinstance(ram, PriceQuote):
+    if not bypass_positive_ram_cache and isinstance(ram, PriceQuote):
         return ram
 
     tok = get_iol_token()
