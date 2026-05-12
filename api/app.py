@@ -489,7 +489,7 @@ def options_chain(
 ):
     """
     Cadena de opciones (IOL primario si hay contratos IOL; si no, merge Allaria + Rava).
-    No incluye raw completo; sí field_sources / iol_universe cuando aplica.
+    No incluye raw completo; sí field_sources / iol_universe / bidask_source_mode cuando aplica.
     """
     from services.options.normalizer import normalize_option_type
     from services.options.options_service import get_options_chain_with_spot
@@ -512,11 +512,15 @@ def options_chain(
     for c in contracts_sorted:
         fs: dict[str, Any] | None = None
         iol_u = False
+        ba_mode: str | None = None
         if isinstance(c.raw, dict):
             v = c.raw.get("field_sources")
             if isinstance(v, dict):
                 fs = dict(v)
             iol_u = bool(c.raw.get("iol_universe"))
+            bm = c.raw.get("bidask_source_mode")
+            if isinstance(bm, str) and bm.strip():
+                ba_mode = bm.strip()
         items.append(
             {
                 "underlying": c.underlying,
@@ -532,6 +536,7 @@ def options_chain(
                 "source": c.source,
                 "field_sources": fs if fs is not None else {},
                 "iol_universe": iol_u,
+                "bidask_source_mode": ba_mode,
             }
         )
 
@@ -555,6 +560,37 @@ def options_chain(
         "enrich_sources": enrich_sources,
         "contracts": items,
     }
+
+
+@app.get("/options/quotes")
+def options_quotes_batch(
+    symbols: str = Query(..., description="Especies coma-separadas (máx. 35). Ej: GFGC66553J,GFGC66554J"),
+):
+    """
+    Cotización individual IOL por especie (batch, pool 5 workers, caché RAM TTL corto en backend).
+    """
+    from services.market_data.providers.iol import ensure_iol_credentials_from_env, is_iol_enabled
+    from services.options.iol_quote_enrichment import fetch_iol_option_quotes_batch
+
+    ensure_iol_credentials_from_env()
+    if not is_iol_enabled():
+        raise HTTPException(status_code=503, detail="IOL no configurado (credenciales)")
+
+    parts = [p.strip().upper().replace(" ", "") for p in (symbols or "").split(",") if p.strip()]
+    if not parts:
+        raise HTTPException(status_code=400, detail="Query 'symbols' requerido (coma-separado)")
+    if len(parts) > 35:
+        raise HTTPException(status_code=400, detail="Máximo 35 símbolos por request")
+
+    t0 = time.perf_counter()
+    batch = fetch_iol_option_quotes_batch(parts, max_workers=5)
+    quotes_payload: dict[str, Any] = {k: v.to_api_dict() for k, v in batch.items()}
+    ms = (time.perf_counter() - t0) * 1000.0
+    print(
+        f"[OPTIONS_API_TIMING] quotes_batch_ms={ms:.1f} requested={len(parts)} returned={len(quotes_payload)}",
+        flush=True,
+    )
+    return {"quotes": quotes_payload}
 
 
 @app.get("/options/scrape/raw")

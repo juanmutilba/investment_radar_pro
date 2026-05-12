@@ -211,16 +211,62 @@ tr.option-row-otm td:first-child {
   border-left: 4px solid rgba(220, 38, 38, 0.65);
 }
 
+tr.moneyness-row-none td {
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+}
+
+tr.moneyness-row-none td:first-child {
+  border-left: 4px solid color-mix(in srgb, var(--text-muted) 45%, transparent);
+}
+
+.moneyness-badge {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.moneyness-badge.moneyness-itm {
+  color: rgba(22, 101, 52, 0.95);
+  background: rgba(34, 197, 94, 0.2);
+  border: 1px solid rgba(22, 163, 74, 0.35);
+}
+
+.moneyness-badge.moneyness-atm {
+  color: rgba(113, 63, 18, 0.98);
+  background: rgba(250, 204, 21, 0.35);
+  border: 1px solid rgba(202, 138, 4, 0.55);
+}
+
+.moneyness-badge.moneyness-otm {
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-panel) 88%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.moneyness-badge.moneyness-none {
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-muted) 25%, transparent);
+  font-weight: 500;
+}
+
 .options-underlying-card {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.75rem 0.85rem;
-  border: 1px solid var(--border);
+  padding: 0.85rem 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
+  background:
+    radial-gradient(900px 220px at 15% 15%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 55%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-panel) 92%, transparent), var(--bg-panel));
   margin-top: 0.25rem;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.06);
 }
 
 .options-underlying-label {
@@ -247,9 +293,45 @@ tr.option-row-otm td:first-child {
 }
 
 .options-underlying-price {
-  font-size: 1.55rem; /* ~24-25px */
-  font-weight: 700;
+  font-size: 1.75rem; /* ~28px */
+  font-weight: 800;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.options-underlying-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.options-underlying-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  color: var(--text);
+  font-size: 0.78rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.options-underlying-badge-positive {
+  background: rgba(34, 197, 94, 0.16);
+  border-color: rgba(22, 163, 74, 0.38);
+}
+
+.options-underlying-badge-negative {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(220, 38, 38, 0.34);
+}
+
+.options-underlying-badge-neutral {
+  background: rgba(148, 163, 184, 0.18);
+  border-color: rgba(148, 163, 184, 0.38);
+  color: var(--text);
 }
 
 .options-filter-toggle {
@@ -278,6 +360,33 @@ tr.option-row-otm td:first-child {
   background: color-mix(in srgb, var(--accent) 14%, var(--bg));
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
   font-weight: 700;
+}
+
+.options-ba-col {
+  width: 2.5rem;
+  text-align: center;
+  padding-left: 0.15rem;
+  padding-right: 0.15rem;
+}
+
+.options-ba-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  padding: 0.12rem 0.28rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+  color: var(--text-muted);
+}
+
+.options-ba-badge-iol-live {
+  font-size: 0.62rem;
+  white-space: nowrap;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--text);
 }
 
 .options-tabs {
