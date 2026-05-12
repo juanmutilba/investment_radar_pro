@@ -1024,3 +1024,56 @@ export async function fetchPortfolioTickersAutocomplete(
   }
   return [];
 }
+
+/** GET /iol/status — credenciales y token IOL (sin secretos). */
+export type IolStatusPayload = {
+  configured: boolean;
+  auth_ok: boolean;
+  http_status: number | null;
+  message: string | null;
+};
+
+export async function fetchIolStatus(): Promise<IolStatusPayload> {
+  const res = await fetch(`${BASE}/iol/status`);
+  if (res.status === 401 || res.status === 403) {
+    const detail = await readHttpErrorMessage(res).catch(() => "");
+    return {
+      configured: true,
+      auth_ok: false,
+      http_status: res.status,
+      message: detail || `HTTP ${res.status}`,
+    };
+  }
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object") {
+    throw new Error("Respuesta inesperada: /iol/status");
+  }
+  const o = data as Record<string, unknown>;
+  const msg = o.message;
+  return {
+    configured: Boolean(o.configured),
+    auth_ok: Boolean(o.auth_ok),
+    http_status: typeof o.http_status === "number" && Number.isFinite(o.http_status) ? o.http_status : null,
+    message: typeof msg === "string" ? msg : null,
+  };
+}
+
+/** POST /iol/reconnect — invalida sesión/token IOL en RAM del proceso. */
+export async function postIolReconnect(): Promise<{ ok: boolean; message: string }> {
+  const res = await fetch(`${BASE}/iol/reconnect`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object") {
+    throw new Error("Respuesta inesperada: /iol/reconnect");
+  }
+  const o = data as { ok?: unknown; message?: unknown };
+  return {
+    ok: Boolean(o.ok),
+    message: typeof o.message === "string" ? o.message : "IOL reconnect requested",
+  };
+}

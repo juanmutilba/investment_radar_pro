@@ -170,6 +170,28 @@ a:hover {
 }
 
 /* --- Opciones (Rava) --- */
+.options-iol-auth-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem 0.75rem;
+  margin: 0 0 0.75rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 6px;
+  border: 1px solid rgba(217, 119, 6, 0.28);
+  background: rgba(251, 191, 36, 0.1);
+  font-size: 0.88rem;
+}
+
+.options-iol-auth-banner__text {
+  font-weight: 500;
+  color: var(--text, inherit);
+}
+
+.options-iol-auth-banner__status {
+  font-size: 0.82rem;
+}
+
 .options-toolbar {
   margin-top: 0.25rem;
 }

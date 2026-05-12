@@ -44,6 +44,59 @@ _iol_quote_cache: dict[str, PriceQuote] = {}
 _iol_quote_negative_cache: set[str] = set()
 _iol_quote_usage_stats: dict[str, int] = {"iol_cache_positive_hits": 0, "iol_cache_negative_hits": 0}
 
+# Último fallo de login IOL (para GET /iol/status); se limpia en login OK o clear_iol_auth_session.
+_iol_auth_last_http: int | None = None
+_iol_auth_last_message: str | None = None
+
+
+def _note_iol_auth_failure(http: int | None, message: str | None) -> None:
+    global _iol_auth_last_http, _iol_auth_last_message
+    _iol_auth_last_http = http
+    m = (message or "").strip()
+    _iol_auth_last_message = m[:500] if m else None
+
+
+def _clear_iol_auth_failure() -> None:
+    global _iol_auth_last_http, _iol_auth_last_message
+    _iol_auth_last_http = None
+    _iol_auth_last_message = None
+
+
+def clear_iol_auth_session() -> None:
+    """
+    Invalida token IOL en RAM y borra el último error de auth.
+    No vacía cachés de cotización IOL ni la caché TTL de cadena de opciones.
+    """
+    global _token, _token_expires_at_monotonic
+    _token = None
+    _token_expires_at_monotonic = 0.0
+    _clear_iol_auth_failure()
+    logger.info("[IOL_AUTH] session_cleared action=reconnect")
+
+
+def get_iol_status_payload() -> dict[str, Any]:
+    """
+    Estado de credenciales y token para la UI (sin exponer secretos).
+    Intenta obtener token si hace falta (misma lógica que el resto del backend).
+    """
+    ensure_iol_credentials_from_env()
+    configured = is_iol_enabled()
+    if not configured:
+        return {
+            "configured": False,
+            "auth_ok": False,
+            "http_status": None,
+            "message": "IOL no configurado (sin credenciales en env/memoria)",
+        }
+    tok = get_iol_token()
+    ok = bool(tok and str(tok).strip())
+    return {
+        "configured": True,
+        "auth_ok": ok,
+        "http_status": _iol_auth_last_http,
+        "message": _iol_auth_last_message,
+    }
+
 
 def reset_iol_quote_usage_stats() -> None:
     """Reinicia contadores de uso de caché IOL (p. ej. al inicio de un build CEDEAR)."""
@@ -78,6 +131,7 @@ def configure_iol_credentials(username: str, password: str) -> None:
         _token_expires_at_monotonic = 0.0
         _iol_quote_cache.clear()
         _iol_quote_negative_cache.clear()
+        _clear_iol_auth_failure()
         logger.info(
             "[IOL_CONFIG] enabled=%s username_present=%s password_present=%s client_id_present=%s client_secret_present=%s",
             is_iol_enabled(),
@@ -92,6 +146,7 @@ def configure_iol_credentials(username: str, password: str) -> None:
     _token_expires_at_monotonic = 0.0
     _iol_quote_cache.clear()
     _iol_quote_negative_cache.clear()
+    _clear_iol_auth_failure()
     logger.info(
         "[IOL_CONFIG] enabled=%s username_present=%s password_present=%s client_id_present=%s client_secret_present=%s",
         is_iol_enabled(),
@@ -135,6 +190,7 @@ def get_iol_token() -> str | None:
 
     now = time.monotonic()
     if _token and now < _token_expires_at_monotonic:
+        _clear_iol_auth_failure()
         return _token
 
     c = _creds
@@ -183,6 +239,7 @@ def get_iol_token() -> str | None:
             )
             _token = None
             _token_expires_at_monotonic = 0.0
+            _note_iol_auth_failure(int(r.status_code), body_prefix[:500])
             return None
 
         if not isinstance(obj, dict):
@@ -193,6 +250,7 @@ def get_iol_token() -> str | None:
             )
             _token = None
             _token_expires_at_monotonic = 0.0
+            _note_iol_auth_failure(int(r.status_code), "token_response_not_json_object")
             return None
 
         tok = obj.get("access_token")
@@ -203,6 +261,13 @@ def get_iol_token() -> str | None:
         if not has_token:
             _token = None
             _token_expires_at_monotonic = 0.0
+            err_oauth = ""
+            if isinstance(obj, dict):
+                err_oauth = str(obj.get("error_description") or obj.get("error") or "").strip()
+            _note_iol_auth_failure(
+                int(r.status_code),
+                err_oauth or body_prefix[:500] or "missing access_token",
+            )
             return None
         try:
             exp_s = float(exp)
@@ -212,6 +277,7 @@ def get_iol_token() -> str | None:
         exp_s = max(0.0, exp_s - 30.0)
         _token = tok.strip()
         _token_expires_at_monotonic = time.monotonic() + exp_s
+        _clear_iol_auth_failure()
         return _token
     except Exception as e:
         logger.warning(
@@ -223,6 +289,7 @@ def get_iol_token() -> str | None:
         )
         _token = None
         _token_expires_at_monotonic = 0.0
+        _note_iol_auth_failure(None, f"{type(e).__name__}: {e!s}"[:500])
         return None
 
 
@@ -263,13 +330,21 @@ def read_iol_quote_ram_only(ticker: str) -> IolRamRead:
     return None
 
 
-def get_iol_quote(ticker: str, *, bypass_positive_ram_cache: bool = False) -> PriceQuote | None:
+def get_iol_quote(
+    ticker: str,
+    *,
+    bypass_positive_ram_cache: bool = False,
+    bypass_negative_ram_cache: bool = False,
+) -> PriceQuote | None:
     """
     Retorna PriceQuote válido (precio > 0) si IOL está habilitado y responde; None en caso contrario.
     Caché en memoria por proceso: aciertos reutilizan quote; fallos reutilizan None sin HTTP.
 
     ``bypass_positive_ram_cache`` (p. ej. spot de cadena de opciones): ignora aciertos en RAM positiva
     y fuerza consulta HTTP para no arrastrar precio viejo mientras la cadena sigue en TTL cache.
+
+    ``bypass_negative_ram_cache`` (solo spot crítico): si el ticker estaba en caché de fallos, intenta
+    de todos modos un GET (evita que un fallo transitorio deje el spot colgado en Yahoo para siempre).
     """
     t0 = time.perf_counter()
 
@@ -286,7 +361,7 @@ def get_iol_quote(ticker: str, *, bypass_positive_ram_cache: bool = False) -> Pr
         return None
 
     ram = read_iol_quote_ram_only(t)
-    if ram == "negative":
+    if ram == "negative" and not bypass_negative_ram_cache:
         return None
     if not bypass_positive_ram_cache and isinstance(ram, PriceQuote):
         return ram

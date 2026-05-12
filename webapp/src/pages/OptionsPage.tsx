@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  fetchIolStatus,
   fetchLatestRadarArgentina,
   fetchOptionsChain,
   fetchOptionsQuotes,
+  postIolReconnect,
   type IolOptionQuotePayload,
+  type IolStatusPayload,
   type OptionContractRow,
   type OptionsChainResponse,
   type RadarRow,
@@ -643,6 +646,20 @@ function displayBaSourceBadge(c: OptionContractRow, quotes: Record<string, IolOp
   }
 }
 
+function iolAuthLikeMessage(m: string | null): boolean {
+  const s = (m ?? "").trim().toLowerCase();
+  if (!s) return false;
+  return /\b(auth|token|sesion|sesión|login|401|403|unauthorized|forbidden|invalid_grant|invalid_client)\b/.test(s);
+}
+
+/** Banner reconexión: credenciales cargadas pero token inválido o error explícito de auth. */
+function iolUiNeedsReconnect(st: IolStatusPayload | null): boolean {
+  if (!st || !st.configured) return false;
+  if (!st.auth_ok) return true;
+  if (st.http_status === 401 || st.http_status === 403) return true;
+  return iolAuthLikeMessage(st.message);
+}
+
 type OptionTypeFilter = "all" | "CALL" | "PUT";
 type PanelSortMode = "expiry_type_strike" | "symbol" | "volume_desc" | "last_desc";
 
@@ -681,6 +698,9 @@ export function OptionsPage() {
   const [loadingUnderlyingContext, setLoadingUnderlyingContext] = useState(false);
   const [underlyingSignal, setUnderlyingSignal] = useState<string | null>(null);
   const [underlyingTrendRaw, setUnderlyingTrendRaw] = useState<unknown>(null);
+  const [iolStatus, setIolStatus] = useState<IolStatusPayload | null>(null);
+  const [iolReconnecting, setIolReconnecting] = useState(false);
+  const [iolReconnectHint, setIolReconnectHint] = useState<string | null>(null);
 
   selectedUnderlyingRef.current = selectedUnderlying;
 
@@ -707,6 +727,38 @@ export function OptionsPage() {
   useEffect(() => {
     setManualSpotInput("");
   }, [selectedUnderlying]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const s = await fetchIolStatus();
+        if (!cancelled) setIolStatus(s);
+      } catch {
+        if (!cancelled) setIolStatus(null);
+      }
+    };
+    void load();
+    const id = window.setInterval(() => void load(), 45_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  const onIolReconnect = useCallback(async () => {
+    setIolReconnecting(true);
+    setIolReconnectHint(null);
+    try {
+      await postIolReconnect();
+      const s = await fetchIolStatus();
+      setIolStatus(s);
+    } catch (e) {
+      setIolReconnectHint(e instanceof Error ? e.message : "No se pudo reconectar");
+    } finally {
+      setIolReconnecting(false);
+    }
+  }, []);
 
   // Estrategias usan la misma cadena que el Panel: mergedChain (GET /options/chain).
 
@@ -1503,6 +1555,28 @@ export function OptionsPage() {
           </p>
         ) : null}
       </header>
+
+      {iolUiNeedsReconnect(iolStatus) ? (
+        <div className="options-iol-auth-banner" role="status">
+          <span className="options-iol-auth-banner__text">IOL requiere reconexión.</span>
+          {iolReconnecting ? (
+            <span className="options-iol-auth-banner__status msg-muted">Reconectando…</span>
+          ) : null}
+          <button
+            type="button"
+            className="options-filter-toggle"
+            onClick={() => void onIolReconnect()}
+            disabled={iolReconnecting || !iolStatus?.configured}
+          >
+            Reconectar IOL
+          </button>
+        </div>
+      ) : null}
+      {iolReconnectHint ? (
+        <p className="msg-muted" style={{ margin: "-0.35rem 0 0.65rem", fontSize: "0.82rem" }}>
+          {iolReconnectHint}
+        </p>
+      ) : null}
 
       <div style={{ marginBottom: "0.85rem" }}>
         {selectedUnderlying.trim() === "" && !loadingChain ? (

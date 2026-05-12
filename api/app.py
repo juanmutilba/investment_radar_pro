@@ -458,6 +458,27 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/iol/status")
+def iol_status():
+    """Estado de credenciales y token IOL en memoria (sin secretos)."""
+    from services.market_data.providers.iol import get_iol_status_payload
+
+    return get_iol_status_payload()
+
+
+@app.post("/iol/reconnect")
+def iol_reconnect():
+    """
+    Limpia token y último error de auth IOL en RAM; no vacía cachés de cadena de opciones.
+    El próximo uso de IOL obtendrá token de nuevo.
+    """
+    from services.market_data.providers.iol import clear_iol_auth_session, ensure_iol_credentials_from_env
+
+    clear_iol_auth_session()
+    ensure_iol_credentials_from_env()
+    return {"ok": True, "message": "IOL reconnect requested"}
+
+
 @app.get("/options/iol/raw/{symbol}")
 def iol_options_raw(symbol: str):
     """

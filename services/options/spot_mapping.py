@@ -38,7 +38,11 @@ def option_underlying_to_spot_symbol(underlying: str | None) -> str:
     s = str(underlying).strip().upper()
     if not s:
         return ""
-    return _OPTION_OR_ALIAS_TO_BYMA_SPOT.get(s, s)
+    out = _OPTION_OR_ALIAS_TO_BYMA_SPOT.get(s, s)
+    # Prefijo de opciones BYMA (p. ej. GFG) no es título negociable en IOL Titulos/Cotizacion.
+    if out == "GFG":
+        return "GGAL"
+    return out
 
 
 def option_underlying_to_yahoo_symbol(underlying: str | None) -> str:

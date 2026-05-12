@@ -82,6 +82,28 @@ def _empty_spot_meta() -> dict[str, Any]:
     }
 
 
+def _log_options_spot_iol_fail(
+    *,
+    underlying: str | None,
+    attempted_symbol: str,
+    reason: str,
+    result: str,
+    ram_before: str,
+    exception_status: str | None,
+) -> None:
+    exc = f" exception_status={exception_status!r}" if exception_status else ""
+    print(
+        "[OPTIONS_SPOT_IOL_FAIL]"
+        f" underlying={underlying!r}"
+        f" attempted_symbol={attempted_symbol!r}"
+        f" reason={reason}"
+        f" result={result}"
+        f" ram_before={ram_before}"
+        f"{exc}",
+        flush=True,
+    )
+
+
 def resolve_option_chain_spot(
     underlying: str | None,
 ) -> tuple[float | None, str | None, str | None, dict[str, Any]]:
@@ -100,6 +122,7 @@ def resolve_option_chain_spot(
         spot_symbol_used.
     """
     meta = _empty_spot_meta()
+    # Ticker BCBA para Titulos/Cotizacion (p. ej. GGAL), nunca prefijo de opción (GFG).
     sym = option_underlying_to_spot_symbol(underlying)
     ysym = option_underlying_to_yahoo_symbol(underlying)
     _log_spot(
@@ -116,41 +139,77 @@ def resolve_option_chain_spot(
     spot_iol_ms = 0.0
     spot_yahoo_ms = 0.0
 
-    # 1) IOL primero (precio válido > 0)
+    # 1) IOL primero (precio válido > 0): siempre ticker acción BCBA (p. ej. GGAL), bypass RAM +/−.
     _log_spot(f"iol_attempt ticker={sym}")
+    iol_exc: str | None = None
+    iq: PriceQuote | None = None
+    ram_before = "n/a"
     if not is_iol_enabled():
         _log_spot(f"iol_miss ticker={sym} reason=disabled")
         _log_timing("spot_iol_ms=0.0")
+        _log_options_spot_iol_fail(
+            underlying=underlying,
+            attempted_symbol=sym,
+            reason="iol_disabled",
+            result="None",
+            ram_before=ram_before,
+            exception_status=None,
+        )
     else:
         ram_hit = read_iol_quote_ram_only(sym)
+        if isinstance(ram_hit, PriceQuote):
+            ram_before = "positive_ram"
+        elif ram_hit == "negative":
+            ram_before = "negative_ram"
+        else:
+            ram_before = "none"
         iol_ram_cache = isinstance(ram_hit, PriceQuote)
         t_iol = time.perf_counter()
         try:
-            iq = get_iol_quote(sym, bypass_positive_ram_cache=True)
+            iq = get_iol_quote(
+                sym,
+                bypass_positive_ram_cache=True,
+                bypass_negative_ram_cache=True,
+            )
         except Exception as ex:
             iq = None
+            iol_exc = f"{type(ex).__name__}: {ex}"
             _log_spot(f"iol_miss ticker={sym} reason=exception detail={type(ex).__name__}")
         spot_iol_ms = (time.perf_counter() - t_iol) * 1000.0
         _log_timing(f"spot_iol_ms={spot_iol_ms:.1f}")
+        val_iol: float | None = None
         if iq is not None and iq.is_valid and iq.value is not None:
             try:
                 val_iol = float(iq.value)
             except (TypeError, ValueError):
                 val_iol = None
-            if val_iol is not None and val_iol == val_iol and val_iol > 0:
-                _log_spot(f"iol_ok ticker={sym} price={val_iol!r} source=IOL")
-                _log_timing("spot_yahoo_ms=0.0")
-                meta["spot_source_detail"] = (
-                    "iol_titulos_cotizacion|iol_positive_ram_bypassed"
-                    if iol_ram_cache
-                    else "iol_titulos_cotizacion"
-                )
-                meta["spot_cache_hit"] = False
-                meta["spot_symbol_used"] = sym
-                if iq.as_of is not None:
-                    meta["spot_updated_at"] = iq.as_of.isoformat()
-                return val_iol, "IOL", sym, meta
-        _log_spot(f"iol_miss ticker={sym} reason=no_valid_quote")
+        if iq is not None and val_iol is not None and val_iol == val_iol and val_iol > 0:
+            _log_spot(f"iol_ok ticker={sym} price={val_iol!r} source=IOL")
+            _log_timing("spot_yahoo_ms=0.0")
+            meta["spot_source_detail"] = (
+                "iol_titulos_cotizacion|iol_positive_ram_bypassed"
+                if iol_ram_cache
+                else "iol_titulos_cotizacion"
+            )
+            meta["spot_cache_hit"] = False
+            meta["spot_symbol_used"] = sym
+            if iq.as_of is not None:
+                meta["spot_updated_at"] = iq.as_of.isoformat()
+            return val_iol, "IOL", sym, meta
+        fail_reason = (
+            "exception"
+            if iol_exc
+            else ("iol_no_quote" if iq is None else "iol_non_positive_or_invalid_price")
+        )
+        _log_spot(f"iol_miss ticker={sym} reason={fail_reason}")
+        _log_options_spot_iol_fail(
+            underlying=underlying,
+            attempted_symbol=sym,
+            reason=fail_reason,
+            result=repr(iq) if iq is not None else "None",
+            ram_before=ram_before,
+            exception_status=iol_exc,
+        )
 
     # 2) Yahoo .BA (fallback explícito)
     if ysym:
