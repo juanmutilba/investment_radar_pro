@@ -165,6 +165,17 @@ function daysToExpiryRaw(raw: Record<string, unknown>): number | null {
   return Number.isFinite(di) ? di : null;
 }
 
+/** Días calendario hasta vencimiento (medianoche local); null si fecha inválida o ya vencida. */
+function daysBetweenTodayAndExpiry(yyyyMmDd: string): number | null {
+  if (!yyyyMmDd || yyyyMmDd.length < 10) return null;
+  const end = new Date(`${yyyyMmDd.slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(end.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diff = Math.round((end.getTime() - today.getTime()) / 86400000);
+  return diff >= 0 ? diff : null;
+}
+
 function expiryKeyFromMergedContract(c: OptionContractRow): string {
   if (c.expiry === null || c.expiry === undefined || c.expiry === "") return "";
   return String(c.expiry).slice(0, 10);
@@ -172,12 +183,6 @@ function expiryKeyFromMergedContract(c: OptionContractRow): string {
 
 function mergedContractTypeUpper(c: OptionContractRow): string {
   return (c.option_type ?? "").toString().trim().toUpperCase();
-}
-
-function mergedContractVolumeRaw(c: OptionContractRow): number {
-  const v = c.volume;
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  return 0;
 }
 
 function getLiveQuote(
@@ -189,36 +194,41 @@ function getLiveQuote(
   return quotes[s];
 }
 
-function displayBid(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): number | null {
+/** Puntas/volumen/opciones: overlay IOL por especie si valor > 0; si no, datos mergeados de la cadena. Sin NaN; null si no hay dato útil. */
+function getEffectiveBid(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): number | null {
   const q = getLiveQuote(row, quotes);
   if (q && !q.error && typeof q.bid === "number" && Number.isFinite(q.bid) && q.bid > 0) return q.bid;
-  const m = typeof row.bid === "number" && Number.isFinite(row.bid) ? row.bid : null;
-  return m;
+  const m = row.bid;
+  if (typeof m === "number" && Number.isFinite(m)) return m;
+  return null;
 }
 
-function displayAsk(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): number | null {
+function getEffectiveAsk(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): number | null {
   const q = getLiveQuote(row, quotes);
   if (q && !q.error && typeof q.ask === "number" && Number.isFinite(q.ask) && q.ask > 0) return q.ask;
-  const m = typeof row.ask === "number" && Number.isFinite(row.ask) ? row.ask : null;
-  return m;
+  const m = row.ask;
+  if (typeof m === "number" && Number.isFinite(m)) return m;
+  return null;
 }
 
-function displayVolume(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): number {
+function getEffectiveVolume(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): number | null {
   const q = getLiveQuote(row, quotes);
   if (q && !q.error && q.volume !== undefined && q.volume !== null) {
     const v = typeof q.volume === "number" ? q.volume : Number(q.volume);
     if (Number.isFinite(v) && v > 0) return v;
   }
-  return mergedContractVolumeRaw(row);
+  const m = row.volume;
+  if (typeof m === "number" && Number.isFinite(m)) return m;
+  return null;
 }
 
-function displayOperations(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): number | null {
+function getEffectiveOperations(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): number | null {
   const q = getLiveQuote(row, quotes);
   if (!q || q.error) return null;
   if (q.cantidad_operaciones !== undefined && q.cantidad_operaciones !== null) {
     const n =
       typeof q.cantidad_operaciones === "number" ? q.cantidad_operaciones : Number(q.cantidad_operaciones);
-    if (Number.isFinite(n)) return n;
+    if (Number.isFinite(n) && n > 0) return n;
   }
   return null;
 }
@@ -231,13 +241,18 @@ function displayQuoteTime(row: OptionContractRow, quotes: Record<string, IolOpti
   return null;
 }
 
-function iolLiveQuoteUsedForRow(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): boolean {
+function iolRealQuoteUsedForRow(row: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): boolean {
   const q = getLiveQuote(row, quotes);
   if (!q || q.error) return false;
   const qb = typeof q.bid === "number" && Number.isFinite(q.bid) && q.bid > 0;
   const qa = typeof q.ask === "number" && Number.isFinite(q.ask) && q.ask > 0;
   const qv = q.volume !== undefined && q.volume !== null && Number.isFinite(Number(q.volume)) && Number(q.volume) > 0;
-  return qb || qa || qv;
+  const qo =
+    q.cantidad_operaciones !== undefined &&
+    q.cantidad_operaciones !== null &&
+    Number.isFinite(Number(q.cantidad_operaciones)) &&
+    Number(q.cantidad_operaciones) > 0;
+  return qb || qa || qv || qo;
 }
 
 function mergedContractLastSortKey(c: OptionContractRow): number {
@@ -345,8 +360,8 @@ function mergedMoneynessBadgeText(m: MoneynessKind): string {
 
 /** Badge BA: cotización individual IOL vs merge cadena. */
 function displayBaSourceBadge(c: OptionContractRow, quotes: Record<string, IolOptionQuotePayload>): { label: string; title: string } {
-  if (iolLiveQuoteUsedForRow(c, quotes)) {
-    return { label: "IOL LIVE", title: "Datos desde GET /Titulos/.../Cotizacion (IOL) para esta especie" };
+  if (iolRealQuoteUsedForRow(c, quotes)) {
+    return { label: "IOL REAL", title: "Datos desde GET /options/quotes (IOL) para esta especie" };
   }
   const m = (c.bidask_source_mode ?? "").trim();
   switch (m) {
@@ -377,7 +392,6 @@ export function OptionsPage() {
   const [onlyAtm, setOnlyAtm] = useState(false);
   /** Si true, la cadena GET /options/chain incluye merge Allaria/Rava (más lento). */
   const [enrichChainSources, setEnrichChainSources] = useState(true);
-  const [showBidAskSource, setShowBidAskSource] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>("panel");
   const [strategyType, setStrategyType] = useState<StrategyType>("Bull Call Spread");
   const [strategiesFilter, setStrategiesFilter] = useState<StrategiesFilter>("");
@@ -557,6 +571,15 @@ export function OptionsPage() {
     return null;
   }, [parsedManualSpot, apiChainSpot]);
 
+  const contractBySymbol = useMemo(() => {
+    const m = new Map<string, OptionContractRow>();
+    for (const c of mergedChain?.contracts ?? []) {
+      const s = (c.symbol ?? "").trim().toUpperCase();
+      if (s) m.set(s, c);
+    }
+    return m;
+  }, [mergedChain]);
+
   useEffect(() => {
     console.log("[OPTIONS_FRONT_SPOT]", mergedChain?.spot, mergedChain?.spot_source);
   }, [mergedChain]);
@@ -566,7 +589,7 @@ export function OptionsPage() {
     let withTrades = 0;
     let withAtm = 0;
     for (const c of mergedChain?.contracts ?? []) {
-      const vol = displayVolume(c, iolQuotes);
+      const vol = getEffectiveVolume(c, iolQuotes) ?? 0;
       if (vol > 0) withVolume += 1;
       const last = typeof c.last === "number" && Number.isFinite(c.last) ? c.last : 0;
       if (last > 0) withTrades += 1;
@@ -591,7 +614,7 @@ export function OptionsPage() {
         const t = mergedContractTypeUpper(c);
         if (!t.includes("PUT")) return false;
       }
-      if (hideZeroVolume && displayVolume(c, iolQuotes) <= 0) return false;
+      if (hideZeroVolume && (getEffectiveVolume(c, iolQuotes) ?? 0) <= 0) return false;
       return true;
     });
     return filtered.slice().sort((a, b) => {
@@ -602,8 +625,8 @@ export function OptionsPage() {
           return sortMergedDefault(a, b);
         }
         case "volume_desc": {
-          const va = displayVolume(a, iolQuotes);
-          const vb = displayVolume(b, iolQuotes);
+          const va = getEffectiveVolume(a, iolQuotes) ?? -1;
+          const vb = getEffectiveVolume(b, iolQuotes) ?? -1;
           if (vb !== va) return vb - va;
           return tieBreakExpiryTypeStrike(a, b);
         }
@@ -695,7 +718,7 @@ export function OptionsPage() {
     if (raw.length === 0) return null;
     if (mergedFilteredContracts.length > 0) return null;
     if (hideZeroVolume) {
-      const allVolZero = raw.every((c) => displayVolume(c, iolQuotes) <= 0);
+      const allVolZero = raw.every((c) => (getEffectiveVolume(c, iolQuotes) ?? 0) <= 0);
       if (allVolZero) {
         return "No hay contratos con volumen > 0 para estos filtros. Desactivá «Ocultar volumen 0» para ver la cadena.";
       }
@@ -707,7 +730,7 @@ export function OptionsPage() {
     if (!hideZeroVolume) return false;
     const raw = mergedChain?.contracts ?? [];
     if (raw.length === 0) return false;
-    return raw.every((c) => displayVolume(c, iolQuotes) <= 0);
+    return raw.every((c) => (getEffectiveVolume(c, iolQuotes) ?? 0) <= 0);
   }, [hideZeroVolume, mergedChain, iolQuotes]);
 
   const strategyRows = useMemo((): FlatRow[] => {
@@ -719,6 +742,7 @@ export function OptionsPage() {
       const strike = typeof c.strike === "number" && Number.isFinite(c.strike) ? c.strike : null;
       if (strike === null) continue;
       const expiryKey = expiryKeyFromMergedContract(c);
+      const dte = expiryKey ? daysBetweenTodayAndExpiry(expiryKey) : null;
       rows.push({
         activo: selectedUnderlying,
         tipo,
@@ -727,11 +751,12 @@ export function OptionsPage() {
         raw: {
           simbolo: c.symbol,
           expiry_date: c.expiry,
-          bid: displayBid(c, iolQuotes),
-          ask: displayAsk(c, iolQuotes),
+          bid: getEffectiveBid(c, iolQuotes),
+          ask: getEffectiveAsk(c, iolQuotes),
           ultimo: c.last,
-          volumen_float: displayVolume(c, iolQuotes),
-          cantidad_operaciones: displayOperations(c, iolQuotes),
+          volumen_float: getEffectiveVolume(c, iolQuotes),
+          cantidad_operaciones: getEffectiveOperations(c, iolQuotes),
+          days_to_expiry: dte ?? undefined,
           quote_fecha_hora: displayQuoteTime(c, iolQuotes),
           open_interest: c.open_interest,
           source: c.source,
@@ -854,10 +879,13 @@ export function OptionsPage() {
     for (const r of calls) {
       const exp = expiryKeyFromRaw(r.raw);
       if (!exp) continue;
-      const bid = toNumberOrNull(r.raw.bid);
-      if (bid === null || bid <= 0) continue;
-      const days = daysToExpiryRaw(r.raw);
-      const breakEven = effectivePanelSpot !== null ? effectivePanelSpot - bid : null;
+      const sym = (typeof r.raw.simbolo === "string" ? r.raw.simbolo : "").trim().toUpperCase();
+      const co = sym ? contractBySymbol.get(sym) : undefined;
+      const bidEff = co ? getEffectiveBid(co, iolQuotes) : toNumberOrNull(r.raw.bid);
+      if (bidEff === null || bidEff <= 0) continue;
+      let days = daysToExpiryRaw(r.raw);
+      if (days === null) days = daysBetweenTodayAndExpiry(exp);
+      const breakEven = effectivePanelSpot !== null ? effectivePanelSpot - bidEff : null;
 
       const intrinsic =
         effectivePanelSpot !== null && effectivePanelSpot > 0
@@ -865,7 +893,7 @@ export function OptionsPage() {
           : null;
       const timeValue =
         intrinsic !== null
-          ? bid - intrinsic
+          ? bidEff - intrinsic
           : null;
 
       const tnaPct =
@@ -877,10 +905,11 @@ export function OptionsPage() {
           timeValue > 0
           ? (timeValue / effectivePanelSpot) * (365 / days) * 100
           : null;
+
       out.push({
         expiryKey: exp,
         strike: r.strike,
-        bid,
+        bid: bidEff,
         intrinsic,
         timeValue,
         days,
@@ -891,7 +920,7 @@ export function OptionsPage() {
     }
     out.sort((a, b) => a.expiryKey.localeCompare(b.expiryKey) || a.strike - b.strike);
     return out.slice(0, 30);
-  }, [calls, effectivePanelSpot]);
+  }, [calls, effectivePanelSpot, iolQuotes, contractBySymbol]);
 
   const netCost = useMemo(() => {
     let net = 0;
@@ -976,17 +1005,6 @@ export function OptionsPage() {
               />
               <span className="radar-toolbar__label" style={{ margin: 0 }}>
                 Traer puntas reales IOL
-              </span>
-            </label>
-            <label className="radar-toolbar__field" style={{ flexDirection: "row", alignItems: "center", gap: "0.45rem" }}>
-              <input
-                type="checkbox"
-                checked={showBidAskSource}
-                onChange={(ev) => setShowBidAskSource(ev.target.checked)}
-                aria-label="Mostrar columna origen de bid ask"
-              />
-              <span className="radar-toolbar__label" style={{ margin: 0 }}>
-                Origen BA
               </span>
             </label>
             <label className="radar-toolbar__field" style={{ flexDirection: "row", alignItems: "center", gap: "0.45rem" }}>
@@ -1273,7 +1291,7 @@ export function OptionsPage() {
                 <th>Moneyness</th>
                 <th>Bid</th>
                 <th>Ask</th>
-                {showBidAskSource ? <th className="options-ba-col">BA</th> : null}
+                <th className="options-ba-col">Fuente Mercado</th>
                 <th>Último</th>
                 <th title="Volumen (cadena o cotización IOL)">Volumen</th>
                 <th>Op.</th>
@@ -1284,12 +1302,12 @@ export function OptionsPage() {
             <tbody>
               {mergedFilteredContracts.map((c, i) => {
                 const m = getMoneyness(c, effectivePanelSpot);
-                const bid = displayBid(c, iolQuotes);
-                const ask = displayAsk(c, iolQuotes);
-                const vol = displayVolume(c, iolQuotes);
-                const ops = displayOperations(c, iolQuotes);
+                const bid = getEffectiveBid(c, iolQuotes);
+                const ask = getEffectiveAsk(c, iolQuotes);
+                const vol = getEffectiveVolume(c, iolQuotes);
+                const ops = getEffectiveOperations(c, iolQuotes);
                 const qt = displayQuoteTime(c, iolQuotes);
-                const live = iolLiveQuoteUsedForRow(c, iolQuotes);
+                const real = iolRealQuoteUsedForRow(c, iolQuotes);
                 const ba = displayBaSourceBadge(c, iolQuotes);
                 return (
                   <tr key={`${c.symbol}-${i}`} className={mergedMoneynessRowClass(m)}>
@@ -1302,16 +1320,14 @@ export function OptionsPage() {
                     </td>
                     <td style={{ textAlign: "right" }}>{formatNumber(bid, 2)}</td>
                     <td style={{ textAlign: "right" }}>{formatNumber(ask, 2)}</td>
-                    {showBidAskSource ? (
-                      <td className="options-ba-col">
-                        <span
-                          className={`options-ba-badge${live ? " options-ba-badge-iol-live" : ""}`}
-                          title={ba.title}
-                        >
-                          {ba.label}
-                        </span>
-                      </td>
-                    ) : null}
+                    <td className="options-ba-col">
+                      <span
+                        className={`options-ba-badge${real ? " options-ba-badge-iol-live" : ""}`}
+                        title={ba.title}
+                      >
+                        {ba.label}
+                      </span>
+                    </td>
                     <td style={{ textAlign: "right" }}>{formatNumber(c.last, 2)}</td>
                     <td style={{ textAlign: "right" }} title={qt ?? undefined}>
                       {formatInteger(vol)}
