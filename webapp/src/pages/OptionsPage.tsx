@@ -25,6 +25,11 @@ import {
 type OptionUnderlying = { value: string; label: string; radarTicker: string; ravaUnderlying: string };
 
 /** Subyacentes ByMA para GET /options/chain; `ravaUnderlying` es el ticker interno de Rava en ESTRATEGIAS. */
+/** Mapeo cadena/universo opciones → ticker accionario en UI (sin tocar backend). */
+const CHAIN_UNDERLYING_TO_EQUITY_TICKER: Readonly<Record<string, string>> = {
+  GFG: "GGAL",
+};
+
 const CHAIN_UNDERLYINGS: readonly OptionUnderlying[] = [
   { value: "GGAL", label: "GGAL", radarTicker: "GGAL", ravaUnderlying: "GFG" },
   { value: "YPFD", label: "YPFD", radarTicker: "YPFD", ravaUnderlying: "YPF" },
@@ -139,6 +144,20 @@ function formatNumber(value: number | null | undefined, decimals = 2): string {
 function formatInteger(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";
   return value.toLocaleString("es-AR", { maximumFractionDigits: 0 });
+}
+
+/** OI en panel: no mostrar 0 como dato real (suele venir ausente como 0). */
+function formatPanelOpenInterest(oi: number | null | undefined): string {
+  if (oi === null || oi === undefined || !Number.isFinite(oi) || oi <= 0) return "—";
+  return oi.toLocaleString("es-AR", { maximumFractionDigits: 0 });
+}
+
+function equityUnderlyingDisplayLabel(chainUnderlying: string | null | undefined, selectedUnderlying: string): string {
+  const c = (chainUnderlying ?? "").trim();
+  const s = selectedUnderlying.trim();
+  const u = (c || s).toUpperCase();
+  if (!u) return "—";
+  return CHAIN_UNDERLYING_TO_EQUITY_TICKER[u] ?? u;
 }
 
 function callPutKindFromContractTypeUpper(ou: string): "CALL" | "PUT" | null {
@@ -455,12 +474,6 @@ function panelRowQuoteStatus(
   if (opts.loadingIolQuotes) return "PEND";
   if (!(sym in opts.responseSeen)) return "PEND";
   return "BASE";
-}
-
-function mergedContractLastSortKey(c: OptionContractRow): number {
-  const v = c.last;
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  return -Infinity;
 }
 
 /** Orden por defecto del panel: vencimiento → tipo → strike → símbolo. */
@@ -878,14 +891,17 @@ function IvSmileSvgChart({
 }
 
 type OptionTypeFilter = "all" | "CALL" | "PUT";
-type PanelSortMode = "expiry_type_strike" | "symbol" | "volume_desc" | "last_desc";
+type PanelHeaderSort =
+  | { kind: "default" }
+  | { kind: "strike"; dir: "asc" | "desc" }
+  | { kind: "expiry"; dir: "asc" | "desc" };
 
 export function OptionsPage() {
   const [selectedUnderlying, setSelectedUnderlying] = useState<string>("");
   const [selectedExpiry, setSelectedExpiry] = useState<string>("");
   const [optionTypeFilter, setOptionTypeFilter] = useState<OptionTypeFilter>("all");
   const [hideZeroVolume, setHideZeroVolume] = useState(false);
-  const [panelSort, setPanelSort] = useState<PanelSortMode>("expiry_type_strike");
+  const [panelHeaderSort, setPanelHeaderSort] = useState<PanelHeaderSort>({ kind: "default" });
   /** Override opcional si el spot del API no alcanza o el usuario quiere otro valor. */
   const [manualSpotInput, setManualSpotInput] = useState("");
   const [onlyWithVolume, setOnlyWithVolume] = useState(false);
@@ -912,8 +928,6 @@ export function OptionsPage() {
   const selectedUnderlyingRef = useRef("");
   const [iolQuotes, setIolQuotes] = useState<Record<string, IolOptionQuotePayload>>({});
   const [loadingIolQuotes, setLoadingIolQuotes] = useState(false);
-  /** Hubo al menos un batch /options/quotes aplicado para la cadena actual (texto “Puntas visibles actualizadas”). */
-  const [visibleQuotesBatchApplied, setVisibleQuotesBatchApplied] = useState(false);
   const [loadingUnderlyingContext, setLoadingUnderlyingContext] = useState(false);
   const [underlyingSignal, setUnderlyingSignal] = useState<string | null>(null);
   const [underlyingTrendRaw, setUnderlyingTrendRaw] = useState<unknown>(null);
@@ -947,6 +961,31 @@ export function OptionsPage() {
   chainIsIolPrimaryRef.current = chainIsIolPrimary;
 
   const underlyingRadarSymbol = selectedUnderlyingMeta.radarTicker;
+
+  const equityUnderlyingDisplayTicker = useMemo(
+    () => equityUnderlyingDisplayLabel(mergedChain?.underlying, selectedUnderlying),
+    [mergedChain?.underlying, selectedUnderlying],
+  );
+
+  const onPanelSortHeaderExpiryClick = useCallback(() => {
+    setPanelHeaderSort((prev) => {
+      if (prev.kind === "expiry") {
+        if (prev.dir === "asc") return { kind: "expiry", dir: "desc" };
+        return { kind: "default" };
+      }
+      return { kind: "expiry", dir: "asc" };
+    });
+  }, []);
+
+  const onPanelSortHeaderStrikeClick = useCallback(() => {
+    setPanelHeaderSort((prev) => {
+      if (prev.kind === "strike") {
+        if (prev.dir === "asc") return { kind: "strike", dir: "desc" };
+        return { kind: "default" };
+      }
+      return { kind: "strike", dir: "asc" };
+    });
+  }, []);
 
   useEffect(() => {
     setManualSpotInput("");
@@ -1389,29 +1428,22 @@ export function OptionsPage() {
       return true;
     });
     return filtered.slice().sort((a, b) => {
-      switch (panelSort) {
-        case "symbol": {
-          const cmp = (a.symbol ?? "").localeCompare(b.symbol ?? "", "es");
-          if (cmp !== 0) return cmp;
-          return sortMergedDefault(a, b);
-        }
-        case "volume_desc": {
-          const va = getEffectiveVolume(a, iolQuotes) ?? -1;
-          const vb = getEffectiveVolume(b, iolQuotes) ?? -1;
-          if (vb !== va) return vb - va;
-          return tieBreakExpiryTypeStrike(a, b);
-        }
-        case "last_desc": {
-          const la = mergedContractLastSortKey(a);
-          const lb = mergedContractLastSortKey(b);
-          if (lb !== la) return lb - la;
-          return tieBreakExpiryTypeStrike(a, b);
-        }
-        default:
-          return sortMergedDefault(a, b);
+      if (panelHeaderSort.kind === "strike") {
+        const sA = a.strike ?? -Infinity;
+        const sB = b.strike ?? -Infinity;
+        if (sA !== sB) return panelHeaderSort.dir === "asc" ? sA - sB : sB - sA;
+        return tieBreakExpiryTypeStrike(a, b);
       }
+      if (panelHeaderSort.kind === "expiry") {
+        const eA = expiryKeyFromMergedContract(a);
+        const eB = expiryKeyFromMergedContract(b);
+        const cmpE = eA.localeCompare(eB);
+        if (cmpE !== 0) return panelHeaderSort.dir === "asc" ? cmpE : -cmpE;
+        return tieBreakExpiryTypeStrike(a, b);
+      }
+      return sortMergedDefault(a, b);
     });
-  }, [mergedChain, selectedExpiry, optionTypeFilter, hideZeroVolume, panelSort, iolQuotes]);
+  }, [mergedChain, selectedExpiry, optionTypeFilter, hideZeroVolume, panelHeaderSort, iolQuotes]);
 
   const iolQuotePick = useMemo(() => {
     const totalVisible = mergedFilteredContracts.length;
@@ -1473,7 +1505,6 @@ export function OptionsPage() {
     iolQuotesReqRef.current += 1;
     iolQuoteResponseSeenRef.current = {};
     iolLastGoodQuoteAtRef.current = {};
-    setVisibleQuotesBatchApplied(false);
     setLoadingIolQuotes(false);
     setLoadingChain(true);
     setErrorChain(null);
@@ -1518,7 +1549,7 @@ export function OptionsPage() {
       setErrorChain(null);
       setIolQuotes({});
       setLoadingIolQuotes(false);
-      setVisibleQuotesBatchApplied(false);
+      setPanelHeaderSort({ kind: "default" });
       void loadChain(v);
     },
     [loadChain],
@@ -1601,7 +1632,6 @@ export function OptionsPage() {
         statusCalculated,
       });
     }
-    setVisibleQuotesBatchApplied(true);
     setIolQuotes(data);
   }, []);
 
@@ -2207,7 +2237,7 @@ export function OptionsPage() {
           {selectedUnderlying.trim() ? (
             <>
               {" "}
-              Activo: <strong>{selectedUnderlying}</strong>
+              Activo: <strong>{equityUnderlyingDisplayTicker}</strong>
             </>
           ) : (
             <> Elegí un activo abajo.</>
@@ -2277,7 +2307,6 @@ export function OptionsPage() {
         <h2 id="options-blk-chain-h" className="options-page-blk__title">
           Cadena de opciones
         </h2>
-        <p className="options-page-blk__lede msg-muted">Vencimiento, filtros del panel y actualización de puntas IOL.</p>
       <div className="radar-toolbar options-toolbar" role="toolbar" aria-label="Opciones de cadena">
         <label className="radar-toolbar__field">
           <span className="radar-toolbar__label">Vencimiento</span>
@@ -2311,31 +2340,15 @@ export function OptionsPage() {
                 <option value="PUT">PUT</option>
               </select>
             </label>
-            <label className="radar-toolbar__field" style={{ flexDirection: "row", alignItems: "center", gap: "0.45rem" }}>
-              <input
-                type="checkbox"
-                checked={hideZeroVolume}
-                onChange={(ev) => setHideZeroVolume(ev.target.checked)}
-                aria-label="Ocultar contratos con volumen 0"
-              />
-              <span className="radar-toolbar__label" style={{ margin: 0 }}>
-                Ocultar volumen 0
-              </span>
-            </label>
-            <label className="radar-toolbar__field">
-              <span className="radar-toolbar__label">Ordenar por</span>
-              <select
-                className="radar-toolbar__select"
-                value={panelSort}
-                onChange={(ev) => setPanelSort(ev.target.value as PanelSortMode)}
-                aria-label="Ordenar tabla"
-              >
-                <option value="expiry_type_strike">Vencimiento / Tipo / Strike</option>
-                <option value="symbol">Símbolo</option>
-                <option value="volume_desc">Volumen mayor a menor</option>
-                <option value="last_desc">Último mayor a menor</option>
-              </select>
-            </label>
+            <button
+              type="button"
+              className={`options-filter-toggle${hideZeroVolume ? " options-filter-toggle-active" : ""}`}
+              aria-pressed={hideZeroVolume}
+              onClick={() => setHideZeroVolume((v) => !v)}
+              title="Ocultar filas con volumen efectivo 0"
+            >
+              Ocultar volumen 0
+            </button>
             <label className="radar-toolbar__field">
               <span className="radar-toolbar__label">Spot manual</span>
               <input
@@ -2465,7 +2478,7 @@ export function OptionsPage() {
               Subyacente
             </div>
             <div className="options-underlying-symbol">
-              <code>{mergedChain?.underlying?.trim() || selectedUnderlying.trim() || "—"}</code>
+              <code>{equityUnderlyingDisplayTicker}</code>
             </div>
           </div>
           <div className="options-underlying-meta">
@@ -2474,9 +2487,6 @@ export function OptionsPage() {
             </span>
             <span className={trendBadgeClass} title="Tendencia">
               {loadingUnderlyingContext ? "Tendencia: …" : `Tendencia: ${underlyingTrendLabel}`}
-            </span>
-            <span className="options-underlying-badge options-underlying-badge-neutral" title="Ticker en Radar Argentina">
-              Radar: {underlyingRadarSymbol}
             </span>
             {activeTab === "strategies" || activeTab === "ivSmile" ? (
               <span className="options-underlying-badge options-underlying-badge-neutral" title="Ticker Rava (cadena)">
@@ -2495,57 +2505,16 @@ export function OptionsPage() {
           <div className="options-underlying-price" style={{ textAlign: "right" }}>
             {effectivePanelSpot !== null && effectivePanelSpot > 0 ? (
               <>
-                <div>
-                  {parsedManualSpot !== null ? (
-                    <>Spot manual: $ {formatNumber(effectivePanelSpot, 2)}</>
-                  ) : chainIsIolPrimary ? (
-                    <>Spot IOL: $ {formatNumber(effectivePanelSpot, 2)}</>
-                  ) : (
-                    <>Spot: $ {formatNumber(effectivePanelSpot, 2)}</>
-                  )}
+                <div>$ {formatNumber(effectivePanelSpot, 2)}</div>
+                <div className="msg-muted options-underlying-spot-foot" style={{ fontSize: "0.72rem", marginTop: "0.28rem" }}>
+                  {parsedManualSpot !== null
+                    ? "Fuente: ingreso manual"
+                    : chainIsIolPrimary
+                      ? "Fuente: IOL"
+                      : mergedChain?.spot_source?.trim()
+                        ? `Fuente: ${mergedChain.spot_source}`
+                        : "Fuente: —"}
                 </div>
-                {parsedManualSpot === null &&
-                mergedChain &&
-                (mergedChain.spot_source ||
-                  mergedChain.spot_source_detail ||
-                  (mergedChain.spot_updated_at ?? mergedChain.spot_as_of)?.trim() ||
-                  typeof mergedChain.spot_cache_hit === "boolean" ||
-                  mergedChain.spot_fetch_ms != null ||
-                  mergedChain.spot_symbol_used?.trim()) ? (
-                  <div
-                    className="msg-muted options-page-blk__spot-detail"
-                    style={{
-                      fontSize: "0.72rem",
-                      marginTop: "0.2rem",
-                      maxWidth: "22rem",
-                      lineHeight: 1.35,
-                      textAlign: "right",
-                    }}
-                    title={[
-                      mergedChain.spot_source && `Fuente: ${mergedChain.spot_source}`,
-                      mergedChain.spot_source_detail && `Detalle: ${mergedChain.spot_source_detail}`,
-                      (mergedChain.spot_updated_at ?? mergedChain.spot_as_of)?.trim() &&
-                        `Marca: ${(mergedChain.spot_updated_at ?? mergedChain.spot_as_of)!.trim()}`,
-                      typeof mergedChain.spot_cache_hit === "boolean" &&
-                        `Caché IOL: ${mergedChain.spot_cache_hit ? "sí" : "no"}`,
-                      mergedChain.spot_fetch_ms != null && `Resolución: ${mergedChain.spot_fetch_ms} ms`,
-                      mergedChain.spot_symbol_used?.trim() &&
-                        mergedChain.spot_symbol_used.trim() !== (mergedChain.spot_symbol ?? "").trim() &&
-                        `Símbolo spot: ${mergedChain.spot_symbol_used.trim()}`,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  >
-                    {mergedChain.spot_source ? <>Fuente: {mergedChain.spot_source}</> : <>Fuente: —</>}
-                    {(mergedChain.spot_updated_at ?? mergedChain.spot_as_of)?.trim() ? (
-                      <>
-                        {" "}
-                        · {(mergedChain.spot_updated_at ?? mergedChain.spot_as_of)!.trim().slice(0, 16)}
-                        …
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
               </>
             ) : (
               <span className="msg-muted">Precio subyacente no disponible</span>
@@ -2557,7 +2526,7 @@ export function OptionsPage() {
       <div className="options-page-blk__chain-summary msg-muted">
         {hasRequestedChain && mergedChain && !loadingChain && !errorChain ? (
           <div className="options-page-blk__chain-summary-row">
-            <strong>{mergedChain.underlying}</strong>
+            <strong>{equityUnderlyingDisplayTicker}</strong>
             <span className="options-page-blk__sep" aria-hidden="true">
               ·
             </span>
@@ -2908,22 +2877,42 @@ export function OptionsPage() {
 
       {activeTab === "panel" && !loadingChain && !errorChain && mergedFilteredContracts.length > 0 ? (
         <>
-          {chainIsIolPrimary && iolQuoteSymbolList.length > 0 && (loadingIolQuotes || visibleQuotesBatchApplied) ? (
-            <p
-              className="msg-muted"
-              style={{ fontSize: "0.74rem", margin: "0.1rem 0 0.3rem", lineHeight: 1.35, opacity: 0.88 }}
-            >
-              {loadingIolQuotes ? "Actualizando puntas visibles..." : "Puntas visibles actualizadas"}
-            </p>
-          ) : null}
           <div className="table-wrap">
-          <table>
+          <table className="options-panel-chain-table">
             <thead>
               <tr>
                 <th>Símbolo</th>
-                <th>Vencimiento</th>
+                <th>
+                  <button
+                    type="button"
+                    className="options-panel-sort-th"
+                    onClick={onPanelSortHeaderExpiryClick}
+                    aria-label={
+                      panelHeaderSort.kind === "expiry"
+                        ? `Ordenar por vencimiento (${panelHeaderSort.dir === "asc" ? "ascendente" : "descendente"}); clic para cambiar`
+                        : "Ordenar por vencimiento"
+                    }
+                  >
+                    Vencimiento
+                    {panelHeaderSort.kind === "expiry" ? (panelHeaderSort.dir === "asc" ? " ↑" : " ↓") : ""}
+                  </button>
+                </th>
                 <th>Tipo</th>
-                <th>Strike</th>
+                <th style={{ textAlign: "right" }}>
+                  <button
+                    type="button"
+                    className="options-panel-sort-th options-panel-sort-th--end"
+                    onClick={onPanelSortHeaderStrikeClick}
+                    aria-label={
+                      panelHeaderSort.kind === "strike"
+                        ? `Ordenar por strike (${panelHeaderSort.dir === "asc" ? "ascendente" : "descendente"}); clic para cambiar`
+                        : "Ordenar por strike"
+                    }
+                  >
+                    Strike
+                    {panelHeaderSort.kind === "strike" ? (panelHeaderSort.dir === "asc" ? " ↑" : " ↓") : ""}
+                  </button>
+                </th>
                 <th>Moneyness</th>
                 <th>Bid</th>
                 <th>Ask</th>
@@ -3014,7 +3003,7 @@ export function OptionsPage() {
                         {formatInteger(vol)}
                       </td>
                       <td style={{ textAlign: "right" }}>{ops === null ? "—" : formatInteger(ops)}</td>
-                      <td style={{ textAlign: "right" }}>{formatInteger(c.open_interest)}</td>
+                      <td style={{ textAlign: "right" }}>{formatPanelOpenInterest(c.open_interest)}</td>
                     </tr>
                   );
                 });

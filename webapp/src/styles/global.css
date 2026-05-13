@@ -415,6 +415,96 @@ a:hover {
   gap: 0.15rem;
 }
 
+/* Panel opciones: tipografía un poco más compacta; orden en cabeceras; badges legibles */
+.options-page.options-page--layout .options-page-blk,
+.options-page.options-page--layout .options-underlying-card,
+.options-page.options-page--layout .options-tabs,
+.options-page.options-page--layout .options-page-blk__chain-summary {
+  font-size: 0.93rem;
+}
+
+.options-page.options-page--layout .options-page-blk__title {
+  font-size: 0.95rem;
+}
+
+.options-page.options-page--layout .options-underlying-price {
+  font-size: 1.48rem;
+}
+
+.options-page.options-page--layout .options-panel-chain-table {
+  font-size: 0.9rem;
+}
+
+.options-panel-sort-th {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: inherit;
+}
+
+.options-panel-sort-th:hover {
+  text-decoration: underline;
+}
+
+.options-panel-sort-th--end {
+  display: inline-flex;
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.options-page.options-page--layout .options-panel-chain-table .moneyness-badge.moneyness-itm {
+  color: #fff;
+  background: rgba(21, 128, 61, 0.92);
+  border-color: rgba(16, 115, 45, 0.95);
+}
+
+.options-page.options-page--layout .options-panel-chain-table .moneyness-badge.moneyness-atm {
+  color: #fff;
+  background: rgba(146, 64, 14, 0.9);
+  border-color: rgba(120, 53, 15, 0.95);
+}
+
+.options-page.options-page--layout .options-panel-chain-table .moneyness-badge.moneyness-otm {
+  color: #fff;
+  background: rgba(71, 85, 105, 0.88);
+  border-color: rgba(51, 65, 85, 0.92);
+}
+
+.options-page.options-page--layout .options-panel-chain-table .moneyness-badge.moneyness-none {
+  color: #fff;
+  background: rgba(100, 116, 139, 0.85);
+  border-color: rgba(71, 85, 105, 0.95);
+  font-weight: 600;
+}
+
+.options-page.options-page--layout .options-panel-chain-table .options-quote-status-badge {
+  color: #fff !important;
+}
+
+.options-page.options-page--layout .options-panel-chain-table .options-quote-status-badge.options-quote-status-ok {
+  background: rgba(22, 163, 74, 0.92);
+  border-color: rgba(21, 128, 61, 0.95);
+}
+
+.options-page.options-page--layout .options-panel-chain-table .options-quote-status-badge.options-quote-status-base {
+  background: rgba(71, 85, 105, 0.78);
+  border-color: rgba(51, 65, 85, 0.85);
+}
+
+.options-page.options-page--layout .options-panel-chain-table .options-quote-status-badge.options-quote-status-pend {
+  background: rgba(37, 99, 235, 0.88);
+  border-color: rgba(29, 78, 216, 0.92);
+}
+
+.options-page.options-page--layout .options-panel-chain-table .options-quote-status-badge.options-quote-status-old {
+  background: rgba(180, 83, 9, 0.88);
+  border-color: rgba(146, 64, 14, 0.92);
+}
+
 .options-page-blk {
   margin-top: 0.85rem;
   padding: 0.75rem 0.85rem 0.85rem;
