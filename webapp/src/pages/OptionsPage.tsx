@@ -44,6 +44,19 @@ const IOL_QUOTES_VISIBLE_CAP = 12;
 /** Nominal por contrato (BYMA acciones) para capital comprometido en tablas de estrategia. */
 const OPTIONS_STRATEGY_LOT_SIZE = 100;
 
+/** Umbrales alertas operativas (TNA anualizada mostrada en tablas). */
+const OP_ALERT_TNA_WARN_PCT = 60;
+const OP_ALERT_TNA_DANGER_PCT = 100;
+/** Collar: |neto|/spot ≤ este % → “casi cero” en pesos relativos. */
+const OP_ALERT_COLLAR_NET_ABS_PCT_SPOT = 0.5;
+/** Collar: pérdida máx. aprox / spot ≤ este % → “baja” para subir severidad a warning. */
+const OP_ALERT_COLLAR_LOW_LOSS_PCT_SPOT = 12;
+
+/**
+ * TODO(fase siguiente): alertas “Bull Call Spread barato” usando `bullCallSpreads` (débito vs anchura o vs spot)
+ * cuando haya criterio estable. No mostrar filas hasta entonces.
+ */
+
 /** Edad máxima (ms) de última puntada IOL útil para mostrar OK vs OLD en columna Estado. */
 const IOL_QUOTE_UI_FRESH_MS = 30_000;
 
@@ -54,6 +67,14 @@ const PANEL_QUOTE_STATUS_TOOLTIP: Record<PanelQuoteStatusCode, string> = {
   BASE: "Usando datos base de la cadena",
   PEND: "Esperando actualización de puntas",
   OLD: "Cotización desactualizada",
+};
+
+/** Etiqueta corta en tablas (detalle en `title`). */
+const PANEL_QUOTE_STATUS_SHORT: Record<PanelQuoteStatusCode, string> = {
+  OK: "OK",
+  BASE: "Base",
+  PEND: "Pend.",
+  OLD: "Ant.",
 };
 
 const OPTIONS_DESACOPLE_IV_COL_TOOLTIP =
@@ -70,7 +91,13 @@ type FlatRow = {
 type StrategyType = "Bull Call Spread" | "Bear Put Spread" | "Covered Call" | "Protective Put" | "Collar";
 type LegAction = "BUY" | "SELL";
 type ActiveTab = "panel" | "strategies" | "ivSmile";
-type StrategiesFilter = "" | "Bull Call Spread" | "Covered Call" | "CALL Descubierta" | "Cash Secured Put";
+type StrategiesFilter =
+  | ""
+  | "Bull Call Spread"
+  | "Covered Call"
+  | "CALL Descubierta"
+  | "Cash Secured Put"
+  | "Collar";
 
 type StrategyLeg = {
   action: LegAction;
@@ -687,6 +714,39 @@ function ivSmileDiffCellClass(pct: number | null | undefined): string {
   return "options-iv-smile-diff-neu";
 }
 
+/** Δ IV temporal: expansión (tonos cálidos) vs contracción (azul). */
+function ivSmileDeltaIvCellClass(pct: number | null | undefined): string {
+  if (pct === null || pct === undefined || !Number.isFinite(pct)) return "";
+  if (pct > 0) return "options-iv-smile-delta-expand";
+  if (pct < 0) return "options-iv-smile-delta-contract";
+  return "";
+}
+
+/** Motivos cortos para Top IV; solo entra lo que el punto ya expone (sin inventar). */
+function collarNetCommentClass(comentario: string): string {
+  if (comentario === "Crédito neto") return "options-badge-net options-badge-net--credit";
+  if (comentario === "Débito neto") return "options-badge-net options-badge-net--debit";
+  if (comentario === "Costo neutro") return "options-badge-net options-badge-net--neutral";
+  return "options-badge-net";
+}
+
+function topIvSmileOpportunityReasons(p: IvSmilePoint, spot: number | null): string[] {
+  const reasons: string[] = [];
+  if (p.iv_expanding) reasons.push("IV en expansión");
+  if (p.iv_crushing) reasons.push("IV en crush");
+  if (p.rich_iv) reasons.push("IV alta vs promedio");
+  else if (p.cheap_iv) reasons.push("IV baja vs promedio");
+  if (spot !== null && spot > 0 && Number.isFinite(p.strike)) {
+    const d = (Math.abs(p.strike - spot) / spot) * 100;
+    if (Number.isFinite(d) && d <= 8) reasons.push("cerca del spot");
+  }
+  const vol = p.volume ?? 0;
+  if (Number.isFinite(vol) && vol > 0) reasons.push("volumen en cadena");
+  const bid = p.bid;
+  if (bid !== undefined && bid !== null && Number.isFinite(bid) && bid > 0) reasons.push("bid en cadena");
+  return reasons;
+}
+
 function IvSmileSvgChart({
   points,
   spot,
@@ -839,6 +899,7 @@ export function OptionsPage() {
   const [showCoveredCall, setShowCoveredCall] = useState(false);
   const [showNakedShortCall, setShowNakedShortCall] = useState(false);
   const [showCashSecuredPut, setShowCashSecuredPut] = useState(false);
+  const [showCollar, setShowCollar] = useState(false);
   const [selectedLegs, setSelectedLegs] = useState<StrategyLeg[]>([]);
   const [mergedChain, setMergedChain] = useState<OptionsChainResponse | null>(null);
   const [loadingChain, setLoadingChain] = useState(false);
@@ -1145,6 +1206,113 @@ export function OptionsPage() {
     }
     rows.sort((a, b) => b.iv_diff_vs_avg_pct - a.iv_diff_vs_avg_pct);
     return rows.slice(0, 50);
+  }, [ivSmileItems, effectivePanelSpot]);
+
+  const ivSmileTemporalMoves = useMemo(() => {
+    type Row = {
+      symbol: string;
+      strike: number;
+      iv_pct: number;
+      iv_change_pct: number;
+      iv_diff_vs_avg_pct: number | null;
+      bid: number | null;
+      expiration: string;
+    };
+    const rows: Row[] = [];
+    for (const g of ivSmileItems) {
+      for (const p of g.points) {
+        if (!p.iv_expanding && !p.iv_crushing) continue;
+        const ch = p.iv_change_pct;
+        if (ch === null || ch === undefined || !Number.isFinite(ch)) continue;
+        const dp = p.iv_diff_vs_avg_pct;
+        rows.push({
+          symbol: (p.symbol ?? "").trim() || "—",
+          strike: p.strike,
+          iv_pct: p.iv_pct,
+          iv_change_pct: ch,
+          iv_diff_vs_avg_pct: dp === null || dp === undefined || !Number.isFinite(dp) ? null : dp,
+          bid:
+            p.bid !== undefined && p.bid !== null && typeof p.bid === "number" && Number.isFinite(p.bid) && p.bid > 0
+              ? p.bid
+              : null,
+          expiration: g.expiration,
+        });
+      }
+    }
+    rows.sort((a, b) => Math.abs(b.iv_change_pct) - Math.abs(a.iv_change_pct));
+    return rows.slice(0, 80);
+  }, [ivSmileItems]);
+
+  /** Top 5 ranking compuesto (temporal > |Δ IV| > |vs prom| > cercanía spot > volumen > bid). */
+  const ivSmileTopIvOpportunities = useMemo(() => {
+    type TopRow = {
+      key: string;
+      symbol: string;
+      option_type: string;
+      strike: number;
+      expiration: string;
+      iv_pct: number;
+      iv_change_pct: number | null;
+      iv_expanding: boolean;
+      iv_crushing: boolean;
+      reasonLine: string;
+      sortTemporal: number;
+      sortAbsCh: number;
+      sortAbsDp: number;
+      sortSpot: number;
+      sortVol: number;
+      sortBid: number;
+    };
+    const spot = effectivePanelSpot;
+    const pool: TopRow[] = [];
+    for (const g of ivSmileItems) {
+      const ot = (g.option_type ?? "").trim() || "—";
+      for (const p of g.points) {
+        if (!Number.isFinite(p.iv_pct)) continue;
+        const sym = (p.symbol ?? "").trim();
+        const ch = p.iv_change_pct;
+        const absCh = ch !== null && ch !== undefined && Number.isFinite(ch) ? Math.abs(ch) : 0;
+        const dp = p.iv_diff_vs_avg_pct;
+        const absDp = dp !== null && dp !== undefined && Number.isFinite(dp) ? Math.abs(dp) : 0;
+        let spotScore = 0;
+        if (spot !== null && spot > 0 && Number.isFinite(p.strike)) {
+          const dist = Math.abs(p.strike - spot) / spot;
+          spotScore = Number.isFinite(dist) ? 1 / (1 + dist * 12) : 0;
+        }
+        const vol = p.volume !== undefined && Number.isFinite(p.volume) ? Math.max(0, p.volume) : 0;
+        const bidOk =
+          p.bid !== undefined && p.bid !== null && Number.isFinite(p.bid) && p.bid > 0 ? 1 : 0;
+        const temporal = p.iv_expanding || p.iv_crushing ? 1 : 0;
+        const reasons = topIvSmileOpportunityReasons(p, spot);
+        pool.push({
+          key: `${g.expiration}-${ot}-${sym || "x"}-${p.strike}`,
+          symbol: sym || "—",
+          option_type: ot,
+          strike: p.strike,
+          expiration: g.expiration,
+          iv_pct: p.iv_pct,
+          iv_change_pct: ch !== null && ch !== undefined && Number.isFinite(ch) ? ch : null,
+          iv_expanding: Boolean(p.iv_expanding),
+          iv_crushing: Boolean(p.iv_crushing),
+          reasonLine: reasons.length ? reasons.join(" · ") : "—",
+          sortTemporal: temporal,
+          sortAbsCh: absCh,
+          sortAbsDp: absDp,
+          sortSpot: spotScore,
+          sortVol: vol,
+          sortBid: bidOk,
+        });
+      }
+    }
+    pool.sort((a, b) => {
+      if (a.sortTemporal !== b.sortTemporal) return b.sortTemporal - a.sortTemporal;
+      if (a.sortAbsCh !== b.sortAbsCh) return b.sortAbsCh - a.sortAbsCh;
+      if (a.sortAbsDp !== b.sortAbsDp) return b.sortAbsDp - a.sortAbsDp;
+      if (a.sortSpot !== b.sortSpot) return b.sortSpot - a.sortSpot;
+      if (a.sortVol !== b.sortVol) return b.sortVol - a.sortVol;
+      return b.sortBid - a.sortBid;
+    });
+    return pool.slice(0, 5);
   }, [ivSmileItems, effectivePanelSpot]);
 
   const ivAvgPctByExpiryType = useMemo(() => {
@@ -1821,6 +1989,196 @@ export function OptionsPage() {
     return out.slice(0, 30);
   }, [calls, effectivePanelSpot, iolQuotes, contractBySymbol]);
 
+  /** Collar: acciones + put comprado (ask efectivo) + call vendido (bid efectivo), mismo vencimiento; put K &lt; spot &lt; call K. */
+  const collarOpportunities = useMemo(() => {
+    type Row = {
+      expiryKey: string;
+      putSymbol: string;
+      callSymbol: string;
+      putStrike: number;
+      callStrike: number;
+      primaPut: number;
+      primaCall: number;
+      neto: number;
+      piso: number;
+      techo: number;
+      perdidaMax: number;
+      gananciaMax: number;
+      comentario: string;
+      distPutPct: number;
+      distCallPct: number;
+    };
+    const S = effectivePanelSpot;
+    if (S === null || !(S > 0) || !Number.isFinite(S)) return [];
+
+    const NEUTRAL_NET = 0.02;
+    const pool: Row[] = [];
+    const expSet = new Set<string>();
+    for (const r of calls) {
+      const e = expiryKeyFromRaw(r.raw);
+      if (e) expSet.add(e);
+    }
+    for (const r of puts) {
+      const e = expiryKeyFromRaw(r.raw);
+      if (e) expSet.add(e);
+    }
+
+    for (const exp of [...expSet].sort()) {
+      const putRows = puts.filter((r) => {
+        const e = expiryKeyFromRaw(r.raw);
+        return e === exp && Number.isFinite(r.strike) && r.strike < S;
+      });
+      const callRows = calls.filter((r) => {
+        const e = expiryKeyFromRaw(r.raw);
+        return e === exp && Number.isFinite(r.strike) && r.strike > S;
+      });
+
+      for (const pr of putRows) {
+        const symP = (typeof pr.raw.simbolo === "string" ? pr.raw.simbolo : "").trim().toUpperCase();
+        const putCo = symP ? contractBySymbol.get(symP) : undefined;
+        if (!putCo) continue;
+        const putAsk = getEffectiveAsk(putCo, iolQuotes);
+        if (putAsk === null || !(putAsk > 0) || !Number.isFinite(putAsk)) continue;
+
+        for (const cr of callRows) {
+          const symC = (typeof cr.raw.simbolo === "string" ? cr.raw.simbolo : "").trim().toUpperCase();
+          const callCo = symC ? contractBySymbol.get(symC) : undefined;
+          if (!callCo) continue;
+          const callBid = getEffectiveBid(callCo, iolQuotes);
+          if (callBid === null || !(callBid > 0) || !Number.isFinite(callBid)) continue;
+
+          const putK = pr.strike;
+          const callK = cr.strike;
+          if (!Number.isFinite(putK) || !Number.isFinite(callK)) continue;
+
+          const neto = callBid - putAsk;
+          const perdidaMax = Math.max(0, S - putK + putAsk - callBid);
+          const gananciaMax = Math.max(0, callK - S + callBid - putAsk);
+
+          let comentario: string;
+          if (Math.abs(neto) <= NEUTRAL_NET) comentario = "Costo neutro";
+          else if (neto > 0) comentario = "Crédito neto";
+          else comentario = "Débito neto";
+
+          const distPutPct = ((S - putK) / S) * 100;
+          const distCallPct = ((callK - S) / S) * 100;
+
+          pool.push({
+            expiryKey: exp,
+            putSymbol: symP || "—",
+            callSymbol: symC || "—",
+            putStrike: putK,
+            callStrike: callK,
+            primaPut: putAsk,
+            primaCall: callBid,
+            neto,
+            piso: putK,
+            techo: callK,
+            perdidaMax,
+            gananciaMax,
+            comentario,
+            distPutPct,
+            distCallPct,
+          });
+        }
+      }
+    }
+
+    pool.sort((a, b) => {
+      if (a.perdidaMax !== b.perdidaMax) return a.perdidaMax - b.perdidaMax;
+      if (b.gananciaMax !== a.gananciaMax) return b.gananciaMax - a.gananciaMax;
+      if (a.distPutPct !== b.distPutPct) return a.distPutPct - b.distPutPct;
+      return a.distCallPct - b.distCallPct;
+    });
+
+    return pool.slice(0, 10);
+  }, [calls, puts, effectivePanelSpot, iolQuotes, contractBySymbol]);
+
+  const operationalOpportunityAlerts = useMemo(() => {
+    type Sev = "danger" | "warning" | "info";
+    type Row = {
+      id: string;
+      severity: Sev;
+      main: string;
+      meta?: string;
+      sDanger: number;
+      sTna: number;
+      sCollarNetAbsPct: number;
+    };
+    const out: Row[] = [];
+    const spot = effectivePanelSpot;
+
+    for (const x of coveredCalls) {
+      const tp = x.tnaPct;
+      if (tp === null || !Number.isFinite(tp) || tp < OP_ALERT_TNA_WARN_PCT) continue;
+      const symRow = calls.find(
+        (r) => r.tipo === "CALL" && expiryKeyFromRaw(r.raw) === x.expiryKey && r.strike === x.strike,
+      );
+      const especie =
+        symRow && typeof symRow.raw.simbolo === "string" && symRow.raw.simbolo.trim()
+          ? String(symRow.raw.simbolo).trim()
+          : "CALL";
+      const sev: Sev = tp >= OP_ALERT_TNA_DANGER_PCT ? "danger" : "warning";
+      out.push({
+        id: `op-cc-${x.expiryKey}-${x.strike}-${tp}`,
+        severity: sev,
+        main: `Covered Call con TNA alta: ${especie} TNA ${formatNumber(tp, 1)}%`,
+        meta: `${formatExpiryMonthLabel(x.expiryKey)} · K ${formatNumber(x.strike, 2)}`,
+        sDanger: sev === "danger" ? 2 : 1,
+        sTna: tp,
+        sCollarNetAbsPct: 0,
+      });
+    }
+
+    for (const x of cashSecuredPuts) {
+      const tp = x.tnaPct;
+      if (tp === null || !Number.isFinite(tp) || tp < OP_ALERT_TNA_WARN_PCT) continue;
+      const especie = (x.contract.symbol ?? "").trim() || "PUT";
+      const sev: Sev = tp >= OP_ALERT_TNA_DANGER_PCT ? "danger" : "warning";
+      out.push({
+        id: `op-csp-${x.expiryKey}-${x.strike}-${tp}`,
+        severity: sev,
+        main: `CSP con TNA alta: ${especie} TNA ${formatNumber(tp, 1)}%`,
+        meta: `${formatExpiryMonthLabel(x.expiryKey)} · K ${formatNumber(x.strike, 2)}`,
+        sDanger: sev === "danger" ? 2 : 1,
+        sTna: tp,
+        sCollarNetAbsPct: 0,
+      });
+    }
+
+    if (spot !== null && spot > 0 && Number.isFinite(spot)) {
+      for (const x of collarOpportunities) {
+        const neto = x.neto;
+        if (!Number.isFinite(neto)) continue;
+        const absPct = (Math.abs(neto) / spot) * 100;
+        const cheapBySpot = absPct <= OP_ALERT_COLLAR_NET_ABS_PCT_SPOT;
+        const credit = neto > 0;
+        if (!cheapBySpot && !credit) continue;
+
+        const lossPct = (x.perdidaMax / spot) * 100;
+        const lowLoss = Number.isFinite(lossPct) && lossPct <= OP_ALERT_COLLAR_LOW_LOSS_PCT_SPOT;
+        const sev: Sev = lowLoss && (cheapBySpot || credit) ? "warning" : "info";
+
+        out.push({
+          id: `op-collar-${x.expiryKey}-${x.putSymbol}-${x.callSymbol}-${neto}`,
+          severity: sev,
+          main: `Collar barato/costo cero: PUT ${formatNumber(x.putStrike, 2)} + CALL ${formatNumber(x.callStrike, 2)}, neto ${formatNumber(neto, 2)}`,
+          meta: `${formatExpiryMonthLabel(x.expiryKey)} · ${x.putSymbol} / ${x.callSymbol}`,
+          sDanger: sev === "warning" ? 1 : 0,
+          sTna: 0,
+          sCollarNetAbsPct: absPct,
+        });
+      }
+    }
+
+    out.sort((a, b) => {
+      if (b.sDanger !== a.sDanger) return b.sDanger - a.sDanger;
+      if (b.sTna !== a.sTna) return b.sTna - a.sTna;
+      return a.sCollarNetAbsPct - b.sCollarNetAbsPct;
+    });
+    return out.slice(0, 6);
+  }, [coveredCalls, cashSecuredPuts, collarOpportunities, calls, effectivePanelSpot]);
+
   const netCost = useMemo(() => {
     let net = 0;
     let ok = false;
@@ -1834,7 +2192,7 @@ export function OptionsPage() {
   }, [selectedLegs]);
 
   return (
-    <div className="page options-page">
+    <div className="page options-page options-page--layout">
       <header className="page__header">
         <h1>Opciones</h1>
         <p className="page__subtitle">
@@ -1877,11 +2235,16 @@ export function OptionsPage() {
         </p>
       ) : null}
 
-      <div style={{ marginBottom: "0.85rem" }}>
+      <section className="options-page-blk options-page-blk--asset" aria-labelledby="options-blk-asset-h">
+        <h2 id="options-blk-asset-h" className="options-page-blk__title">
+          Activo
+        </h2>
+        <p className="options-page-blk__lede msg-muted">Elegí el subyacente para cargar la cadena y las métricas.</p>
+        <div style={{ marginBottom: "0.85rem" }}>
         {selectedUnderlying.trim() === "" && !loadingChain ? (
-          <p className="msg-muted" style={{ margin: "0 0 0.55rem" }}>
-            Elegí un activo para cargar la cadena de opciones.
-          </p>
+          <div className="options-empty-state options-empty-state--compact" role="status">
+            Sin cadena: elegí un activo arriba.
+          </div>
         ) : null}
         <div
           role="group"
@@ -1900,8 +2263,14 @@ export function OptionsPage() {
             </button>
           ))}
         </div>
-      </div>
+        </div>
+      </section>
 
+      <section className="options-page-blk options-page-blk--chain" aria-labelledby="options-blk-chain-h">
+        <h2 id="options-blk-chain-h" className="options-page-blk__title">
+          Cadena de opciones
+        </h2>
+        <p className="options-page-blk__lede msg-muted">Vencimiento, filtros del panel y actualización de puntas IOL.</p>
       <div className="radar-toolbar options-toolbar" role="toolbar" aria-label="Opciones de cadena">
         <label className="radar-toolbar__field">
           <span className="radar-toolbar__label">Vencimiento</span>
@@ -2020,21 +2389,28 @@ export function OptionsPage() {
           >
             Actualizar puntas visibles
           </button>
-          <span className="msg-muted" style={{ margin: 0, fontSize: "0.8rem", flex: "1 1 14rem" }}>
-            Actualiza bid/ask, volumen y operaciones de las filas visibles.
+          <span className="msg-muted options-page-blk__hint" title="Actualiza bid, ask, volumen y operaciones de las filas visibles en el panel.">
+            Puntas visibles (IOL).
           </span>
         </div>
         {loadingIolQuotes && hasRequestedChain && mergedChain && chainIsIolPrimary && iolQuoteSymbolList.length > 0 ? (
-          <p className="msg-muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-            Actualizando puntas/volumen visibles…
+          <p className="msg-muted options-page-blk__hint" style={{ margin: 0 }}>
+            Actualizando puntas…
           </p>
         ) : null}
         {activeTab === "panel" ? (
-          <p className="msg-muted" style={{ margin: 0, fontSize: "0.8rem" }}>
-            Las puntas se actualizan para las filas visibles (hasta {IOL_QUOTES_VISIBLE_CAP} especies por consulta).
+          <p className="msg-muted options-page-blk__hint" style={{ margin: 0 }} title={`Hasta ${IOL_QUOTES_VISIBLE_CAP} especies por consulta.`}>
+            En el panel, puntas por filas visibles.
           </p>
         ) : null}
       </div>
+      </section>
+
+      <section className="options-page-blk options-page-blk--spot" aria-labelledby="options-blk-spot-h">
+        <h2 id="options-blk-spot-h" className="options-page-blk__title">
+          Spot y señales
+        </h2>
+        <p className="options-page-blk__lede msg-muted">Navegación entre panel, estrategias e IV.</p>
 
       <div className="options-tabs" role="tablist" aria-label="Secciones de opciones">
         <button
@@ -2130,45 +2506,35 @@ export function OptionsPage() {
                   mergedChain.spot_fetch_ms != null ||
                   mergedChain.spot_symbol_used?.trim()) ? (
                   <div
-                    className="msg-muted"
+                    className="msg-muted options-page-blk__spot-detail"
                     style={{
                       fontSize: "0.72rem",
                       marginTop: "0.2rem",
-                      maxWidth: "20rem",
+                      maxWidth: "22rem",
                       lineHeight: 1.35,
                       textAlign: "right",
                     }}
+                    title={[
+                      mergedChain.spot_source && `Fuente: ${mergedChain.spot_source}`,
+                      mergedChain.spot_source_detail && `Detalle: ${mergedChain.spot_source_detail}`,
+                      (mergedChain.spot_updated_at ?? mergedChain.spot_as_of)?.trim() &&
+                        `Marca: ${(mergedChain.spot_updated_at ?? mergedChain.spot_as_of)!.trim()}`,
+                      typeof mergedChain.spot_cache_hit === "boolean" &&
+                        `Caché IOL: ${mergedChain.spot_cache_hit ? "sí" : "no"}`,
+                      mergedChain.spot_fetch_ms != null && `Resolución: ${mergedChain.spot_fetch_ms} ms`,
+                      mergedChain.spot_symbol_used?.trim() &&
+                        mergedChain.spot_symbol_used.trim() !== (mergedChain.spot_symbol ?? "").trim() &&
+                        `Símbolo spot: ${mergedChain.spot_symbol_used.trim()}`,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
                   >
-                    {mergedChain.spot_source ? (
-                      <>
-                        Fuente: {mergedChain.spot_source}
-                        <br />
-                      </>
-                    ) : null}
-                    {mergedChain.spot_source_detail ? (
-                      <>
-                        Detalle: {mergedChain.spot_source_detail}
-                        <br />
-                      </>
-                    ) : null}
+                    {mergedChain.spot_source ? <>Fuente: {mergedChain.spot_source}</> : <>Fuente: —</>}
                     {(mergedChain.spot_updated_at ?? mergedChain.spot_as_of)?.trim() ? (
                       <>
-                        Marca tiempo: {(mergedChain.spot_updated_at ?? mergedChain.spot_as_of)!.trim()}
-                        <br />
-                      </>
-                    ) : null}
-                    {typeof mergedChain.spot_cache_hit === "boolean" ? (
-                      <>
-                        Caché IOL (subyacente): {mergedChain.spot_cache_hit ? "sí" : "no"}
-                        <br />
-                      </>
-                    ) : null}
-                    {mergedChain.spot_fetch_ms != null ? <>Resolución spot: {mergedChain.spot_fetch_ms} ms</> : null}
-                    {mergedChain.spot_symbol_used?.trim() &&
-                    mergedChain.spot_symbol_used.trim() !== (mergedChain.spot_symbol ?? "").trim() ? (
-                      <>
-                        <br />
-                        Símbolo spot: {mergedChain.spot_symbol_used.trim()}
+                        {" "}
+                        · {(mergedChain.spot_updated_at ?? mergedChain.spot_as_of)!.trim().slice(0, 16)}
+                        …
                       </>
                     ) : null}
                   </div>
@@ -2181,77 +2547,67 @@ export function OptionsPage() {
         </div>
       </div>
 
-      <div className="msg-muted" style={{ marginTop: "0.25rem" }}>
-        <div>
-          {hasRequestedChain && mergedChain && !loadingChain && !errorChain ? (
-            <>
-              {chainIsIolPrimary
-                ? "Cadena IOL con referencia Allaria/Rava en el merge. Las puntas se actualizan para las filas visibles. "
-                : "Cadena desde el backend (Allaria + Rava). "}
-              <span>
-                <strong>Subyacente (normalizado):</strong> {mergedChain.underlying}
-                {" — "}
-                <strong>Spot subyacente:</strong>{" "}
-                {effectivePanelSpot !== null && effectivePanelSpot > 0 ? (
-                  <>$ {formatNumber(effectivePanelSpot, 2)}</>
-                ) : (
-                  <em>Precio subyacente no disponible</em>
-                )}
-                {" — "}
-                <strong>Fuente:</strong>{" "}
-                {parsedManualSpot !== null ? "manual" : (mergedChain.spot_source ?? "—")}
-                {mergedChain.spot_symbol ? (
-                  <>
-                    {" "}
-                    (<code>{mergedChain.spot_symbol}</code>)
-                  </>
-                ) : null}
-                {" — "}
-                <strong>Total contratos:</strong> {mergedChain.total}
-                {activeTab === "panel" ? (
-                  <>
-                    {" — "}
-                    <strong>Filtrados:</strong> {mergedFilteredContracts.length}
-                    {hideZeroVolume ? (
-                      <>
-                        {" — "}
-                        <em>Ocultando volumen 0</em>
-                      </>
-                    ) : null}
-                  </>
-                ) : null}
+      <div className="options-page-blk__chain-summary msg-muted">
+        {hasRequestedChain && mergedChain && !loadingChain && !errorChain ? (
+          <div className="options-page-blk__chain-summary-row">
+            <strong>{mergedChain.underlying}</strong>
+            <span className="options-page-blk__sep" aria-hidden="true">
+              ·
+            </span>
+            <span>{mergedChain.total} contr.</span>
+            {activeTab === "panel" ? (
+              <>
+                <span className="options-page-blk__sep">·</span>
+                <span>{mergedFilteredContracts.length} visibles</span>
+              </>
+            ) : null}
+            <span className="options-page-blk__sep">·</span>
+            {effectivePanelSpot !== null && effectivePanelSpot > 0 ? (
+              <span
+                title={`Fuente spot: ${parsedManualSpot !== null ? "manual" : (mergedChain.spot_source ?? "—")}${mergedChain.spot_symbol ? ` (${mergedChain.spot_symbol})` : ""}`}
+              >
+                ${formatNumber(effectivePanelSpot, 2)}
               </span>
-            </>
-          ) : null}
-        </div>
-        {activeTab === "strategies" ? (
-          <div style={{ marginTop: "0.35rem" }}>
-            Estrategias usan la misma cadena que el Panel (universo operable).{" "}
-            {chainIsIolPrimary ? (
-              <strong>Estrategias calculadas sobre universo IOL</strong>
             ) : (
-              <strong>Estrategias calculadas sobre fallback Allaria/Rava</strong>
+              <span>Sin spot</span>
             )}
-            {!loadingChain && !errorChain && hasRequestedChain && (strategyRows.length > 0 || (mergedChain?.contracts.length ?? 0) > 0) ? (
-              <div style={{ marginTop: "0.35rem" }}>
-                <strong>Total contratos:</strong> {mergedChain?.total ?? strategyRows.length}
-                {expirySummary.length > 0 ? (
-                  <span>
-                    {" "}
-                    — <strong>Vencimientos:</strong>{" "}
-                    {expirySummary.map((it, idx) => (
-                      <span key={it.key}>
-                        {idx ? " · " : ""}
-                        {it.label}: {it.count}
-                      </span>
-                    ))}
-                  </span>
-                ) : null}
-              </div>
+            <span className="options-page-blk__sep">·</span>
+            <span
+              title={
+                chainIsIolPrimary
+                  ? "Cadena IOL con referencia Allaria/Rava; puntas por filas visibles."
+                  : "Cadena backend Allaria + Rava."
+              }
+            >
+              {chainIsIolPrimary ? "IOL+merge" : "Rava/A"}
+            </span>
+            {hideZeroVolume && activeTab === "panel" ? (
+              <>
+                <span className="options-page-blk__sep">·</span>
+                <em title="Filtro del panel">Ocult. vol. 0</em>
+              </>
+            ) : null}
+          </div>
+        ) : !hasRequestedChain ? (
+          <div className="options-empty-state options-empty-state--compact" role="status">
+            Sin cadena cargada todavía.
+          </div>
+        ) : null}
+        {activeTab === "strategies" ? (
+          <div className="options-page-blk__strategies-note" style={{ marginTop: "0.35rem" }}>
+            <span className="msg-muted" title="Misma cadena que el panel.">
+              {chainIsIolPrimary ? "Oportunidades: universo IOL" : "Oportunidades: Rava/Allaria"}
+            </span>
+            {!loadingChain && !errorChain && hasRequestedChain && mergedChain && expirySummary.length > 0 ? (
+              <span className="msg-muted">
+                {" "}
+                · {mergedChain.total} contr. · {expirySummary.length} venc.
+              </span>
             ) : null}
           </div>
         ) : null}
       </div>
+      </section>
 
       {loadingChain && hasRequestedChain ? <p>Cargando cadena…</p> : null}
       {errorChain && (
@@ -2260,12 +2616,22 @@ export function OptionsPage() {
         </p>
       )}
       {activeTab === "ivSmile" ? (
-        <div className="options-section" style={{ marginTop: "0.35rem" }}>
+        <section
+          className="options-section options-page-blk options-page-blk--iv"
+          style={{ marginTop: "0.35rem" }}
+          aria-labelledby="options-blk-iv-h"
+        >
+          <h2 id="options-blk-iv-h" className="options-page-blk__title">
+            Volatilidad (IV)
+          </h2>
+          <p className="options-page-blk__lede msg-muted">Curva y rankings con el mismo spot y cadena que el panel.</p>
           <div className="options-section-title">Sonrisa IV</div>
           {!selectedUnderlying.trim() ? (
-            <p className="msg-muted">Elegí un activo para ver la curva.</p>
+            <div className="options-empty-state options-empty-state--compact" role="status">
+              Sin IV: elegí un activo y abrí esta pestaña.
+            </div>
           ) : ivSmileLoading ? (
-            <p className="msg-muted">Cargando curva IV…</p>
+            <p className="msg-muted options-page-blk__hint">Cargando curva…</p>
           ) : ivSmileErr ? (
             <p role="alert">Error: {ivSmileErr}</p>
           ) : (
@@ -2303,8 +2669,8 @@ export function OptionsPage() {
                   </select>
                 </label>
               </div>
-              <p className="msg-muted" style={{ fontSize: "0.8rem", marginBottom: "0.5rem" }}>
-                IV según bid/ask/último de la cadena y spot del servidor (GET /options/iv-smile). Sin batch de puntas IOL.
+              <p className="msg-muted options-page-blk__hint" style={{ fontSize: "0.8rem", marginBottom: "0.5rem" }} title="GET /options/iv-smile; sin batch de puntas IOL.">
+                IV desde cadena y spot del servidor.
               </p>
               <IvSmileSvgChart points={ivSmileActivePoints} spot={effectivePanelSpot} avgIvPct={ivSmileActiveAvgIvPct} />
               <div className="table-wrap" style={{ marginTop: "0.65rem" }}>
@@ -2313,10 +2679,13 @@ export function OptionsPage() {
                     <tr>
                       <th style={{ textAlign: "right" }}>Strike</th>
                       <th style={{ textAlign: "right" }}>IV %</th>
+                      <th style={{ textAlign: "right" }} title="Cambio relativo de IV vs snapshot anterior (mismo vencimiento/tipo), si hay historial">
+                        Δ IV
+                      </th>
                       <th style={{ textAlign: "right" }} title="Diferencia relativa vs IV promedio del mismo vencimiento y tipo (±10 % = cara / barata)">
                         Dif. IV
                       </th>
-                      <th style={{ width: "6.5rem" }} />
+                      <th style={{ width: "8.5rem" }} />
                       <th>Moneyness</th>
                       <th>Especie</th>
                     </tr>
@@ -2324,27 +2693,44 @@ export function OptionsPage() {
                   <tbody>
                     {ivSmileActivePoints.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="msg-muted">
-                          Sin datos para esta combinación.
+                        <td colSpan={7} className="options-empty-cell msg-muted">
+                          Sin filas para este vencimiento/tipo.
                         </td>
                       </tr>
                     ) : (
                       ivSmileActivePoints.map((p) => {
                         const dp = p.iv_diff_vs_avg_pct;
                         const diffCls = ivSmileDiffCellClass(dp);
+                        const dIv = p.iv_change_pct;
+                        const dIvCls = ivSmileDeltaIvCellClass(dIv);
                         return (
                           <tr key={`${p.symbol}-${p.strike}-${p.iv_pct}`}>
                             <td style={{ textAlign: "right" }}>{formatNumber(p.strike, 2)}</td>
                             <td style={{ textAlign: "right" }}>{`${formatNumber(p.iv_pct, 1)}%`}</td>
+                            <td style={{ textAlign: "right" }} className={dIvCls}>
+                              {formatIvSmileDiffPct(dIv)}
+                            </td>
                             <td style={{ textAlign: "right" }} className={diffCls}>
                               {formatIvSmileDiffPct(dp)}
                             </td>
                             <td>
-                              {p.rich_iv ? (
-                                <span className="options-iv-smile-pill options-iv-smile-pill--rich">Cara</span>
-                              ) : p.cheap_iv ? (
-                                <span className="options-iv-smile-pill options-iv-smile-pill--cheap">Barata</span>
-                              ) : null}
+                              <span style={{ display: "inline-flex", flexWrap: "wrap", gap: "0.2rem", alignItems: "center" }}>
+                                {p.rich_iv ? (
+                                  <span className="options-iv-smile-pill options-iv-smile-pill--rich">Cara</span>
+                                ) : p.cheap_iv ? (
+                                  <span className="options-iv-smile-pill options-iv-smile-pill--cheap">Barata</span>
+                                ) : null}
+                                {p.iv_expanding ? (
+                                  <span className="options-iv-smile-pill options-iv-smile-pill--iv-expand options-iv-pill-temporal">
+                                    Expansión
+                                  </span>
+                                ) : null}
+                                {p.iv_crushing ? (
+                                  <span className="options-iv-smile-pill options-iv-smile-pill--iv-crush options-iv-pill-temporal">
+                                    Crush
+                                  </span>
+                                ) : null}
+                              </span>
                             </td>
                             <td>{p.moneyness}</td>
                             <td>
@@ -2357,11 +2743,47 @@ export function OptionsPage() {
                   </tbody>
                 </table>
               </div>
+              <div className="options-iv-top-opps" style={{ marginTop: "0.85rem" }}>
+                <div className="options-section-title">Top oportunidades IV</div>
+                {ivSmileTopIvOpportunities.length === 0 ? (
+                  <div className="options-empty-state options-empty-state--compact" role="status">
+                    Sin oportunidades IV destacadas por ahora.
+                  </div>
+                ) : (
+                  <ul className="options-iv-top-opps__list" aria-label="Ranking compacto oportunidades IV">
+                    {ivSmileTopIvOpportunities.map((r) => (
+                      <li key={r.key} className="options-iv-top-opps__row">
+                        <div className="options-iv-top-opps__head">
+                          <code className="options-iv-top-opps__sym">{r.symbol}</code>
+                          <span className="options-iv-top-opps__kind">{r.option_type}</span>
+                          <span className="options-iv-top-opps__strike">K {formatNumber(r.strike, 2)}</span>
+                          <span className="options-iv-top-opps__exp">{formatExpiryMonthLabel(r.expiration)}</span>
+                        </div>
+                        <div className="options-iv-top-opps__nums">
+                          <span title="IV actual">{`${formatNumber(r.iv_pct, 1)}%`}</span>
+                          <span className={ivSmileDeltaIvCellClass(r.iv_change_pct ?? undefined)} title="Δ IV vs snapshot">
+                            Δ {formatIvSmileDiffPct(r.iv_change_pct)}
+                          </span>
+                          <span className="options-iv-top-opps__pills">
+                            {r.iv_expanding ? (
+                              <span className="options-iv-smile-pill options-iv-smile-pill--iv-expand">Expansión</span>
+                            ) : null}
+                            {r.iv_crushing ? (
+                              <span className="options-iv-smile-pill options-iv-smile-pill--iv-crush">Crush</span>
+                            ) : null}
+                          </span>
+                        </div>
+                        <div className="options-iv-top-opps__reason msg-muted">{r.reasonLine}</div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
               <div className="options-iv-smile-opps" style={{ marginTop: "1rem" }}>
                 <div className="options-section-title">Oportunidades IV</div>
-                <p className="msg-muted" style={{ fontSize: "0.78rem", marginBottom: "0.45rem" }}>
-                  CALL/PUT con IV cara vs su curva (rich_iv), volumen &gt; 0 y bid &gt; 0 en cadena. Orden: mayor diferencia vs promedio del grupo.
-                </p>
+                  <p className="msg-muted options-page-blk__hint" style={{ fontSize: "0.78rem", marginBottom: "0.45rem" }} title="rich_iv + volumen y bid &gt; 0; orden por diferencia vs promedio del grupo.">
+                    IV cara vs curva (rich), con volumen y bid.
+                  </p>
                 <div className="table-wrap">
                   <table className="strategy-opportunities-table">
                     <thead>
@@ -2380,8 +2802,8 @@ export function OptionsPage() {
                     <tbody>
                       {ivSmileRichOpportunities.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="msg-muted">
-                            Sin coincidencias con los filtros (o cargá cadena y sonrisa para este activo).
+                          <td colSpan={7} className="options-empty-cell msg-muted">
+                            Sin coincidencias (o cargá sonrisa).
                           </td>
                         </tr>
                       ) : (
@@ -2407,11 +2829,65 @@ export function OptionsPage() {
                   </table>
                 </div>
               </div>
+              <div className="options-iv-smile-opps" style={{ marginTop: "1rem" }}>
+                <div className="options-section-title">Movimientos IV</div>
+                <p className="msg-muted options-page-blk__hint" style={{ fontSize: "0.78rem", marginBottom: "0.45rem" }} title="Expansión/crush vs snapshot local; orden por |Δ IV|.">
+                  Movimientos IV fuertes (±8 % vs snapshot).
+                </p>
+                <div className="table-wrap">
+                  <table className="strategy-opportunities-table">
+                    <thead>
+                      <tr>
+                        <th>Vencimiento</th>
+                        <th>Especie</th>
+                        <th style={{ textAlign: "right" }}>Strike</th>
+                        <th style={{ textAlign: "right" }}>IV %</th>
+                        <th style={{ textAlign: "right" }}>Δ IV</th>
+                        <th style={{ textAlign: "right" }}>Dif. vs prom.</th>
+                        <th style={{ textAlign: "right" }}>Prima (bid)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ivSmileTemporalMoves.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="options-empty-cell msg-muted">
+                            Sin movimientos fuertes o sin historial IV previo.
+                          </td>
+                        </tr>
+                      ) : (
+                        ivSmileTemporalMoves.map((r, i) => (
+                          <tr key={`${r.expiration}-${r.symbol}-${r.strike}-mov-${i}`}>
+                            <td>{formatExpiryMonthLabel(r.expiration)}</td>
+                            <td>
+                              <code style={{ fontSize: "0.78rem" }}>{r.symbol}</code>
+                            </td>
+                            <td style={{ textAlign: "right" }}>{formatNumber(r.strike, 2)}</td>
+                            <td style={{ textAlign: "right" }}>{`${formatNumber(r.iv_pct, 1)}%`}</td>
+                            <td style={{ textAlign: "right" }} className={ivSmileDeltaIvCellClass(r.iv_change_pct)}>
+                              {formatIvSmileDiffPct(r.iv_change_pct)}
+                            </td>
+                            <td style={{ textAlign: "right" }} className={ivSmileDiffCellClass(r.iv_diff_vs_avg_pct ?? undefined)}>
+                              {formatIvSmileDiffPct(r.iv_diff_vs_avg_pct)}
+                            </td>
+                            <td style={{ textAlign: "right" }}>
+                              {r.bid !== null ? <>$ {formatNumber(r.bid, 2)}</> : "—"}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </>
           )}
+        </section>
+      ) : null}
+      {activeTab === "panel" && emptyHintPanel ? (
+        <div className="options-empty-state options-empty-state--compact" role="status">
+          {emptyHintPanel}
         </div>
       ) : null}
-      {activeTab === "panel" && emptyHintPanel && <p>{emptyHintPanel}</p>}
       {activeTab === "panel" && panelFilteredEmptyHint ? (
         <div className="msg-muted" style={{ marginTop: "0.35rem" }}>
           <p style={{ marginBottom: "0.35rem" }}>{panelFilteredEmptyHint}</p>
@@ -2453,7 +2929,7 @@ export function OptionsPage() {
                   IV %
                 </th>
                 <th style={{ textAlign: "right" }} title={OPTIONS_DESACOPLE_IV_COL_TOOLTIP}>
-                  Desacople IV %
+                  Desac. IV
                 </th>
                 <th title="Volumen (cadena o cotización IOL)">Volumen</th>
                 <th>Op.</th>
@@ -2514,7 +2990,7 @@ export function OptionsPage() {
                           className={`options-quote-status-badge options-quote-status-${quoteSt.toLowerCase()}`}
                           title={PANEL_QUOTE_STATUS_TOOLTIP[quoteSt]}
                         >
-                          {quoteSt}
+                          {PANEL_QUOTE_STATUS_SHORT[quoteSt]}
                         </span>
                       </td>
                       <td style={{ textAlign: "right" }}>{formatNumber(c.last, 2)}</td>
@@ -2543,14 +3019,41 @@ export function OptionsPage() {
       ) : null}
 
       {activeTab === "strategies" ? (
-        <div>
+        <section className="options-page-blk options-page-blk--strategies" aria-labelledby="options-blk-strat-h">
+          <h2 id="options-blk-strat-h" className="options-page-blk__title">
+            Estrategias
+          </h2>
+          <p className="options-page-blk__lede msg-muted">Constructor manual y oportunidades prearmadas sobre la misma cadena.</p>
           {loadingChain && hasRequestedChain ? <p>Cargando cadena…</p> : null}
           {errorChain && (
             <p role="alert">
               Error: {errorChain}
             </p>
           )}
-          {emptyHintStrategies && !loadingChain && !errorChain && <p>{emptyHintStrategies}</p>}
+          {emptyHintStrategies && !loadingChain && !errorChain ? (
+            <div className="options-empty-state options-empty-state--compact" role="status">
+              {emptyHintStrategies}
+            </div>
+          ) : null}
+
+          <div className="options-op-alerts" role="region" aria-label="Alertas de oportunidades operativas">
+            <div className="options-section-title">Alertas de oportunidades</div>
+            {operationalOpportunityAlerts.length === 0 ? (
+              <div className="options-empty-state options-empty-state--compact" role="status">
+                Sin oportunidades destacadas con los datos actuales
+              </div>
+            ) : (
+              <ul className="options-op-alerts__list">
+                {operationalOpportunityAlerts.map((a) => (
+                  <li key={a.id} className={`options-op-alert-row options-op-alert-row--${a.severity}`}>
+                    <div className="options-op-alert-main">{a.main}</div>
+                    {a.meta ? <div className="options-op-alert-meta msg-muted">{a.meta}</div> : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
           <section className="options-strategy-panel" aria-label="Crear estrategia manual">
               <button
                 type="button"
@@ -2619,7 +3122,15 @@ export function OptionsPage() {
                       <span className="radar-toolbar__label">Costo neto estimado</span>
                       <div style={{ padding: "0.45rem 0" }}>
                         {netCost.ok ? (
-                          <strong>
+                          <strong
+                            className={
+                              netCost.net < 0
+                                ? "options-net-ledger options-net-ledger--debit"
+                                : netCost.net > 0
+                                  ? "options-net-ledger options-net-ledger--credit"
+                                  : "options-net-ledger options-net-ledger--neutral"
+                            }
+                          >
                             {netCost.net < 0 ? "Débito" : netCost.net > 0 ? "Crédito" : "Neto"}{" "}
                             {netCost.net !== 0 ? `$ ${formatNumber(Math.abs(netCost.net), 2)}` : "$ 0,00"}
                           </strong>
@@ -2635,7 +3146,9 @@ export function OptionsPage() {
                       Patas seleccionadas
                     </div>
                     {selectedLegs.length === 0 ? (
-                      <div className="msg-muted">Agregá patas desde las tablas CALLS/PUTS de esta pestaña (cadena Rava) con el botón “Agregar”.</div>
+                      <div className="options-empty-state options-empty-state--compact" role="status">
+                        Agregá patas con “Agregar” desde las tablas CALL/PUT.
+                      </div>
                     ) : (
                       <div className="table-wrap">
                         <table className="strategy-leg-table">
@@ -2843,6 +3356,7 @@ export function OptionsPage() {
                     <option value="Covered Call">Covered Call</option>
                     <option value="CALL Descubierta">CALL Descubierta</option>
                     <option value="Cash Secured Put">Cash Secured Put</option>
+                    <option value="Collar">Collar</option>
                   </select>
                 </label>
               </div>
@@ -2925,7 +3439,7 @@ export function OptionsPage() {
               ) : null}
 
               {strategiesFilter === "" || strategiesFilter === "Covered Call" ? (
-                <div style={{ marginTop: "0.95rem" }}>
+                <div className="options-strategy-card">
                   <button
                     type="button"
                     className="strategy-collapsible-header"
@@ -2945,7 +3459,9 @@ export function OptionsPage() {
                   {showCoveredCall ? (
                     <div className="strategy-collapsible-body">
                       {coveredCalls.length === 0 ? (
-                        <div className="msg-muted">Sin calls con bid &gt; 0 en el feed actual.</div>
+                        <div className="options-empty-state options-empty-state--compact" role="status">
+                          Sin calls con bid &gt; 0 en el feed actual.
+                        </div>
                       ) : (
                         <div className="table-wrap">
                           <table className="strategy-opportunities-table">
@@ -2959,7 +3475,7 @@ export function OptionsPage() {
                                   IV %
                                 </th>
                                 <th style={{ textAlign: "right" }} title={OPTIONS_DESACOPLE_IV_COL_TOOLTIP}>
-                                  Desacople IV %
+                                  Desac. IV
                                 </th>
                                 <th style={{ textAlign: "right" }}>Intrínseco</th>
                                 <th style={{ textAlign: "right" }}>Valor tiempo</th>
@@ -3030,7 +3546,7 @@ export function OptionsPage() {
               ) : null}
 
               {strategiesFilter === "" || strategiesFilter === "CALL Descubierta" ? (
-                <div style={{ marginTop: "0.95rem" }}>
+                <div className="options-strategy-card">
                   <button
                     type="button"
                     className="strategy-collapsible-header"
@@ -3049,19 +3565,18 @@ export function OptionsPage() {
                   </button>
                   {showNakedShortCall ? (
                     <div className="strategy-collapsible-body">
-                      <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.45rem", fontSize: "0.82rem" }}>
-                        Venta de call sin cobertura de acciones: prima = bid efectivo; métricas orientativas (sin margen
-                        ni griegas).
+                      <p className="msg-muted options-page-blk__hint" style={{ marginTop: 0, marginBottom: "0.45rem" }} title="Venta de call sin acciones a cubrir; prima = bid efectivo; sin margen ni griegas.">
+                        Call descubierta: prima = bid efectivo; métricas orientativas.
                       </p>
                       <span
-                        className="options-naked-call-risk-badge"
+                        className="options-naked-call-risk-badge options-risk-badge options-risk-badge--unlimited"
                         title={OPTIONS_NAKED_CALL_RISK_TOOLTIP}
                       >
-                        ⚠ Riesgo teórico ilimitado
+                        Riesgo ilimitado
                       </span>
                       {nakedShortCalls.length === 0 ? (
-                        <div className="msg-muted" style={{ marginTop: "0.5rem" }}>
-                          Sin calls con bid &gt; 0, spot &gt; 0 y días al vencimiento &gt; 0 en el feed actual.
+                        <div className="options-empty-state options-empty-state--compact" role="status">
+                          Sin calls con bid, spot y días válidos en el feed actual.
                         </div>
                       ) : (
                         <div className="table-wrap" style={{ marginTop: "0.55rem" }}>
@@ -3111,7 +3626,7 @@ export function OptionsPage() {
               ) : null}
 
               {strategiesFilter === "" || strategiesFilter === "Cash Secured Put" ? (
-                <div style={{ marginTop: "0.95rem" }}>
+                <div className="options-strategy-card">
                   <button
                     type="button"
                     className="strategy-collapsible-header"
@@ -3130,12 +3645,13 @@ export function OptionsPage() {
                   </button>
                   {showCashSecuredPut ? (
                     <div className="strategy-collapsible-body">
-                      <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.45rem", fontSize: "0.82rem" }}>
-                        Venta de put cubierta por caja: prima = bid efectivo; capital ≈ strike × lote (
-                        {formatInteger(OPTIONS_STRATEGY_LOT_SIZE)}).
+                      <p className="msg-muted options-page-blk__hint" style={{ marginTop: 0, marginBottom: "0.45rem" }} title={`Venta de put cubierta por caja; prima = bid efectivo; capital ≈ strike × ${formatInteger(OPTIONS_STRATEGY_LOT_SIZE)}.`}>
+                        CSP: prima = bid; capital ≈ strike × lote ({formatInteger(OPTIONS_STRATEGY_LOT_SIZE)}).
                       </p>
                       {cashSecuredPuts.length === 0 ? (
-                        <div className="msg-muted">Sin puts con bid &gt; 0 en el feed actual.</div>
+                        <div className="options-empty-state options-empty-state--compact" role="status">
+                          Sin puts con bid &gt; 0 en el feed actual.
+                        </div>
                       ) : (
                         <div className="table-wrap">
                           <table className="strategy-opportunities-table">
@@ -3149,7 +3665,7 @@ export function OptionsPage() {
                                   IV %
                                 </th>
                                 <th style={{ textAlign: "right" }} title={OPTIONS_DESACOPLE_IV_COL_TOOLTIP}>
-                                  Desacople IV %
+                                  Desac. IV
                                 </th>
                                 <th style={{ textAlign: "right" }}>Break-even</th>
                                 <th
@@ -3234,7 +3750,7 @@ export function OptionsPage() {
                                           className={`options-quote-status-badge options-quote-status-${quoteSt.toLowerCase()}`}
                                           title={PANEL_QUOTE_STATUS_TOOLTIP[quoteSt]}
                                         >
-                                          {quoteSt}
+                                          {PANEL_QUOTE_STATUS_SHORT[quoteSt]}
                                         </span>
                                       </td>
                                     </tr>
@@ -3250,11 +3766,96 @@ export function OptionsPage() {
                 </div>
               ) : null}
 
+              {strategiesFilter === "" || strategiesFilter === "Collar" ? (
+                <div className="options-strategy-card">
+                  <button
+                    type="button"
+                    className="strategy-collapsible-header"
+                    onClick={() => setShowCollar((v) => !v)}
+                    aria-expanded={showCollar}
+                  >
+                    <div className="strategy-collapsible-title">
+                      <span style={{ width: "1.15rem", display: "inline-block" }}>{showCollar ? "−" : "+"}</span>
+                      Collar
+                    </div>
+                    <div className="strategy-collapsible-summary">{collarOpportunities.length} combinaciones</div>
+                  </button>
+                  {showCollar ? (
+                    <div className="strategy-collapsible-body">
+                      <p className="msg-muted options-strategy-collar-hint options-page-blk__hint" style={{ marginTop: 0, marginBottom: "0.45rem" }} title="Put comprado (ask) + call vendido (bid), mismo vencimiento; put K &lt; spot &lt; call K.">
+                        Collar: put protectora + call OTM; mismas fechas; cifras orientativas.
+                      </p>
+                      <div className="options-strategy-risk-row">
+                        <span className="options-risk-badge options-risk-badge--limited" title="Pérdida acotada vs spot con put OTM (aprox.).">
+                          Riesgo limitado (aprox.)
+                        </span>
+                      </div>
+                      {collarOpportunities.length === 0 ? (
+                        <div className="options-empty-state options-empty-state--compact" role="status">
+                          Sin collars válidos para este activo con datos actuales.
+                        </div>
+                      ) : (
+                        <div className="table-wrap">
+                          <table className="strategy-opportunities-table options-strategy-collar-table">
+                            <thead>
+                              <tr>
+                                <th>Vencimiento</th>
+                                <th>PUT comprado</th>
+                                <th>CALL vendido</th>
+                                <th style={{ textAlign: "right" }}>Prima neta</th>
+                                <th style={{ textAlign: "right" }}>Piso</th>
+                                <th style={{ textAlign: "right" }}>Techo</th>
+                                <th style={{ textAlign: "right" }} title="max(0, spot − put + put_ask − call_bid)">
+                                  Pérdida máx. aprox.
+                                </th>
+                                <th style={{ textAlign: "right" }} title="max(0, call − spot + call_bid − put_ask)">
+                                  Ganancia máx. aprox.
+                                </th>
+                                <th>Comentario</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {collarOpportunities.map((x, idx) => (
+                                <tr key={`collar-${x.expiryKey}-${x.putSymbol}-${x.callSymbol}-${idx}`}>
+                                  <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
+                                  <td>
+                                    <div>
+                                      <code className="options-strategy-collar-sym">{fmtCell(x.putSymbol)}</code>
+                                    </div>
+                                    <div className="msg-muted options-strategy-collar-sub">PUT K {formatNumber(x.putStrike, 2)}</div>
+                                  </td>
+                                  <td>
+                                    <div>
+                                      <code className="options-strategy-collar-sym">{fmtCell(x.callSymbol)}</code>
+                                    </div>
+                                    <div className="msg-muted options-strategy-collar-sub">CALL K {formatNumber(x.callStrike, 2)}</div>
+                                  </td>
+                                  <td style={{ textAlign: "right" }}>{formatNumber(x.neto, 2)}</td>
+                                  <td style={{ textAlign: "right" }}>{formatNumber(x.piso, 2)}</td>
+                                  <td style={{ textAlign: "right" }}>{formatNumber(x.techo, 2)}</td>
+                                  <td style={{ textAlign: "right" }}>{formatNumber(x.perdidaMax, 2)}</td>
+                                  <td style={{ textAlign: "right" }}>{formatNumber(x.gananciaMax, 2)}</td>
+                                  <td>
+                                    <span className={`options-strategy-collar-comment ${collarNetCommentClass(x.comentario)}`}>
+                                      {x.comentario}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
               <div className="msg-muted" style={{ marginTop: "0.9rem" }}>
-                Próximamente: Bear Put Spread, Protective Put, Collar.
+                Próximamente: Bear Put Spread, Protective Put.
               </div>
             </section>
-        </div>
+        </section>
       ) : null}
     </div>
   );
