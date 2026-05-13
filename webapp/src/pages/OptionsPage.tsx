@@ -100,7 +100,6 @@ type StrategiesFilter =
   | ""
   | "Bull Call Spread"
   | "Covered Call"
-  | "CALL Descubierta"
   | "Cash Secured Put"
   | "Collar";
 
@@ -658,6 +657,43 @@ function mergedMoneynessBadgeClass(m: MoneynessKind): string {
   }
 }
 
+/** Badges Moneyness en tablas de estrategias (paleta distinta al panel; texto claro). */
+function strategyMoneynessBadgeClass(m: MoneynessKind): string {
+  switch (m) {
+    case "ITM":
+      return "options-strategy-mny options-strategy-mny--itm";
+    case "ATM":
+      return "options-strategy-mny options-strategy-mny--atm";
+    case "OTM":
+      return "options-strategy-mny options-strategy-mny--otm";
+    default:
+      return "options-strategy-mny options-strategy-mny--none";
+  }
+}
+
+/** Solo estilo visual para TNA Covered Call (no altera el valor). */
+function coveredCallTnaDisplayClass(tna: number | null | undefined): string {
+  if (tna === null || tna === undefined || !Number.isFinite(tna)) return "options-tna--neutral";
+  if (tna < 0) return "options-tna--negative";
+  if (tna > 35) return "options-tna--high";
+  if (tna >= 25) return "options-tna--medium";
+  return "options-tna--neutral";
+}
+
+/** Rayas por grupo (mismo vencimiento + strike comprado) en Bull Call Spread. */
+function strategyStripeByBuyGroup<T extends { expiryKey: string; buyStrike: number }>(
+  rows: T[],
+): ("options-strategy-row--alt-a" | "options-strategy-row--alt-b")[] {
+  let prevKey: string | null = null;
+  let useA = true;
+  return rows.map((x) => {
+    const k = `${x.expiryKey}|${x.buyStrike}`;
+    if (prevKey !== null && k !== prevKey) useA = !useA;
+    prevKey = k;
+    return useA ? "options-strategy-row--alt-a" : "options-strategy-row--alt-b";
+  });
+}
+
 function mergedMoneynessBadgeText(m: MoneynessKind): string {
   switch (m) {
     case "ITM":
@@ -913,7 +949,6 @@ export function OptionsPage() {
   const [showManualStrategy, setShowManualStrategy] = useState(false);
   const [showBullCallSpread, setShowBullCallSpread] = useState(false);
   const [showCoveredCall, setShowCoveredCall] = useState(false);
-  const [showNakedShortCall, setShowNakedShortCall] = useState(false);
   const [showCashSecuredPut, setShowCashSecuredPut] = useState(false);
   const [showCollar, setShowCollar] = useState(false);
   const [selectedLegs, setSelectedLegs] = useState<StrategyLeg[]>([]);
@@ -1766,7 +1801,7 @@ export function OptionsPage() {
   );
 
   const bullCallSpreads = useMemo(() => {
-    // Combos: BUY call (ask) en strike menor, SELL call (bid) en strike mayor, mismo vencimiento.
+    // Por vencimiento: por cada CALL en Kᵢ, hasta 2 ventas en Kᵢ₊₁ y Kᵢ₊₂ (mismo vencimiento; sin todas las combinaciones).
     // Filtramos débito > 0 y ganancia máxima > 0.
     type CallRow = {
       expiryKey: string;
@@ -1801,8 +1836,10 @@ export function OptionsPage() {
       for (let i = 0; i < arr.length; i++) {
         const buy = arr[i];
         if (buy.ask === null || buy.ask <= 0) continue;
-        for (let j = i + 1; j < arr.length; j++) {
-          const sell = arr[j];
+        const soldCandidates: CallRow[] = [];
+        if (i + 1 < arr.length) soldCandidates.push(arr[i + 1]);
+        if (i + 2 < arr.length) soldCandidates.push(arr[i + 2]);
+        for (const sell of soldCandidates) {
           if (sell.bid === null || sell.bid <= 0) continue;
           const debit = buy.ask - sell.bid;
           if (!(debit > 0)) continue;
@@ -1827,6 +1864,11 @@ export function OptionsPage() {
     out.sort((a, b) => a.expiryKey.localeCompare(b.expiryKey) || a.buyStrike - b.buyStrike || a.sellStrike - b.sellStrike);
     return out.slice(0, 30);
   }, [calls]);
+
+  const bullCallSpreadStripeClasses = useMemo(
+    () => strategyStripeByBuyGroup(bullCallSpreads),
+    [bullCallSpreads],
+  );
 
   const coveredCalls = useMemo(() => {
     const out: {
@@ -1972,52 +2014,6 @@ export function OptionsPage() {
     out.sort((a, b) => a.expiryKey.localeCompare(b.expiryKey) || a.strike - b.strike);
     return out.slice(0, 30);
   }, [puts, effectivePanelSpot, iolQuotes, contractBySymbol, ivAvgPctByExpiryType]);
-
-  const nakedShortCalls = useMemo(() => {
-    const out: {
-      expiryKey: string;
-      strike: number;
-      prima: number;
-      premiumPct: number;
-      tnaPct: number;
-      breakEven: number;
-      distPct: number;
-      days: number | null;
-      symbol: string | null;
-    }[] = [];
-    for (const r of calls) {
-      const exp = expiryKeyFromRaw(r.raw);
-      if (!exp) continue;
-      const sym = (typeof r.raw.simbolo === "string" ? r.raw.simbolo : "").trim().toUpperCase();
-      const co = sym ? contractBySymbol.get(sym) : undefined;
-      const primaEff = co ? getEffectiveBid(co, iolQuotes) : toNumberOrNull(r.raw.bid);
-      if (primaEff === null || primaEff <= 0) continue;
-      const strike = r.strike;
-      if (!(strike > 0)) continue;
-      let days = daysToExpiryRaw(r.raw);
-      if (days === null) days = daysBetweenTodayAndExpiry(exp);
-      if (days === null || days <= 0) continue;
-      const spotNum = effectivePanelSpot;
-      if (spotNum === null || !(spotNum > 0)) continue;
-      const premiumPct = (primaEff / spotNum) * 100;
-      const breakEven = strike + primaEff;
-      const distPct = ((strike - spotNum) / spotNum) * 100;
-      const tnaPct = (primaEff / strike) * (365 / days) * 100;
-      out.push({
-        expiryKey: exp,
-        strike,
-        prima: primaEff,
-        premiumPct,
-        tnaPct,
-        breakEven,
-        distPct,
-        days,
-        symbol: typeof r.raw.simbolo === "string" ? r.raw.simbolo.trim() : null,
-      });
-    }
-    out.sort((a, b) => b.tnaPct - a.tnaPct || b.distPct - a.distPct);
-    return out.slice(0, 30);
-  }, [calls, effectivePanelSpot, iolQuotes, contractBySymbol]);
 
   /** Collar: acciones + put comprado (ask efectivo) + call vendido (bid efectivo), mismo vencimiento; put K &lt; spot &lt; call K. */
   const collarOpportunities = useMemo(() => {
@@ -2416,11 +2412,6 @@ export function OptionsPage() {
         {loadingIolQuotes && hasRequestedChain && mergedChain && chainIsIolPrimary && iolQuoteSymbolList.length > 0 ? (
           <p className="msg-muted options-page-blk__hint" style={{ margin: 0 }}>
             Actualizando puntas…
-          </p>
-        ) : null}
-        {activeTab === "panel" ? (
-          <p className="msg-muted options-page-blk__hint" style={{ margin: 0 }} title={`Hasta ${IOL_QUOTES_VISIBLE_CAP} especies por consulta.`}>
-            En el panel, puntas por filas visibles.
           </p>
         ) : null}
       </div>
@@ -3039,14 +3030,14 @@ export function OptionsPage() {
                 Sin oportunidades destacadas con los datos actuales
               </div>
             ) : (
-              <ul className="options-op-alerts__list">
+              <div className="options-op-alerts__grid" role="list">
                 {operationalOpportunityAlerts.map((a) => (
-                  <li key={a.id} className={`options-op-alert-row options-op-alert-row--${a.severity}`}>
+                  <div key={a.id} className={`options-op-alert-card options-op-alert-card--${a.severity}`} role="listitem">
                     <div className="options-op-alert-main">{a.main}</div>
                     {a.meta ? <div className="options-op-alert-meta msg-muted">{a.meta}</div> : null}
-                  </li>
+                  </div>
                 ))}
-              </ul>
+              </div>
             )}
           </div>
 
@@ -3086,6 +3077,10 @@ export function OptionsPage() {
                       Limpiar estrategia
                     </button>
                   </div>
+
+                  <p className="msg-muted options-page-blk__hint" style={{ marginTop: "0.5rem", marginBottom: 0 }} title={OPTIONS_NAKED_CALL_RISK_TOOLTIP}>
+                    Venta de call descubierta: riesgo ilimitado; no se lista como estrategia recomendada — analizá desde el panel (IV, puntas).
+                  </p>
 
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.85rem 1.25rem", marginTop: "0.75rem" }}>
                     <label className="radar-toolbar__field" style={{ margin: 0 }}>
@@ -3270,7 +3265,7 @@ export function OptionsPage() {
                                 <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ask), 2)}</td>
                                 <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ultimo), 2)}</td>
                                 <td>
-                                  <span className={mergedMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
+                                  <span className={strategyMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
                                 </td>
                               </tr>
                             );
@@ -3309,7 +3304,7 @@ export function OptionsPage() {
                                 <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ask), 2)}</td>
                                 <td style={{ textAlign: "right" }}>{formatNumber(toNumberOrNull(o.ultimo), 2)}</td>
                                 <td>
-                                  <span className={mergedMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
+                                  <span className={strategyMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
                                 </td>
                               </tr>
                             );
@@ -3350,7 +3345,6 @@ export function OptionsPage() {
                     <option value="">Todas</option>
                     <option value="Bull Call Spread">Bull Call Spread</option>
                     <option value="Covered Call">Covered Call</option>
-                    <option value="CALL Descubierta">CALL Descubierta</option>
                     <option value="Cash Secured Put">Cash Secured Put</option>
                     <option value="Collar">Collar</option>
                   </select>
@@ -3385,13 +3379,15 @@ export function OptionsPage() {
                             <thead>
                               <tr>
                                 <th>Vencimiento</th>
-                                <th style={{ textAlign: "right" }}>Strike compra</th>
-                                <th style={{ textAlign: "right" }}>Strike venta</th>
+                                <th style={{ textAlign: "right" }}>K comprada</th>
+                                <th style={{ textAlign: "right" }}>K vendida</th>
+                                <th style={{ textAlign: "right" }} title="K vendida − K comprada">
+                                  Ancho
+                                </th>
                                 <th style={{ textAlign: "right" }}>Prima compra</th>
                                 <th style={{ textAlign: "right" }}>Prima venta</th>
                                 <th style={{ textAlign: "right" }}>Débito neto</th>
                                 <th style={{ textAlign: "right" }}>Ganancia máx.</th>
-                                <th style={{ textAlign: "right" }}>Pérdida máx.</th>
                                 <th style={{ textAlign: "right" }}>Break even</th>
                                 <th>Moneyness</th>
                               </tr>
@@ -3400,25 +3396,28 @@ export function OptionsPage() {
                               {bullCallSpreads.map((x, idx) => {
                                 const mBuy = getMoneynessFromValues(x.buyStrike, "CALL", effectivePanelSpot);
                                 const mSell = getMoneynessFromValues(x.sellStrike, "CALL", effectivePanelSpot);
+                                const stripe = bullCallSpreadStripeClasses[idx] ?? "options-strategy-row--alt-a";
                                 return (
-                                <tr key={`${x.expiryKey}-${x.buyStrike}-${x.sellStrike}-${idx}`} className={mergedMoneynessRowClass(mBuy)}>
+                                <tr key={`${x.expiryKey}-${x.buyStrike}-${x.sellStrike}-${idx}`} className={stripe}>
                                   <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.buyStrike, 2)}</td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.sellStrike, 2)}</td>
+                                  <td style={{ textAlign: "right" }} title="K vendida − K comprada">
+                                    {formatNumber(x.sellStrike - x.buyStrike, 2)}
+                                  </td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.buyAsk, 2)}</td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.sellBid, 2)}</td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.debit, 2)}</td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.maxGain, 2)}</td>
-                                  <td style={{ textAlign: "right" }}>{formatNumber(x.maxLoss, 2)}</td>
                                   <td style={{ textAlign: "right" }}>{formatNumber(x.breakEven, 2)}</td>
                                   <td>
-                                    <span className={mergedMoneynessBadgeClass(mBuy)} title="Strike compra (call)">
+                                    <span className={strategyMoneynessBadgeClass(mBuy)} title="Strike compra (call)">
                                       C {mergedMoneynessBadgeText(mBuy)}
                                     </span>
                                     <span className="msg-muted" style={{ margin: "0 0.2rem" }}>
                                       ·
                                     </span>
-                                    <span className={mergedMoneynessBadgeClass(mSell)} title="Strike venta (call)">
+                                    <span className={strategyMoneynessBadgeClass(mSell)} title="Strike venta (call)">
                                       V {mergedMoneynessBadgeText(mSell)}
                                     </span>
                                   </td>
@@ -3486,8 +3485,9 @@ export function OptionsPage() {
                             <tbody>
                               {coveredCalls.map((x, idx) => {
                                 const m = getMoneynessFromValues(x.strike, "CALL", effectivePanelSpot);
+                                const stripe = idx % 2 === 0 ? "options-strategy-row--alt-a" : "options-strategy-row--alt-b";
                                 return (
-                                <tr key={`${x.expiryKey}-${x.strike}-${idx}`} className={mergedMoneynessRowClass(m)}>
+                                <tr key={`${x.expiryKey}-${x.strike}-${idx}`} className={stripe}>
                                   <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
                                   <td style={{ textAlign: "right" }}>
                                     {effectivePanelSpot !== null ? formatNumber(effectivePanelSpot, 2) : "-"}
@@ -3520,98 +3520,18 @@ export function OptionsPage() {
                                   <td style={{ textAlign: "right" }}>
                                     {x.days !== null ? formatInteger(x.days) : "-"}
                                   </td>
-                                  <td style={{ textAlign: "right" }}>
+                                  <td style={{ textAlign: "right" }} className={coveredCallTnaDisplayClass(x.tnaPct)}>
                                     {x.tnaPct !== null ? `${formatNumber(x.tnaPct, 2)}%` : "-"}
                                   </td>
                                   <td style={{ textAlign: "right" }}>
                                     {x.breakEven !== null ? formatNumber(x.breakEven, 2) : "-"}
                                   </td>
                                   <td>
-                                    <span className={mergedMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
+                                    <span className={strategyMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
                                   </td>
                                 </tr>
                               );
                               })}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {strategiesFilter === "" || strategiesFilter === "CALL Descubierta" ? (
-                <div className="options-strategy-card">
-                  <button
-                    type="button"
-                    className="strategy-collapsible-header"
-                    onClick={() => setShowNakedShortCall((v) => !v)}
-                    aria-expanded={showNakedShortCall}
-                  >
-                    <div className="strategy-collapsible-title">
-                      <span style={{ width: "1.15rem", display: "inline-block" }}>
-                        {showNakedShortCall ? "−" : "+"}
-                      </span>
-                      CALL Descubierta
-                    </div>
-                    <div className="strategy-collapsible-summary">
-                      {nakedShortCalls.length} oportunidades
-                    </div>
-                  </button>
-                  {showNakedShortCall ? (
-                    <div className="strategy-collapsible-body">
-                      <p className="msg-muted options-page-blk__hint" style={{ marginTop: 0, marginBottom: "0.45rem" }} title="Venta de call sin acciones a cubrir; prima = bid efectivo; sin margen ni griegas.">
-                        Call descubierta: prima = bid efectivo; métricas orientativas.
-                      </p>
-                      <span
-                        className="options-naked-call-risk-badge options-risk-badge options-risk-badge--unlimited"
-                        title={OPTIONS_NAKED_CALL_RISK_TOOLTIP}
-                      >
-                        Riesgo ilimitado
-                      </span>
-                      {nakedShortCalls.length === 0 ? (
-                        <div className="options-empty-state options-empty-state--compact" role="status">
-                          Sin calls con bid, spot y días válidos en el feed actual.
-                        </div>
-                      ) : (
-                        <div className="table-wrap" style={{ marginTop: "0.55rem" }}>
-                          <table className="strategy-opportunities-table">
-                            <thead>
-                              <tr>
-                                <th>Vencimiento</th>
-                                <th style={{ textAlign: "right" }}>Strike</th>
-                                <th style={{ textAlign: "right" }}>Prima</th>
-                                <th style={{ textAlign: "right" }} title="Prima / spot × 100">
-                                  Prima %
-                                </th>
-                                <th style={{ textAlign: "right" }} title="(prima/strike)×(365/días)×100">
-                                  TNA %
-                                </th>
-                                <th style={{ textAlign: "right" }} title="Strike + prima">
-                                  Break-even
-                                </th>
-                                <th style={{ textAlign: "right" }} title="(strike − spot) / spot × 100">
-                                  Δ vs spot %
-                                </th>
-                                <th style={{ textAlign: "right" }}>Días</th>
-                                <th>Ticker</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {nakedShortCalls.map((x, idx) => (
-                                <tr key={`nsc-${x.expiryKey}-${x.strike}-${idx}`}>
-                                  <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
-                                  <td style={{ textAlign: "right" }}>{formatNumber(x.strike, 2)}</td>
-                                  <td style={{ textAlign: "right" }}>{formatNumber(x.prima, 2)}</td>
-                                  <td style={{ textAlign: "right" }}>{`${formatNumber(x.premiumPct, 2)}%`}</td>
-                                  <td style={{ textAlign: "right" }}>{`${formatNumber(x.tnaPct, 2)}%`}</td>
-                                  <td style={{ textAlign: "right" }}>{formatNumber(x.breakEven, 2)}</td>
-                                  <td style={{ textAlign: "right" }}>{`${formatNumber(x.distPct, 2)}%`}</td>
-                                  <td style={{ textAlign: "right" }}>{x.days !== null ? formatInteger(x.days) : "—"}</td>
-                                  <td>{fmtCell(x.symbol)}</td>
-                                </tr>
-                              ))}
                             </tbody>
                           </table>
                         </div>
@@ -3685,74 +3605,50 @@ export function OptionsPage() {
                                 </th>
                                 <th style={{ textAlign: "right" }}>Días</th>
                                 <th style={{ textAlign: "right" }}>Volumen</th>
-                                <th>Estado</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {(() => {
-                                void iolQuoteStatusTick;
-                                const quoteResponseSeen = { ...iolQuoteResponseSeenRef.current };
-                                const quoteLastGood = { ...iolLastGoodQuoteAtRef.current };
-                                const nowMs = Date.now();
-                                return cashSecuredPuts.map((x, idx) => {
-                                  const m = getMoneynessFromValues(x.strike, "PUT", effectivePanelSpot);
-                                  const quoteSt = panelRowQuoteStatus(x.contract, {
-                                    chainIsIolPrimary,
-                                    quoteFetchSymbolSet: iolQuoteFetchSymbolSet,
-                                    iolQuotes,
-                                    loadingIolQuotes,
-                                    responseSeen: quoteResponseSeen,
-                                    lastGoodAt: quoteLastGood,
-                                    nowMs,
-                                  });
-                                  return (
-                                    <tr
-                                      key={`csp-${(x.contract.symbol ?? "").trim()}-${x.expiryKey}-${x.strike}-${idx}`}
-                                      className={mergedMoneynessRowClass(m)}
+                              {cashSecuredPuts.map((x, idx) => {
+                                const stripe = idx % 2 === 0 ? "options-strategy-row--alt-a" : "options-strategy-row--alt-b";
+                                return (
+                                  <tr
+                                    key={`csp-${(x.contract.symbol ?? "").trim()}-${x.expiryKey}-${x.strike}-${idx}`}
+                                    className={stripe}
+                                  >
+                                    <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
+                                    <td>{fmtCell(x.contract.symbol)}</td>
+                                    <td style={{ textAlign: "right" }}>{formatNumber(x.strike, 2)}</td>
+                                    <td style={{ textAlign: "right" }}>{formatNumber(x.prima, 2)}</td>
+                                    <td style={{ textAlign: "right" }}>
+                                      {x.ivPct !== null && Number.isFinite(x.ivPct) ? `${formatNumber(x.ivPct, 1)}%` : "—"}
+                                    </td>
+                                    <td
+                                      style={{ textAlign: "right" }}
+                                      className={desacopleIvPctCellClass(x.desacopleIvPct)}
                                     >
-                                      <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
-                                      <td>{fmtCell(x.contract.symbol)}</td>
-                                      <td style={{ textAlign: "right" }}>{formatNumber(x.strike, 2)}</td>
-                                      <td style={{ textAlign: "right" }}>{formatNumber(x.prima, 2)}</td>
-                                      <td style={{ textAlign: "right" }}>
-                                        {x.ivPct !== null && Number.isFinite(x.ivPct) ? `${formatNumber(x.ivPct, 1)}%` : "—"}
-                                      </td>
-                                      <td
-                                        style={{ textAlign: "right" }}
-                                        className={desacopleIvPctCellClass(x.desacopleIvPct)}
-                                      >
-                                        {formatDesacopleIvPct(x.desacopleIvPct)}
-                                      </td>
-                                      <td style={{ textAlign: "right" }}>{formatNumber(x.breakEven, 2)}</td>
-                                      <td style={{ textAlign: "right" }}>
-                                        {x.breakEvenVsSpotPct !== null
-                                          ? `${formatNumber(x.breakEvenVsSpotPct, 2)}%`
-                                          : "-"}
-                                      </td>
-                                      <td style={{ textAlign: "right" }}>
-                                        {x.distStrikePct !== null ? `${formatNumber(x.distStrikePct, 2)}%` : "-"}
-                                      </td>
-                                      <td style={{ textAlign: "right" }}>${formatNumber(x.capital, 2)}</td>
-                                      <td style={{ textAlign: "right" }}>{`${formatNumber(x.rendSimplePct, 2)}%`}</td>
-                                      <td style={{ textAlign: "right" }}>
-                                        {x.tnaPct !== null ? `${formatNumber(x.tnaPct, 2)}%` : "-"}
-                                      </td>
-                                      <td style={{ textAlign: "right" }}>
-                                        {x.days !== null ? formatInteger(x.days) : "-"}
-                                      </td>
-                                      <td style={{ textAlign: "right" }}>{formatInteger(x.vol)}</td>
-                                      <td>
-                                        <span
-                                          className={`options-quote-status-badge options-quote-status-${quoteSt.toLowerCase()}`}
-                                          title={PANEL_QUOTE_STATUS_TOOLTIP[quoteSt]}
-                                        >
-                                          {PANEL_QUOTE_STATUS_SHORT[quoteSt]}
-                                        </span>
-                                      </td>
-                                    </tr>
-                                  );
-                                });
-                              })()}
+                                      {formatDesacopleIvPct(x.desacopleIvPct)}
+                                    </td>
+                                    <td style={{ textAlign: "right" }}>{formatNumber(x.breakEven, 2)}</td>
+                                    <td style={{ textAlign: "right" }}>
+                                      {x.breakEvenVsSpotPct !== null
+                                        ? `${formatNumber(x.breakEvenVsSpotPct, 2)}%`
+                                        : "-"}
+                                    </td>
+                                    <td style={{ textAlign: "right" }}>
+                                      {x.distStrikePct !== null ? `${formatNumber(x.distStrikePct, 2)}%` : "-"}
+                                    </td>
+                                    <td style={{ textAlign: "right" }}>${formatNumber(x.capital, 2)}</td>
+                                    <td style={{ textAlign: "right" }}>{`${formatNumber(x.rendSimplePct, 2)}%`}</td>
+                                    <td style={{ textAlign: "right" }}>
+                                      {x.tnaPct !== null ? `${formatNumber(x.tnaPct, 2)}%` : "-"}
+                                    </td>
+                                    <td style={{ textAlign: "right" }}>
+                                      {x.days !== null ? formatInteger(x.days) : "-"}
+                                    </td>
+                                    <td style={{ textAlign: "right" }}>{formatInteger(x.vol)}</td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -3834,8 +3730,15 @@ export function OptionsPage() {
                                 const gananciaMaxContrato = Number.isFinite(x.gananciaMax) ? x.gananciaMax * lot : null;
                                 const netoAcc = x.neto;
                                 const costoTotalAcc = hasSpot && Number.isFinite(x.neto) ? spotNum - x.neto : null;
+                                const rbGood =
+                                  Number.isFinite(x.gananciaMax) &&
+                                  Number.isFinite(x.perdidaMax) &&
+                                  x.perdidaMax > 0 &&
+                                  x.gananciaMax / x.perdidaMax > 2;
+                                const stripe = idx % 2 === 0 ? "options-strategy-row--alt-a" : "options-strategy-row--alt-b";
+                                const trRb = rbGood ? " options-strategy-row--good-rb" : "";
                                 return (
-                                <tr key={`collar-${x.expiryKey}-${x.putSymbol}-${x.callSymbol}-${idx}`}>
+                                <tr key={`collar-${x.expiryKey}-${x.putSymbol}-${x.callSymbol}-${idx}`} className={`${stripe}${trRb}`}>
                                   <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
                                   <td>
                                     <div>
@@ -3914,9 +3817,16 @@ export function OptionsPage() {
                                     )}
                                   </td>
                                   <td>
-                                    <span className={`options-strategy-collar-comment ${collarNetCommentClass(x.comentario)}`}>
-                                      {x.comentario}
-                                    </span>
+                                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "0.28rem" }}>
+                                      {rbGood ? (
+                                        <span className="options-strategy-rb-badge" title="Ganancia máx. aprox. / Pérdida máx. aprox.">
+                                          {"R/B > 2"}
+                                        </span>
+                                      ) : null}
+                                      <span className={`options-strategy-collar-comment ${collarNetCommentClass(x.comentario)}`}>
+                                        {x.comentario}
+                                      </span>
+                                    </div>
                                   </td>
                                 </tr>
                                 );
