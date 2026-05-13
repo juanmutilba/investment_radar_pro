@@ -691,6 +691,32 @@ a:hover {
   white-space: nowrap;
 }
 
+.options-strategy-rb-badge--plain {
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 10%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  font-weight: 600;
+}
+
+.options-page-blk--strategies .options-strategy-csp-wrap .options-strategy-csp-table {
+  font-size: 0.8rem;
+}
+
+.options-page-blk--strategies .options-strategy-csp-wrap .options-strategy-csp-table th,
+.options-page-blk--strategies .options-strategy-csp-wrap .options-strategy-csp-table td {
+  padding: 0.3rem 0.42rem;
+}
+
+.options-page-blk--strategies .options-strategy-csp-wrap .options-strategy-csp-table th {
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.options-page-blk--strategies .options-strategy-csp-wrap .options-strategy-csp-table .options-strategy-mny {
+  font-size: 0.66rem;
+  padding: 0.06rem 0.32rem;
+}
+
 .options-page-blk--strategies .options-tna--negative {
   color: rgba(185, 28, 28, 0.96);
   font-weight: 700;

@@ -671,8 +671,8 @@ function strategyMoneynessBadgeClass(m: MoneynessKind): string {
   }
 }
 
-/** Solo estilo visual para TNA Covered Call (no altera el valor). */
-function coveredCallTnaDisplayClass(tna: number | null | undefined): string {
+/** Clases de color TNA en tablas de estrategias (Covered Call, CSP, etc.; solo UI). */
+function strategyTnaDisplayClass(tna: number | null | undefined): string {
   if (tna === null || tna === undefined || !Number.isFinite(tna)) return "options-tna--neutral";
   if (tna < 0) return "options-tna--negative";
   if (tna > 35) return "options-tna--high";
@@ -932,6 +932,9 @@ type PanelHeaderSort =
   | { kind: "strike"; dir: "asc" | "desc" }
   | { kind: "expiry"; dir: "asc" | "desc" };
 
+/** Orden visual de la tabla Collar (no altera `collarOpportunities`). */
+type CollarSortMode = "score" | "credito" | "rb" | "perdida" | "ganancia";
+
 export function OptionsPage() {
   const [selectedUnderlying, setSelectedUnderlying] = useState<string>("");
   const [selectedExpiry, setSelectedExpiry] = useState<string>("");
@@ -951,6 +954,7 @@ export function OptionsPage() {
   const [showCoveredCall, setShowCoveredCall] = useState(false);
   const [showCashSecuredPut, setShowCashSecuredPut] = useState(false);
   const [showCollar, setShowCollar] = useState(false);
+  const [collarSortMode, setCollarSortMode] = useState<CollarSortMode>("score");
   const [selectedLegs, setSelectedLegs] = useState<StrategyLeg[]>([]);
   const [mergedChain, setMergedChain] = useState<OptionsChainResponse | null>(null);
   const [loadingChain, setLoadingChain] = useState(false);
@@ -2119,6 +2123,55 @@ export function OptionsPage() {
 
     return pool.slice(0, 10);
   }, [calls, puts, effectivePanelSpot, iolQuotes, contractBySymbol]);
+
+  const collarOpportunitiesDisplay = useMemo(() => {
+    type CRow = (typeof collarOpportunities)[number];
+    const copy = collarOpportunities.slice() as CRow[];
+    const tieScore = (a: CRow, b: CRow): number => {
+      if (a.perdidaMax !== b.perdidaMax) return a.perdidaMax - b.perdidaMax;
+      if (b.gananciaMax !== a.gananciaMax) return b.gananciaMax - a.gananciaMax;
+      if (a.distPutPct !== b.distPutPct) return a.distPutPct - b.distPutPct;
+      return a.distCallPct - b.distCallPct;
+    };
+    switch (collarSortMode) {
+      case "score":
+        copy.sort((a, b) => tieScore(a, b));
+        break;
+      case "credito":
+        copy.sort((a, b) => {
+          if (b.neto !== a.neto) return b.neto - a.neto;
+          return tieScore(a, b);
+        });
+        break;
+      case "rb":
+        copy.sort((a, b) => {
+          const ra = a.perdidaMax > 0 ? a.gananciaMax / a.perdidaMax : null;
+          const rb = b.perdidaMax > 0 ? b.gananciaMax / b.perdidaMax : null;
+          if (ra !== null && rb !== null && ra !== rb) return rb - ra;
+          if (ra !== null && rb === null) return -1;
+          if (ra === null && rb !== null) return 1;
+          return tieScore(a, b);
+        });
+        break;
+      case "perdida":
+        copy.sort((a, b) => {
+          if (a.perdidaMax !== b.perdidaMax) return a.perdidaMax - b.perdidaMax;
+          if (b.gananciaMax !== a.gananciaMax) return b.gananciaMax - a.gananciaMax;
+          return tieScore(a, b);
+        });
+        break;
+      case "ganancia":
+        copy.sort((a, b) => {
+          if (b.gananciaMax !== a.gananciaMax) return b.gananciaMax - a.gananciaMax;
+          if (a.perdidaMax !== b.perdidaMax) return a.perdidaMax - b.perdidaMax;
+          return tieScore(a, b);
+        });
+        break;
+      default:
+        copy.sort((a, b) => tieScore(a, b));
+    }
+    return copy;
+  }, [collarOpportunities, collarSortMode]);
 
   const operationalOpportunityAlerts = useMemo(() => {
     type Sev = "danger" | "warning" | "info";
@@ -3520,7 +3573,7 @@ export function OptionsPage() {
                                   <td style={{ textAlign: "right" }}>
                                     {x.days !== null ? formatInteger(x.days) : "-"}
                                   </td>
-                                  <td style={{ textAlign: "right" }} className={coveredCallTnaDisplayClass(x.tnaPct)}>
+                                  <td style={{ textAlign: "right" }} className={strategyTnaDisplayClass(x.tnaPct)}>
                                     {x.tnaPct !== null ? `${formatNumber(x.tnaPct, 2)}%` : "-"}
                                   </td>
                                   <td style={{ textAlign: "right" }}>
@@ -3569,8 +3622,8 @@ export function OptionsPage() {
                           Sin puts con bid &gt; 0 en el feed actual.
                         </div>
                       ) : (
-                        <div className="table-wrap">
-                          <table className="strategy-opportunities-table">
+                        <div className="table-wrap options-strategy-csp-wrap">
+                          <table className="strategy-opportunities-table options-strategy-csp-table">
                             <thead>
                               <tr>
                                 <th>Vencimiento</th>
@@ -3593,9 +3646,11 @@ export function OptionsPage() {
                                 <th style={{ textAlign: "right" }} title="(strike / spot − 1) × 100">
                                   Δ strike %
                                 </th>
-                                <th style={{ textAlign: "right" }}>Capital</th>
-                                <th style={{ textAlign: "right" }} title="Prima / strike">
-                                  Rend. simple
+                                <th style={{ textAlign: "right" }} title="Capital aproximado ≈ strike × lote (garantía / caja)">
+                                  Garant.
+                                </th>
+                                <th style={{ textAlign: "right" }} title="Prima / strike (rendimiento simple)">
+                                  Rend.
                                 </th>
                                 <th
                                   style={{ textAlign: "right" }}
@@ -3605,11 +3660,13 @@ export function OptionsPage() {
                                 </th>
                                 <th style={{ textAlign: "right" }}>Días</th>
                                 <th style={{ textAlign: "right" }}>Volumen</th>
+                                <th title="Moneyness">Mny</th>
                               </tr>
                             </thead>
                             <tbody>
                               {cashSecuredPuts.map((x, idx) => {
                                 const stripe = idx % 2 === 0 ? "options-strategy-row--alt-a" : "options-strategy-row--alt-b";
+                                const m = getMoneynessFromValues(x.strike, "PUT", effectivePanelSpot);
                                 return (
                                   <tr
                                     key={`csp-${(x.contract.symbol ?? "").trim()}-${x.expiryKey}-${x.strike}-${idx}`}
@@ -3639,13 +3696,16 @@ export function OptionsPage() {
                                     </td>
                                     <td style={{ textAlign: "right" }}>${formatNumber(x.capital, 2)}</td>
                                     <td style={{ textAlign: "right" }}>{`${formatNumber(x.rendSimplePct, 2)}%`}</td>
-                                    <td style={{ textAlign: "right" }}>
+                                    <td style={{ textAlign: "right" }} className={strategyTnaDisplayClass(x.tnaPct)}>
                                       {x.tnaPct !== null ? `${formatNumber(x.tnaPct, 2)}%` : "-"}
                                     </td>
                                     <td style={{ textAlign: "right" }}>
                                       {x.days !== null ? formatInteger(x.days) : "-"}
                                     </td>
                                     <td style={{ textAlign: "right" }}>{formatInteger(x.vol)}</td>
+                                    <td>
+                                      <span className={strategyMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
+                                    </td>
                                   </tr>
                                 );
                               })}
@@ -3685,6 +3745,27 @@ export function OptionsPage() {
                       <p className="msg-muted options-strategy-collar-sub" style={{ marginBottom: "0.45rem" }}>
                         Montos estimados por 1 contrato = 100 acciones, usando spot actual.
                       </p>
+                      <p className="msg-muted options-strategy-collar-sub" style={{ marginBottom: "0.45rem" }}>
+                        Pérdida máxima: caída desde el spot actual hasta el PUT comprado, ajustada por la prima neta.
+                      </p>
+                      <div style={{ marginBottom: "0.55rem" }}>
+                        <label className="radar-toolbar__field" style={{ margin: 0 }}>
+                          <span className="radar-toolbar__label">Ordenar por</span>
+                          <select
+                            className="radar-toolbar__select"
+                            value={collarSortMode}
+                            onChange={(ev) => setCollarSortMode(ev.target.value as CollarSortMode)}
+                            disabled={collarOpportunities.length === 0}
+                            aria-label="Criterio de ordenación Collar"
+                          >
+                            <option value="score">Mejor score</option>
+                            <option value="credito">Costo cero / crédito</option>
+                            <option value="rb">Mejor R/B</option>
+                            <option value="perdida">Menor pérdida</option>
+                            <option value="ganancia">Mayor ganancia</option>
+                          </select>
+                        </label>
+                      </div>
                       {collarOpportunities.length === 0 ? (
                         <div className="options-empty-state options-empty-state--compact" role="status">
                           Sin collars válidos para este activo con datos actuales.
@@ -3709,14 +3790,17 @@ export function OptionsPage() {
                                 <th style={{ textAlign: "right" }} title="Put strike × 100 / Call strike × 100">
                                   Piso / Techo
                                 </th>
-                                <th style={{ textAlign: "right" }} title="Pérdida y ganancia máx. aprox. × 100">
-                                  Pérd. máx. / Gcia. máx.
+                                <th
+                                  style={{ textAlign: "right" }}
+                                  title="Pérdida máxima aprox.: caída desde el spot actual hasta el strike del PUT comprado, ajustada por la prima neta del collar (misma lógica que la fila: montos × contrato y ×1 por acción). Ganancia máxima aprox. al techo del CALL."
+                                >
+                                  Pérd. máx. desde spot / Gcia. máx.
                                 </th>
                                 <th>Comentario</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {collarOpportunities.map((x, idx) => {
+                              {collarOpportunitiesDisplay.map((x, idx) => {
                                 const lot = OPTIONS_STRATEGY_LOT_SIZE;
                                 const spotNum = effectivePanelSpot;
                                 const hasSpot = spotNum !== null && spotNum > 0 && Number.isFinite(spotNum);
@@ -3730,13 +3814,10 @@ export function OptionsPage() {
                                 const gananciaMaxContrato = Number.isFinite(x.gananciaMax) ? x.gananciaMax * lot : null;
                                 const netoAcc = x.neto;
                                 const costoTotalAcc = hasSpot && Number.isFinite(x.neto) ? spotNum - x.neto : null;
-                                const rbGood =
-                                  Number.isFinite(x.gananciaMax) &&
-                                  Number.isFinite(x.perdidaMax) &&
-                                  x.perdidaMax > 0 &&
-                                  x.gananciaMax / x.perdidaMax > 2;
+                                const rbRatio = x.perdidaMax > 0 ? x.gananciaMax / x.perdidaMax : null;
+                                const rbHighlight = rbRatio !== null && rbRatio > 2;
                                 const stripe = idx % 2 === 0 ? "options-strategy-row--alt-a" : "options-strategy-row--alt-b";
-                                const trRb = rbGood ? " options-strategy-row--good-rb" : "";
+                                const trRb = rbHighlight ? " options-strategy-row--good-rb" : "";
                                 return (
                                 <tr key={`collar-${x.expiryKey}-${x.putSymbol}-${x.callSymbol}-${idx}`} className={`${stripe}${trRb}`}>
                                   <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
@@ -3802,7 +3883,10 @@ export function OptionsPage() {
                                       "—"
                                     )}
                                   </td>
-                                  <td style={{ textAlign: "right" }}>
+                                  <td
+                                    style={{ textAlign: "right" }}
+                                    title="Pérdida máxima aprox.: caída desde el spot actual hasta el PUT comprado, ajustada por la prima neta. Ganancia máxima aprox. al techo del CALL. $ por contrato (100 acciones); ×1 por acción."
+                                  >
                                     {perdidaMaxContrato !== null && gananciaMaxContrato !== null ? (
                                       <>
                                         <div>
@@ -3818,9 +3902,16 @@ export function OptionsPage() {
                                   </td>
                                   <td>
                                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "0.28rem" }}>
-                                      {rbGood ? (
-                                        <span className="options-strategy-rb-badge" title="Ganancia máx. aprox. / Pérdida máx. aprox.">
-                                          {"R/B > 2"}
+                                      {rbRatio !== null ? (
+                                        <span
+                                          className={
+                                            rbHighlight
+                                              ? "options-strategy-rb-badge"
+                                              : "options-strategy-rb-badge options-strategy-rb-badge--plain"
+                                          }
+                                          title={`R/B = ganancia máx. / pérdida máx. (${formatNumber(rbRatio, 4)})`}
+                                        >
+                                          {`R/B ${formatNumber(rbRatio, 2)}`}
                                         </span>
                                       ) : null}
                                       <span className={`options-strategy-collar-comment ${collarNetCommentClass(x.comentario)}`}>
