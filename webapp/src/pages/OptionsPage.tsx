@@ -2159,11 +2159,18 @@ export function OptionsPage() {
         const lowLoss = Number.isFinite(lossPct) && lossPct <= OP_ALERT_COLLAR_LOW_LOSS_PCT_SPOT;
         const sev: Sev = lowLoss && (cheapBySpot || credit) ? "warning" : "info";
 
+        const lot = OPTIONS_STRATEGY_LOT_SIZE;
+        const netoContrato = neto * lot;
+        const perdidaContratoPart = Number.isFinite(x.perdidaMax)
+          ? ` · Pérd. máx. aprox. $ ${formatNumber(x.perdidaMax * lot, 2)} por contrato`
+          : "";
+        const metaCollar = `Neto $ ${formatNumber(neto, 2)} por acción / $ ${formatNumber(netoContrato, 2)} por contrato${perdidaContratoPart} · ${formatExpiryMonthLabel(x.expiryKey)} · ${x.putSymbol} / ${x.callSymbol}`;
+
         out.push({
           id: `op-collar-${x.expiryKey}-${x.putSymbol}-${x.callSymbol}-${neto}`,
           severity: sev,
-          main: `Collar barato/costo cero: PUT ${formatNumber(x.putStrike, 2)} + CALL ${formatNumber(x.callStrike, 2)}, neto ${formatNumber(neto, 2)}`,
-          meta: `${formatExpiryMonthLabel(x.expiryKey)} · ${x.putSymbol} / ${x.callSymbol}`,
+          main: `Collar barato/costo cero: PUT ${formatNumber(x.putStrike, 2)} + CALL ${formatNumber(x.callStrike, 2)}`,
+          meta: metaCollar,
           sDanger: sev === "warning" ? 1 : 0,
           sTna: 0,
           sCollarNetAbsPct: absPct,
@@ -3790,6 +3797,9 @@ export function OptionsPage() {
                           Riesgo limitado (aprox.)
                         </span>
                       </div>
+                      <p className="msg-muted options-strategy-collar-sub" style={{ marginBottom: "0.45rem" }}>
+                        Montos estimados por 1 contrato = 100 acciones, usando spot actual.
+                      </p>
                       {collarOpportunities.length === 0 ? (
                         <div className="options-empty-state options-empty-state--compact" role="status">
                           Sin collars válidos para este activo con datos actuales.
@@ -3802,20 +3812,40 @@ export function OptionsPage() {
                                 <th>Vencimiento</th>
                                 <th>PUT comprado</th>
                                 <th>CALL vendido</th>
-                                <th style={{ textAlign: "right" }}>Prima neta</th>
-                                <th style={{ textAlign: "right" }}>Piso</th>
-                                <th style={{ textAlign: "right" }}>Techo</th>
-                                <th style={{ textAlign: "right" }} title="max(0, spot − put + put_ask − call_bid)">
-                                  Pérdida máx. aprox.
+                                <th style={{ textAlign: "right" }} title="Spot × 100 acciones">
+                                  Costo acciones
                                 </th>
-                                <th style={{ textAlign: "right" }} title="max(0, call − spot + call_bid − put_ask)">
-                                  Ganancia máx. aprox.
+                                <th style={{ textAlign: "right" }} title="(call_bid − put_ask) × 100">
+                                  Prima neta
+                                </th>
+                                <th style={{ textAlign: "right" }} title="(spot − prima neta por acción) × 100">
+                                  Costo total
+                                </th>
+                                <th style={{ textAlign: "right" }} title="Put strike × 100 / Call strike × 100">
+                                  Piso / Techo
+                                </th>
+                                <th style={{ textAlign: "right" }} title="Pérdida y ganancia máx. aprox. × 100">
+                                  Pérd. máx. / Gcia. máx.
                                 </th>
                                 <th>Comentario</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {collarOpportunities.map((x, idx) => (
+                              {collarOpportunities.map((x, idx) => {
+                                const lot = OPTIONS_STRATEGY_LOT_SIZE;
+                                const spotNum = effectivePanelSpot;
+                                const hasSpot = spotNum !== null && spotNum > 0 && Number.isFinite(spotNum);
+                                const costoAccionesContrato = hasSpot ? spotNum * lot : null;
+                                const primaNetaContrato = Number.isFinite(x.neto) ? x.neto * lot : null;
+                                const costoTotalCollarContrato =
+                                  hasSpot && Number.isFinite(x.neto) ? (spotNum - x.neto) * lot : null;
+                                const pisoContrato = Number.isFinite(x.putStrike) ? x.putStrike * lot : null;
+                                const techoContrato = Number.isFinite(x.callStrike) ? x.callStrike * lot : null;
+                                const perdidaMaxContrato = Number.isFinite(x.perdidaMax) ? x.perdidaMax * lot : null;
+                                const gananciaMaxContrato = Number.isFinite(x.gananciaMax) ? x.gananciaMax * lot : null;
+                                const netoAcc = x.neto;
+                                const costoTotalAcc = hasSpot && Number.isFinite(x.neto) ? spotNum - x.neto : null;
+                                return (
                                 <tr key={`collar-${x.expiryKey}-${x.putSymbol}-${x.callSymbol}-${idx}`}>
                                   <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
                                   <td>
@@ -3830,18 +3860,78 @@ export function OptionsPage() {
                                     </div>
                                     <div className="msg-muted options-strategy-collar-sub">CALL K {formatNumber(x.callStrike, 2)}</div>
                                   </td>
-                                  <td style={{ textAlign: "right" }}>{formatNumber(x.neto, 2)}</td>
-                                  <td style={{ textAlign: "right" }}>{formatNumber(x.piso, 2)}</td>
-                                  <td style={{ textAlign: "right" }}>{formatNumber(x.techo, 2)}</td>
-                                  <td style={{ textAlign: "right" }}>{formatNumber(x.perdidaMax, 2)}</td>
-                                  <td style={{ textAlign: "right" }}>{formatNumber(x.gananciaMax, 2)}</td>
+                                  <td style={{ textAlign: "right" }}>
+                                    {costoAccionesContrato !== null ? (
+                                      <>
+                                        <div>$ {formatNumber(costoAccionesContrato, 2)}</div>
+                                        <div className="msg-muted options-strategy-collar-sub" title="Por acción">
+                                          ×1: {formatNumber(spotNum, 2)}
+                                        </div>
+                                      </>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
+                                  <td style={{ textAlign: "right" }}>
+                                    {primaNetaContrato !== null ? (
+                                      <>
+                                        <div>$ {formatNumber(primaNetaContrato, 2)}</div>
+                                        <div className="msg-muted options-strategy-collar-sub" title="Por acción">
+                                          ×1: {formatNumber(netoAcc, 2)}
+                                        </div>
+                                      </>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
+                                  <td style={{ textAlign: "right" }}>
+                                    {costoTotalCollarContrato !== null && costoTotalAcc !== null ? (
+                                      <>
+                                        <div>$ {formatNumber(costoTotalCollarContrato, 2)}</div>
+                                        <div className="msg-muted options-strategy-collar-sub" title="Por acción">
+                                          ×1: {formatNumber(costoTotalAcc, 2)}
+                                        </div>
+                                      </>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
+                                  <td style={{ textAlign: "right" }}>
+                                    {pisoContrato !== null && techoContrato !== null ? (
+                                      <>
+                                        <div>
+                                          $ {formatNumber(pisoContrato, 2)} / $ {formatNumber(techoContrato, 2)}
+                                        </div>
+                                        <div className="msg-muted options-strategy-collar-sub" title="Strikes por acción">
+                                          K: {formatNumber(x.putStrike, 2)} / {formatNumber(x.callStrike, 2)}
+                                        </div>
+                                      </>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
+                                  <td style={{ textAlign: "right" }}>
+                                    {perdidaMaxContrato !== null && gananciaMaxContrato !== null ? (
+                                      <>
+                                        <div>
+                                          $ {formatNumber(perdidaMaxContrato, 2)} / $ {formatNumber(gananciaMaxContrato, 2)}
+                                        </div>
+                                        <div className="msg-muted options-strategy-collar-sub" title="Por acción">
+                                          ×1: {formatNumber(x.perdidaMax, 2)} / {formatNumber(x.gananciaMax, 2)}
+                                        </div>
+                                      </>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
                                   <td>
                                     <span className={`options-strategy-collar-comment ${collarNetCommentClass(x.comentario)}`}>
                                       {x.comentario}
                                     </span>
                                   </td>
                                 </tr>
-                              ))}
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
