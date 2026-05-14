@@ -56,6 +56,9 @@ const OP_ALERT_TNA_DANGER_PCT = 100;
 const OP_ALERT_COLLAR_NET_ABS_PCT_SPOT = 0.5;
 /** Collar: pérdida máx. aprox / spot ≤ este % → “baja” para subir severidad a warning. */
 const OP_ALERT_COLLAR_LOW_LOSS_PCT_SPOT = 12;
+/** Collar alertas: TNA neto (sobre spot) con pérdida baja → subir severidad. */
+const OP_ALERT_COLLAR_TNA_NETO_WARN_PCT = 25;
+const OP_ALERT_COLLAR_TNA_NETO_DANGER_PCT = 35;
 
 /**
  * TODO(fase siguiente): alertas “Bull Call Spread barato” usando `bullCallSpreads` (débito vs anchura o vs spot)
@@ -680,6 +683,26 @@ function strategyTnaDisplayClass(tna: number | null | undefined): string {
   return "options-tna--neutral";
 }
 
+/**
+ * TNA % anualizada del neto del collar sobre spot: (netoPrima/spot)*(365/días)*100.
+ * Solo UI / orden; no altera el armado del pool Collar.
+ */
+function collarTnaNetoPct(netoPrima: number, spot: number, expiryKey: string): number | null {
+  if (!(spot > 0) || !Number.isFinite(spot)) return null;
+  if (!Number.isFinite(netoPrima)) return null;
+  const dias = daysBetweenTodayAndExpiry(expiryKey);
+  if (dias === null || !Number.isFinite(dias) || dias <= 0) return null;
+  return (netoPrima / spot) * (365 / dias) * 100;
+}
+
+/** Colores TNA neto Collar: verde si claramente a favor, rojo si en contra, neutro cerca de cero. */
+function collarTnaNetoDisplayClass(tnaPct: number | null): string {
+  if (tnaPct === null || !Number.isFinite(tnaPct)) return "options-tna--neutral";
+  if (Math.abs(tnaPct) <= 2) return "options-tna--neutral";
+  if (tnaPct < 0) return "options-tna--negative";
+  return "options-tna--high";
+}
+
 /** Rayas por grupo (mismo vencimiento + strike comprado) en Bull Call Spread. */
 function strategyStripeByBuyGroup<T extends { expiryKey: string; buyStrike: number }>(
   rows: T[],
@@ -933,7 +956,7 @@ type PanelHeaderSort =
   | { kind: "expiry"; dir: "asc" | "desc" };
 
 /** Orden visual de la tabla Collar (no altera `collarOpportunities`). */
-type CollarSortMode = "score" | "credito" | "rb" | "perdida" | "ganancia";
+type CollarSortMode = "score" | "credito" | "rb" | "perdida" | "ganancia" | "tnaNeto";
 
 export function OptionsPage() {
   const [selectedUnderlying, setSelectedUnderlying] = useState<string>("");
@@ -2127,6 +2150,10 @@ export function OptionsPage() {
   const collarOpportunitiesDisplay = useMemo(() => {
     type CRow = (typeof collarOpportunities)[number];
     const copy = collarOpportunities.slice() as CRow[];
+    const spotSort =
+      effectivePanelSpot !== null && effectivePanelSpot > 0 && Number.isFinite(effectivePanelSpot)
+        ? effectivePanelSpot
+        : null;
     const tieScore = (a: CRow, b: CRow): number => {
       if (a.perdidaMax !== b.perdidaMax) return a.perdidaMax - b.perdidaMax;
       if (b.gananciaMax !== a.gananciaMax) return b.gananciaMax - a.gananciaMax;
@@ -2167,11 +2194,24 @@ export function OptionsPage() {
           return tieScore(a, b);
         });
         break;
+      case "tnaNeto":
+        copy.sort((a, b) => {
+          const ta =
+            spotSort !== null ? collarTnaNetoPct(a.neto, spotSort, a.expiryKey) : null;
+          const tb =
+            spotSort !== null ? collarTnaNetoPct(b.neto, spotSort, b.expiryKey) : null;
+          if (ta !== null && tb !== null && ta !== tb) return tb - ta;
+          if (ta !== null && tb === null) return -1;
+          if (ta === null && tb !== null) return 1;
+          if (a.perdidaMax !== b.perdidaMax) return a.perdidaMax - b.perdidaMax;
+          return tieScore(a, b);
+        });
+        break;
       default:
         copy.sort((a, b) => tieScore(a, b));
     }
     return copy;
-  }, [collarOpportunities, collarSortMode]);
+  }, [collarOpportunities, collarSortMode, effectivePanelSpot]);
 
   const operationalOpportunityAlerts = useMemo(() => {
     type Sev = "danger" | "warning" | "info";
@@ -2234,24 +2274,33 @@ export function OptionsPage() {
         const credit = neto > 0;
         if (!cheapBySpot && !credit) continue;
 
+        const tnaNeto = collarTnaNetoPct(x.neto, spot, x.expiryKey);
         const lossPct = (x.perdidaMax / spot) * 100;
         const lowLoss = Number.isFinite(lossPct) && lossPct <= OP_ALERT_COLLAR_LOW_LOSS_PCT_SPOT;
-        const sev: Sev = lowLoss && (cheapBySpot || credit) ? "warning" : "info";
+        let sev: Sev = lowLoss ? "warning" : "info";
+        if (lowLoss && tnaNeto !== null && Number.isFinite(tnaNeto)) {
+          if (tnaNeto >= OP_ALERT_COLLAR_TNA_NETO_DANGER_PCT) sev = "danger";
+          else if (tnaNeto >= OP_ALERT_COLLAR_TNA_NETO_WARN_PCT) sev = "warning";
+        }
 
         const lot = OPTIONS_STRATEGY_LOT_SIZE;
         const netoContrato = neto * lot;
         const perdidaContratoPart = Number.isFinite(x.perdidaMax)
           ? ` · Pérd. máx. aprox. $ ${formatNumber(x.perdidaMax * lot, 2)} por contrato`
           : "";
-        const metaCollar = `Neto $ ${formatNumber(neto, 2)} por acción / $ ${formatNumber(netoContrato, 2)} por contrato${perdidaContratoPart} · ${formatExpiryMonthLabel(x.expiryKey)} · ${x.putSymbol} / ${x.callSymbol}`;
+        const tnaMeta =
+          tnaNeto !== null && Number.isFinite(tnaNeto)
+            ? ` · TNA neto ${formatNumber(tnaNeto, 1)}%`
+            : "";
+        const metaCollar = `Neto $ ${formatNumber(neto, 2)} por acción / $ ${formatNumber(netoContrato, 2)} por contrato${perdidaContratoPart}${tnaMeta} · ${formatExpiryMonthLabel(x.expiryKey)} · ${x.putSymbol} / ${x.callSymbol}`;
 
         out.push({
           id: `op-collar-${x.expiryKey}-${x.putSymbol}-${x.callSymbol}-${neto}`,
           severity: sev,
           main: `Collar barato/costo cero: PUT ${formatNumber(x.putStrike, 2)} + CALL ${formatNumber(x.callStrike, 2)}`,
           meta: metaCollar,
-          sDanger: sev === "warning" ? 1 : 0,
-          sTna: 0,
+          sDanger: sev === "danger" ? 2 : sev === "warning" ? 1 : 0,
+          sTna: tnaNeto !== null && Number.isFinite(tnaNeto) ? tnaNeto : 0,
           sCollarNetAbsPct: absPct,
         });
       }
@@ -3763,6 +3812,7 @@ export function OptionsPage() {
                             <option value="rb">Mejor R/B</option>
                             <option value="perdida">Menor pérdida</option>
                             <option value="ganancia">Mayor ganancia</option>
+                            <option value="tnaNeto">Mayor TNA neto</option>
                           </select>
                         </label>
                       </div>
@@ -3783,6 +3833,12 @@ export function OptionsPage() {
                                 </th>
                                 <th style={{ textAlign: "right" }} title="(call_bid − put_ask) × 100">
                                   Prima neta
+                                </th>
+                                <th
+                                  style={{ textAlign: "right" }}
+                                  title="TNA estimada del crédito/débito neto del collar sobre el spot actual."
+                                >
+                                  TNA neto
                                 </th>
                                 <th style={{ textAlign: "right" }} title="(spot − prima neta por acción) × 100">
                                   Costo total
@@ -3818,6 +3874,10 @@ export function OptionsPage() {
                                 const rbHighlight = rbRatio !== null && rbRatio > 2;
                                 const stripe = idx % 2 === 0 ? "options-strategy-row--alt-a" : "options-strategy-row--alt-b";
                                 const trRb = rbHighlight ? " options-strategy-row--good-rb" : "";
+                                const tnaNetoPct =
+                                  hasSpot && spotNum !== null
+                                    ? collarTnaNetoPct(x.neto, spotNum, x.expiryKey)
+                                    : null;
                                 return (
                                 <tr key={`collar-${x.expiryKey}-${x.putSymbol}-${x.callSymbol}-${idx}`} className={`${stripe}${trRb}`}>
                                   <td>{formatExpiryMonthLabel(x.expiryKey)}</td>
@@ -3856,6 +3916,13 @@ export function OptionsPage() {
                                     ) : (
                                       "—"
                                     )}
+                                  </td>
+                                  <td
+                                    style={{ textAlign: "right" }}
+                                    className={collarTnaNetoDisplayClass(tnaNetoPct)}
+                                    title="TNA estimada del crédito/débito neto del collar sobre el spot actual."
+                                  >
+                                    {tnaNetoPct !== null ? `${formatNumber(tnaNetoPct, 2)}%` : "—"}
                                   </td>
                                   <td style={{ textAlign: "right" }}>
                                     {costoTotalCollarContrato !== null && costoTotalAcc !== null ? (
