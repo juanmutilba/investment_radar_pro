@@ -44,7 +44,7 @@ const CHAIN_UNDERLYINGS: readonly OptionUnderlying[] = [
 const ENRICH_CHAIN_SOURCES = true;
 
 /** Máximo de especies por request GET /options/quotes (prioridad operable). */
-const IOL_QUOTES_VISIBLE_CAP = 12;
+const IOL_QUOTES_VISIBLE_CAP = 10;
 
 /** Nominal por contrato (BYMA acciones) para capital comprometido en tablas de estrategia. */
 const OPTIONS_STRATEGY_LOT_SIZE = 100;
