@@ -112,6 +112,99 @@ export async function fetchAlertsAnalysis(limit = 5000): Promise<AlertAnalysisRo
   return data as AlertAnalysisRow[];
 }
 
+/** GET /crypto/status — sin secretos. */
+export type CryptoStatusPayload = {
+  configured: boolean;
+  trading_enabled: boolean;
+  testnet: boolean;
+  can_read_balance: boolean;
+  message: string;
+};
+
+/** Vela OHLCV (ccxt): [timestamp ms, open, high, low, close, volume]. */
+export type CryptoOhlcvCandle = [number, number, number, number, number, number];
+
+export type CryptoOhlcvResponse = {
+  symbol: string;
+  timeframe: string;
+  limit: number;
+  candles: CryptoOhlcvCandle[];
+};
+
+/** Subconjunto del ticker ccxt usado en la UI. */
+export type CryptoTicker = {
+  symbol?: string;
+  last?: number | null;
+  percentage?: number | null;
+  baseVolume?: number | null;
+  quoteVolume?: number | null;
+};
+
+function isCryptoStatusPayload(data: unknown): data is CryptoStatusPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.configured === "boolean" &&
+    typeof o.trading_enabled === "boolean" &&
+    typeof o.testnet === "boolean" &&
+    typeof o.can_read_balance === "boolean" &&
+    typeof o.message === "string"
+  );
+}
+
+function isCryptoOhlcvResponse(data: unknown): data is CryptoOhlcvResponse {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.symbol === "string" &&
+    typeof o.timeframe === "string" &&
+    typeof o.limit === "number" &&
+    Array.isArray(o.candles)
+  );
+}
+
+export async function getCryptoStatus(): Promise<CryptoStatusPayload> {
+  const res = await fetch(`${BASE}/crypto/status`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoStatusPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/status");
+  }
+  return data;
+}
+
+export async function getCryptoTicker(symbol: string): Promise<CryptoTicker> {
+  const q = new URLSearchParams({ symbol: symbol.trim() });
+  const res = await fetch(`${BASE}/crypto/ticker?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  return (await res.json()) as CryptoTicker;
+}
+
+export async function getCryptoOhlcv(
+  symbol: string,
+  timeframe: string,
+  limit: number,
+): Promise<CryptoOhlcvResponse> {
+  const q = new URLSearchParams({
+    symbol: symbol.trim(),
+    timeframe: timeframe.trim(),
+    limit: String(limit),
+  });
+  const res = await fetch(`${BASE}/crypto/ohlcv?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoOhlcvResponse(data)) {
+    throw new Error("Respuesta inesperada: /crypto/ohlcv");
+  }
+  return data;
+}
+
 /** Fila tal como viene del Excel (claves pueden variar en casing); usar helpers al renderizar. */
 export type RadarRow = Record<string, unknown>;
 
@@ -1088,6 +1181,9 @@ export type IvSmilePoint = {
   bid?: number | null;
   iv_diff_vs_avg?: number | null;
   iv_diff_vs_avg_pct?: number | null;
+  iv_change_pct?: number | null;
+  iv_expanding?: boolean;
+  iv_crushing?: boolean;
   rich_iv?: boolean;
   cheap_iv?: boolean;
 };
@@ -1105,6 +1201,15 @@ export type IvSmileGroup = {
 export type IvSmileResponse = {
   items: IvSmileGroup[];
 };
+
+/** IV / numéricos: solo valores finitos; NaN, Infinity, null, undefined → null */
+function finiteIvMetric(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string" && v.trim() === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 
 export async function fetchIvSmile(underlying: string): Promise<IvSmileResponse> {
   const q = new URLSearchParams({ underlying: underlying.trim() });
@@ -1130,30 +1235,34 @@ export async function fetchIvSmile(underlying: string): Promise<IvSmileResponse>
       for (const p of ptsRaw) {
         if (p === null || typeof p !== "object") continue;
         const pr = p as Record<string, unknown>;
-        const strike = typeof pr.strike === "number" ? pr.strike : Number(pr.strike);
-        const iv_pct = typeof pr.iv_pct === "number" ? pr.iv_pct : Number(pr.iv_pct);
-        if (!Number.isFinite(strike) || !Number.isFinite(iv_pct)) continue;
+        const strikeRaw = pr.strike;
+        const strike = typeof strikeRaw === "number" ? strikeRaw : Number(strikeRaw);
+        const iv_pct = finiteIvMetric(pr.iv_pct);
+        if (!Number.isFinite(strike) || iv_pct === null) continue;
         const vol = pr.volume === undefined ? undefined : typeof pr.volume === "number" ? pr.volume : Number(pr.volume);
         const bidRaw = pr.bid;
-        const bid =
+        const bidNum =
           bidRaw === null || bidRaw === undefined
             ? null
             : typeof bidRaw === "number"
               ? bidRaw
               : Number(bidRaw);
-        const ivd = pr.iv_diff_vs_avg;
-        const ivdp = pr.iv_diff_vs_avg_pct;
+        const bid = bidNum !== null && Number.isFinite(bidNum) && bidNum > 0 ? bidNum : null;
+        const ivd = finiteIvMetric(pr.iv_diff_vs_avg);
+        const ivdp = finiteIvMetric(pr.iv_diff_vs_avg_pct);
+        const ivch = finiteIvMetric(pr.iv_change_pct);
         points.push({
           strike,
           iv_pct,
           moneyness: typeof pr.moneyness === "string" ? pr.moneyness : String(pr.moneyness ?? ""),
           symbol: typeof pr.symbol === "string" ? pr.symbol : String(pr.symbol ?? ""),
           volume: Number.isFinite(vol as number) ? (vol as number) : 0,
-          bid: bid !== null && Number.isFinite(bid) && bid > 0 ? bid : null,
-          iv_diff_vs_avg:
-            ivd === null || ivd === undefined ? null : typeof ivd === "number" ? ivd : Number(ivd),
-          iv_diff_vs_avg_pct:
-            ivdp === null || ivdp === undefined ? null : typeof ivdp === "number" ? ivdp : Number(ivdp),
+          bid,
+          iv_diff_vs_avg: ivd,
+          iv_diff_vs_avg_pct: ivdp,
+          iv_change_pct: ivch,
+          iv_expanding: Boolean(pr.iv_expanding) && ivch !== null,
+          iv_crushing: Boolean(pr.iv_crushing) && ivch !== null,
           rich_iv: Boolean(pr.rich_iv),
           cheap_iv: Boolean(pr.cheap_iv),
         });
@@ -1166,24 +1275,9 @@ export async function fetchIvSmile(underlying: string): Promise<IvSmileResponse>
       underlying: typeof o.underlying === "string" ? o.underlying : String(o.underlying ?? ""),
       expiration: typeof o.expiration === "string" ? o.expiration : String(o.expiration ?? ""),
       option_type: typeof o.option_type === "string" ? o.option_type : String(o.option_type ?? ""),
-      avg_iv_pct:
-        avgRaw === null || avgRaw === undefined
-          ? null
-          : typeof avgRaw === "number"
-            ? avgRaw
-            : Number(avgRaw),
-      min_iv_pct:
-        minRaw === null || minRaw === undefined
-          ? null
-          : typeof minRaw === "number"
-            ? minRaw
-            : Number(minRaw),
-      max_iv_pct:
-        maxRaw === null || maxRaw === undefined
-          ? null
-          : typeof maxRaw === "number"
-            ? maxRaw
-            : Number(maxRaw),
+      avg_iv_pct: finiteIvMetric(avgRaw),
+      min_iv_pct: finiteIvMetric(minRaw),
+      max_iv_pct: finiteIvMetric(maxRaw),
       points,
     });
   }

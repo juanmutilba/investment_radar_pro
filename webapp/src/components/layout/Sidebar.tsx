@@ -13,6 +13,7 @@ const ITEMS: NavItem[] = [
   { to: "/acciones-argentina", label: "Acciones Argentina" },
   { to: "/eventos", label: "Eventos" },
   { to: "/cedears", label: "CEDEARs" },
+  { to: "/crypto", label: "Cripto" },
   { to: "/bonos", label: "Bonos", placeholder: true },
   { to: "/options", label: "Opciones" },
   { to: "/futuros", label: "Futuros", placeholder: true },

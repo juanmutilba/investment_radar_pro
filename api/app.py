@@ -458,6 +458,51 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/crypto/status")
+def crypto_status():
+    """Estado de configuración Binance/ccxt (sin secretos; puede intentar leer balance)."""
+    from services.crypto.providers.binance_provider import crypto_status_payload
+
+    return crypto_status_payload()
+
+
+@app.get("/crypto/ticker")
+def crypto_ticker(
+    symbol: str = Query(..., min_length=3, description="Par spot CCXT, ej. BTC/USDT"),
+):
+    """Ticker spot vía Binance (ccxt); solo lectura."""
+    from services.crypto.providers import binance_provider as bp
+
+    try:
+        return bp.fetch_ticker(symbol.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Binance/ccxt: {e}") from e
+
+
+@app.get("/crypto/ohlcv")
+def crypto_ohlcv(
+    symbol: str = Query(..., min_length=3, description="Par spot CCXT, ej. BTC/USDT"),
+    timeframe: str = Query("1h", min_length=1, max_length=16),
+    limit: int = Query(100, ge=1, le=1000),
+):
+    """OHLCV spot vía Binance (ccxt); solo lectura."""
+    from services.crypto.providers import binance_provider as bp
+
+    try:
+        rows = bp.fetch_ohlcv(symbol.strip(), timeframe=timeframe.strip(), limit=limit)
+        return {"symbol": symbol.strip(), "timeframe": timeframe.strip(), "limit": limit, "candles": rows}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Binance/ccxt: {e}") from e
+
+
 @app.get("/iol/status")
 def iol_status():
     """Estado de credenciales y token IOL en memoria (sin secretos)."""
@@ -486,6 +531,11 @@ def options_iv_smile(
     """
     Curva de IV por strike (misma lógica de mark/BS que el panel; bid/ask/último de la cadena mergeada).
     """
+    from services.options.iv_history import (
+        enrich_iv_smile_items_with_temporal,
+        load_previous_snapshots_by_underlying,
+        schedule_iv_history_snapshots,
+    )
     from services.options.options_service import get_options_chain_with_spot
     from services.options.volatility import build_iv_smile, iv_smile_input_rows_from_chain
 
@@ -499,7 +549,11 @@ def options_iv_smile(
     if s_num is None or not (s_num > 0) or s_num != s_num:
         s_num = None
     rows = iv_smile_input_rows_from_chain(chain, s_num)
-    return {"items": build_iv_smile(rows)}
+    items = build_iv_smile(rows)
+    prev_by = load_previous_snapshots_by_underlying(u)
+    items = enrich_iv_smile_items_with_temporal(items, prev_by)
+    schedule_iv_history_snapshots(u, items)
+    return {"items": items}
 
 
 @app.get("/options/iol/raw/{symbol}")

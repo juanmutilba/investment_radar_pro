@@ -5,6 +5,7 @@ import { AccionesUsaPage } from "@/pages/AccionesUsaPage";
 import { AlertasPage } from "@/pages/AlertasPage";
 import { CarteraPage } from "@/pages/CarteraPage";
 import { CedearsPage } from "@/pages/CedearsPage";
+import { CryptoPage } from "@/pages/CryptoPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { EventosPage } from "@/pages/EventosPage";
 import { OptionsPage } from "@/pages/OptionsPage";
@@ -21,6 +22,7 @@ export function AppRoutes() {
         <Route path="alertas" element={<AlertasPage />} />
         <Route path="eventos" element={<EventosPage />} />
         <Route path="cedears" element={<CedearsPage />} />
+        <Route path="crypto" element={<CryptoPage />} />
         <Route path="options" element={<OptionsPage />} />
         <Route path="opciones" element={<Navigate to="/options" replace />} />
         <Route
