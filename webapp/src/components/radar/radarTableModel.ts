@@ -123,11 +123,13 @@ export const COLUMNS_USA: ColumnDef[] = [
   { id: "total", header: "TotalScore", keys: ["TotalScore", "total_score"], minWidth: 96, align: "right", nowrap: true, sortKind: "number" },
   {
     id: "signal",
-    header: "SignalState",
+    header: "Estado radar",
     keys: ["SignalState", "signal_state", "signalState"],
     minWidth: 112,
     nowrap: true,
     sortKind: "string",
+    headerTitle:
+      "Estado del radar (mismo dato que la columna SignalState del export): se calcula con TotalScore, upside, precio vs objetivo, RSI y tendencias según reglas fijas. Es distinto del «tipo de alerta» del módulo Alertas, que marca eventos tácticos por corrida con otra lógica.",
   },
   {
     id: "conv",

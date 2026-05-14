@@ -29,6 +29,17 @@ const RANKING_COLUMN_TOOLTIP =
 
 const RANKING_CELL_TOOLTIP = "Ranking calculado sobre el historial analizado para este ticker.";
 
+/**
+ * Alineado con `services/alerts_analysis.build_alerts_analysis`: suma de `cambio_score`
+ * de los últimos hasta 3 eventos del ticker en el historial cargado (slice `rows[-3:]`).
+ */
+const ACELERACION_HISTORIAL_TOOLTIP =
+  "Aceleración = suma del cambio de score (campo cambio_score) de los últimos tres eventos de este ticker en el historial analizado; si hay menos de tres eventos, suma los disponibles. Positivo = impulso reciente al alza; negativo = deterioro reciente.";
+
+/** Columna historial / últimas: tipo de evento del motor (no SignalState del radar). */
+const TIPO_ALERTA_COLUMNA_TOOLTIP =
+  "Tipo de alerta: clasificación del motor de alertas en esa corrida (score, cambio de score, huella de señales). No equivale a la columna «Estado radar» (SignalState) en Acciones USA/Argentina.";
+
 /** Cards de resumen en fila: contenido centrado y altura mínima uniforme. */
 const parallelStatCardStyle: CSSProperties = {
   display: "flex",
@@ -481,7 +492,7 @@ export function AlertasPage() {
       "Ticker",
       "Mercado",
       "Segmento",
-      "Tipo",
+      "Tipo de alerta",
       "Conviccion",
       "Prioridad",
       "TotalScore",
@@ -789,11 +800,11 @@ export function AlertasPage() {
         <div
           className="msg-muted"
           style={{ maxWidth: "40rem", flex: "0 1 520px" }}
-          title="En el radar, SignalState resume el estado según score y reglas fijas. El tipo de alerta es un evento por corrida (cambio de score, huella de señales, etc.)."
+          title="En Acciones USA/Argentina la columna «Estado radar» muestra el mismo dato que SignalState en el export: estado según TotalScore y reglas fijas. El tipo de alerta es un evento por corrida (cambio de score, huella de señales, etc.)."
         >
           <ul style={{ margin: 0, paddingLeft: "1.15rem" }}>
             <li>
-              <strong>SignalState</strong>: es el estado del radar, en función al <strong>Total Score</strong>.
+              <strong>Estado radar</strong> (antes SignalState en la planilla): estado del radar según <strong>Total Score</strong> y reglas fijas.
             </li>
             <li>
               <strong>Tipo de alerta</strong>: es el evento detectado en esa corrida según reglas del motor.
@@ -914,7 +925,7 @@ export function AlertasPage() {
                 <thead>
                   <tr>
                     <th>Ticker</th>
-                    <th>Tipo</th>
+                    <th title={TIPO_ALERTA_COLUMNA_TOOLTIP}>Tipo de alerta</th>
                     <th>Score</th>
                     <th>Score ant.</th>
                     <th>Δ</th>
@@ -1056,7 +1067,7 @@ export function AlertasPage() {
                       <span className="radar-badge" title="Score actual">
                         score {fmtMaybe(r.score_actual)}
                       </span>
-                      <span className="radar-badge" title="Aceleración (suma Δ score últimos 3 eventos)">
+                      <span className="radar-badge" title={ACELERACION_HISTORIAL_TOOLTIP}>
                         acel {fmtMaybe(r.aceleracion)}
                       </span>
                       <span className="radar-badge" title="Scans distintos">
@@ -1168,9 +1179,9 @@ export function AlertasPage() {
                     <tr>
                       <th>Ticker</th>
                       <th>Estado</th>
-                      <th>Tipo actual</th>
+                      <th title={TIPO_ALERTA_COLUMNA_TOOLTIP}>Tipo alerta (último)</th>
                       <th>Score</th>
-                      <th>Aceleración</th>
+                      <th title={ACELERACION_HISTORIAL_TOOLTIP}>Aceleración</th>
                       <th>Scans</th>
                       <th>Consecutivo</th>
                       <th>Novedad</th>
@@ -1207,7 +1218,7 @@ export function AlertasPage() {
                           </span>
                         </td>
                         <td>{fmtMaybe(r.score_actual)}</td>
-                        <td>{fmtMaybe(r.aceleracion)}</td>
+                        <td title={ACELERACION_HISTORIAL_TOOLTIP}>{fmtMaybe(r.aceleracion)}</td>
                         <td>{fmtMaybe(r.cantidad_scans)}</td>
                         <td>{fmtMaybe(r.racha_scans)}</td>
                         <td>{fmtMaybe(r.novedad)}</td>
@@ -1336,7 +1347,7 @@ export function AlertasPage() {
                             <th>Ultimo scan</th>
                             <th>Historial</th>
                             <th>Mercado</th>
-                            <th>Tipo frec.</th>
+                            <th title="Tipo de alerta más frecuente en el historial cargado (clave motor).">Tipo frec.</th>
                             <th title="3+ eventos en historial cargado y presente en el ultimo scan">Recurrente</th>
                           </tr>
                         </thead>
@@ -1437,7 +1448,7 @@ export function AlertasPage() {
               />
             </label>
             <label className="radar-toolbar__field">
-              <span className="radar-toolbar__label">Tipo</span>
+              <span className="radar-toolbar__label">Tipo de alerta</span>
               <select
                 className="radar-toolbar__select"
                 value={filterTipo}
@@ -1480,7 +1491,7 @@ export function AlertasPage() {
                       <th>Ticker</th>
                       <th>Mercado</th>
                       <th>Segmento</th>
-                      <th>Tipo</th>
+                      <th title={TIPO_ALERTA_COLUMNA_TOOLTIP}>Tipo de alerta</th>
                       <th>Conv.</th>
                       <th>Prio</th>
                       <th>Total</th>
