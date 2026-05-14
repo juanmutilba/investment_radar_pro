@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import {
+  getCryptoAnalysis,
   getCryptoOhlcv,
   getCryptoStatus,
   getCryptoTicker,
+  type CryptoAnalysisPayload,
+  type CryptoAnalysisSignalKind,
   type CryptoOhlcvCandle,
   type CryptoOhlcvResponse,
   type CryptoStatusPayload,
@@ -12,6 +15,8 @@ import {
 
 const SYM_BTC = "BTC/USDT";
 const SYM_ETH = "ETH/USDT";
+const ANALYSIS_TF = "1h";
+const ANALYSIS_LIMIT = 200;
 
 const dtFmt = new Intl.DateTimeFormat("es-AR", {
   dateStyle: "short",
@@ -59,6 +64,88 @@ function pctStyle(pct: number | null): CSSProperties {
   return { color: "var(--text-muted)" };
 }
 
+function fmtMacd(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "—";
+  return v.toFixed(6);
+}
+
+function signalBadgeClass(s: CryptoAnalysisSignalKind): string {
+  if (s === "compra_potencial") return "radar-badge radar-badge--conv-alta";
+  if (s === "cuidado") return "radar-badge radar-badge--conv-baja";
+  return "radar-badge radar-badge--conv-media";
+}
+
+function signalLabelEs(s: CryptoAnalysisSignalKind): string {
+  if (s === "compra_potencial") return "Compra potencial";
+  if (s === "cuidado") return "Cuidado";
+  return "Neutral";
+}
+
+function CryptoAnalysisCard({ title, payload }: { title: string; payload: CryptoAnalysisPayload | null }) {
+  if (!payload) {
+    return (
+      <div className="card">
+        <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+          {title}
+        </h3>
+        <p className="msg-muted" style={{ margin: 0 }}>
+          Sin datos de análisis.
+        </p>
+      </div>
+    );
+  }
+  const a = payload.analysis;
+  return (
+    <div className="card">
+      <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+        {title}
+      </h3>
+      <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.82rem" }}>
+        {payload.symbol} · {payload.timeframe} · {payload.limit} velas
+      </p>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", alignItems: "center", marginBottom: "0.75rem" }}>
+        <span className={signalBadgeClass(a.signal)} title="Señal heurística (sin órdenes)">
+          {signalLabelEs(a.signal)}
+        </span>
+        <span className="radar-badge radar-badge--conv-media">Score {a.score}</span>
+        <span className="radar-badge radar-badge--conv-media">Tendencia: {a.trend}</span>
+        <span className="radar-badge radar-badge--conv-media">Momentum: {a.momentum}</span>
+        <span className="radar-badge radar-badge--conv-media">Riesgo: {a.risk}</span>
+      </div>
+      <div className="stat dashboard-stat" style={{ marginBottom: "0.35rem" }}>
+        <div className="stat__label">Precio (último cierre)</div>
+        <div className="stat__value">{fmtPrice(a.price)}</div>
+      </div>
+      <div className="stat dashboard-stat" style={{ marginBottom: "0.35rem" }}>
+        <div className="stat__label">RSI 14</div>
+        <div className="stat__value">{Number.isFinite(a.rsi_14) ? a.rsi_14.toFixed(2) : "—"}</div>
+      </div>
+      <div className="stat dashboard-stat" style={{ marginBottom: "0.35rem" }}>
+        <div className="stat__label">SMA 20</div>
+        <div className="stat__value">{fmtPrice(a.sma_20)}</div>
+      </div>
+      <div className="stat dashboard-stat" style={{ marginBottom: "0.35rem" }}>
+        <div className="stat__label">SMA 50</div>
+        <div className="stat__value">{fmtPrice(a.sma_50)}</div>
+      </div>
+      <div className="stat dashboard-stat" style={{ marginBottom: "0.35rem" }}>
+        <div className="stat__label">EMA 20</div>
+        <div className="stat__value">{fmtPrice(a.ema_20)}</div>
+      </div>
+      <div className="stat dashboard-stat" style={{ marginBottom: "0.35rem" }}>
+        <div className="stat__label">MACD hist</div>
+        <div className="stat__value">{fmtMacd(a.macd_hist)}</div>
+      </div>
+      <div className="stat dashboard-stat" style={{ marginBottom: "0.35rem" }}>
+        <div className="stat__label">MACD / señal</div>
+        <div className="stat__value">
+          {fmtMacd(a.macd)} / {fmtMacd(a.macd_signal)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function CryptoPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -67,6 +154,8 @@ export function CryptoPage() {
   const [btc, setBtc] = useState<CryptoTicker | null>(null);
   const [eth, setEth] = useState<CryptoTicker | null>(null);
   const [ohlcv, setOhlcv] = useState<CryptoOhlcvResponse | null>(null);
+  const [analysisBtc, setAnalysisBtc] = useState<CryptoAnalysisPayload | null>(null);
+  const [analysisEth, setAnalysisEth] = useState<CryptoAnalysisPayload | null>(null);
   const [tickerError, setTickerError] = useState<string | null>(null);
 
   const load = useCallback(async (isRefresh: boolean) => {
@@ -82,6 +171,8 @@ export function CryptoPage() {
         getCryptoTicker(SYM_BTC),
         getCryptoTicker(SYM_ETH),
         getCryptoOhlcv("BTC/USDT", "1h", 100),
+        getCryptoAnalysis(SYM_BTC, ANALYSIS_TF, ANALYSIS_LIMIT),
+        getCryptoAnalysis(SYM_ETH, ANALYSIS_TF, ANALYSIS_LIMIT),
       ]);
 
       const st = results[0];
@@ -93,6 +184,8 @@ export function CryptoPage() {
           setBtc(null);
           setEth(null);
           setOhlcv(null);
+          setAnalysisBtc(null);
+          setAnalysisEth(null);
         } else {
           setTickerError(msg);
         }
@@ -121,6 +214,18 @@ export function CryptoPage() {
         setOhlcv(null);
         parts.push(`OHLCV: ${rOh.reason instanceof Error ? rOh.reason.message : "error"}`);
       }
+      const rAb = results[4];
+      if (rAb.status === "fulfilled") setAnalysisBtc(rAb.value);
+      else {
+        setAnalysisBtc(null);
+        parts.push(`Análisis BTC: ${rAb.reason instanceof Error ? rAb.reason.message : "error"}`);
+      }
+      const rAe = results[5];
+      if (rAe.status === "fulfilled") setAnalysisEth(rAe.value);
+      else {
+        setAnalysisEth(null);
+        parts.push(`Análisis ETH: ${rAe.reason instanceof Error ? rAe.reason.message : "error"}`);
+      }
       setTickerError(parts.length > 0 ? parts.join(" · ") : null);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Error al cargar datos cripto";
@@ -132,6 +237,8 @@ export function CryptoPage() {
         setBtc(null);
         setEth(null);
         setOhlcv(null);
+        setAnalysisBtc(null);
+        setAnalysisEth(null);
       }
     } finally {
       setLoading(false);
@@ -149,8 +256,8 @@ export function CryptoPage() {
     <>
       <h1 className="page-title">Cripto</h1>
       <p className="page-desc" style={{ maxWidth: "48rem" }}>
-        Vista de solo lectura vía Binance (ccxt): estado de credenciales, precios de referencia BTC/ETH y
-        velas recientes. Sin trading ni órdenes.
+        Vista de solo lectura vía Binance (ccxt): estado de credenciales, precios de referencia BTC/ETH, señales
+        técnicas heurísticas y velas recientes. Sin trading ni órdenes.
       </p>
 
       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1rem" }}>
@@ -244,6 +351,28 @@ export function CryptoPage() {
               <div className="stat__label">Volumen (base)</div>
               <div className="stat__value">{fmtVol(eth ? readTickerVol(eth) : null)}</div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {!loading && fatalError === null && (
+        <div style={{ marginBottom: "1rem" }}>
+          <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
+            Señales técnicas
+          </h2>
+          <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "48rem", fontSize: "0.9rem" }}>
+            Indicadores calculados en backend (SMA, EMA, RSI, MACD) sobre OHLCV; clasificación orientativa, no
+            recomendación de inversión.
+          </p>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+              gap: "1rem",
+            }}
+          >
+            <CryptoAnalysisCard title="BTC/USDT" payload={analysisBtc} />
+            <CryptoAnalysisCard title="ETH/USDT" payload={analysisEth} />
           </div>
         </div>
       )}

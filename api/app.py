@@ -503,6 +503,45 @@ def crypto_ohlcv(
         raise HTTPException(status_code=502, detail=f"Binance/ccxt: {e}") from e
 
 
+@app.get("/crypto/analysis")
+def crypto_analysis(
+    symbol: str = Query(..., min_length=3, description="Par spot CCXT, ej. BTC/USDT"),
+    timeframe: str = Query("1h", min_length=1, max_length=16),
+    limit: int = Query(200, ge=50, le=1000),
+):
+    """Indicadores técnicos sobre OHLCV (solo lectura; sin órdenes)."""
+    from services.crypto.providers import binance_provider as bp
+    from services.crypto.signals import MIN_OHLCV_ROWS, analyze_ohlcv
+
+    sym = symbol.strip()
+    tf = timeframe.strip()
+    print(f"[CRYPTO] /crypto/analysis symbol={sym} timeframe={tf} limit={limit}", flush=True)
+    try:
+        candles = bp.fetch_ohlcv(sym, timeframe=tf, limit=limit)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Binance/ccxt: {e}") from e
+
+    if len(candles) < MIN_OHLCV_ROWS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Velas insuficientes para el análisis: se recibieron {len(candles)}; "
+                f"se requieren al menos {MIN_OHLCV_ROWS} (SMA50, MACD, RSI)."
+            ),
+        )
+
+    try:
+        analysis = analyze_ohlcv(candles)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    return {"symbol": sym, "timeframe": tf, "limit": limit, "analysis": analysis}
+
+
 @app.get("/iol/status")
 def iol_status():
     """Estado de credenciales y token IOL en memoria (sin secretos)."""

@@ -205,6 +205,94 @@ export async function getCryptoOhlcv(
   return data;
 }
 
+export type CryptoAnalysisTrend = "alcista" | "bajista" | "lateral";
+export type CryptoAnalysisMomentum = "positivo" | "negativo" | "neutro";
+export type CryptoAnalysisRisk = "alto" | "medio" | "bajo";
+export type CryptoAnalysisSignalKind = "compra_potencial" | "neutral" | "cuidado";
+
+export type CryptoAnalysisResult = {
+  price: number;
+  sma_20: number;
+  sma_50: number;
+  ema_20: number;
+  rsi_14: number;
+  macd: number;
+  macd_signal: number;
+  macd_hist: number;
+  trend: CryptoAnalysisTrend;
+  momentum: CryptoAnalysisMomentum;
+  risk: CryptoAnalysisRisk;
+  score: number;
+  signal: CryptoAnalysisSignalKind;
+};
+
+export type CryptoAnalysisPayload = {
+  symbol: string;
+  timeframe: string;
+  limit: number;
+  analysis: CryptoAnalysisResult;
+};
+
+function isCryptoAnalysisResult(o: unknown): o is CryptoAnalysisResult {
+  if (o === null || typeof o !== "object") return false;
+  const r = o as Record<string, unknown>;
+  const trends: CryptoAnalysisTrend[] = ["alcista", "bajista", "lateral"];
+  const moms: CryptoAnalysisMomentum[] = ["positivo", "negativo", "neutro"];
+  const risks: CryptoAnalysisRisk[] = ["alto", "medio", "bajo"];
+  const sigs: CryptoAnalysisSignalKind[] = ["compra_potencial", "neutral", "cuidado"];
+  return (
+    typeof r.price === "number" &&
+    typeof r.sma_20 === "number" &&
+    typeof r.sma_50 === "number" &&
+    typeof r.ema_20 === "number" &&
+    typeof r.rsi_14 === "number" &&
+    typeof r.macd === "number" &&
+    typeof r.macd_signal === "number" &&
+    typeof r.macd_hist === "number" &&
+    typeof r.trend === "string" &&
+    trends.includes(r.trend as CryptoAnalysisTrend) &&
+    typeof r.momentum === "string" &&
+    moms.includes(r.momentum as CryptoAnalysisMomentum) &&
+    typeof r.risk === "string" &&
+    risks.includes(r.risk as CryptoAnalysisRisk) &&
+    typeof r.score === "number" &&
+    typeof r.signal === "string" &&
+    sigs.includes(r.signal as CryptoAnalysisSignalKind)
+  );
+}
+
+function isCryptoAnalysisPayload(data: unknown): data is CryptoAnalysisPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.symbol === "string" &&
+    typeof o.timeframe === "string" &&
+    typeof o.limit === "number" &&
+    isCryptoAnalysisResult(o.analysis)
+  );
+}
+
+export async function getCryptoAnalysis(
+  symbol: string,
+  timeframe: string,
+  limit: number,
+): Promise<CryptoAnalysisPayload> {
+  const q = new URLSearchParams({
+    symbol: symbol.trim(),
+    timeframe: timeframe.trim(),
+    limit: String(limit),
+  });
+  const res = await fetch(`${BASE}/crypto/analysis?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoAnalysisPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/analysis");
+  }
+  return data;
+}
+
 /** Fila tal como viene del Excel (claves pueden variar en casing); usar helpers al renderizar. */
 export type RadarRow = Record<string, unknown>;
 
