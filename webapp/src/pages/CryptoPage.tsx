@@ -6,6 +6,7 @@ import {
   getCryptoOhlcv,
   executeCryptoPaperStrategy,
   getCryptoPaperCycle,
+  reviewCryptoPaperExits,
   getCryptoPaperPortfolio,
   getCryptoScan,
   getCryptoStatus,
@@ -31,6 +32,10 @@ const SYM_ETH = "ETH/USDT";
 const ANALYSIS_TF = "1h";
 const ANALYSIS_LIMIT = 200;
 const STRATEGY_DEFAULT_AMOUNT = 100;
+const STRATEGY_DEFAULT_STOP_LOSS = 2;
+const STRATEGY_DEFAULT_TAKE_PROFIT = 4;
+const STRATEGY_DEFAULT_TRAILING = 1.5;
+const STRATEGY_DEFAULT_MAX_POSITIONS = 3;
 
 const dtFmt = new Intl.DateTimeFormat("es-AR", {
   dateStyle: "short",
@@ -251,6 +256,11 @@ export function CryptoPage() {
   const [strategyExecuting, setStrategyExecuting] = useState(false);
   const [strategyError, setStrategyError] = useState<string | null>(null);
   const [strategyLastMode, setStrategyLastMode] = useState<"search" | "execute">("search");
+  const [strategyStopLossPct, setStrategyStopLossPct] = useState(String(STRATEGY_DEFAULT_STOP_LOSS));
+  const [strategyTakeProfitPct, setStrategyTakeProfitPct] = useState(String(STRATEGY_DEFAULT_TAKE_PROFIT));
+  const [strategyTrailingPct, setStrategyTrailingPct] = useState(String(STRATEGY_DEFAULT_TRAILING));
+  const [strategyMaxPositions, setStrategyMaxPositions] = useState(String(STRATEGY_DEFAULT_MAX_POSITIONS));
+  const [strategyReviewing, setStrategyReviewing] = useState(false);
 
   const loadPaper = useCallback(async () => {
     setPaperLoading(true);
@@ -389,7 +399,7 @@ export function CryptoPage() {
   }, [loadPaper]);
 
   const handleSearchOpportunities = useCallback(async () => {
-    if (strategyLoading || strategyExecuting) return;
+    if (strategyLoading || strategyExecuting || strategyReviewing) return;
     setStrategyLoading(true);
     setStrategyError(null);
     try {
@@ -401,23 +411,97 @@ export function CryptoPage() {
     } finally {
       setStrategyLoading(false);
     }
-  }, [strategyExecuting, strategyLoading, strategyTf]);
+  }, [strategyExecuting, strategyLoading, strategyReviewing, strategyTf]);
+
+  const parseStrategyRiskParams = useCallback(():
+    | { ok: false; message: string }
+    | {
+        ok: true;
+        amountUsdt: number;
+        stopLossPct: number;
+        takeProfitPct: number;
+        trailingStopPct: number;
+        maxOpenPositions: number;
+      } => {
+    const amountUsdt = parseFloat(strategyAmountUsdt.replace(",", "."));
+    const stopLossPct = parseFloat(strategyStopLossPct.replace(",", "."));
+    const takeProfitPct = parseFloat(strategyTakeProfitPct.replace(",", "."));
+    const trailingStopPct = parseFloat(strategyTrailingPct.replace(",", "."));
+    const maxOpenPositions = parseInt(strategyMaxPositions, 10);
+    if (!Number.isFinite(amountUsdt) || amountUsdt <= 0) {
+      return { ok: false, message: "Monto USDT inválido" };
+    }
+    if (!Number.isFinite(stopLossPct) || stopLossPct < 0) {
+      return { ok: false, message: "Stop loss % inválido" };
+    }
+    if (!Number.isFinite(takeProfitPct) || takeProfitPct < 0) {
+      return { ok: false, message: "Take profit % inválido" };
+    }
+    if (!Number.isFinite(trailingStopPct) || trailingStopPct < 0) {
+      return { ok: false, message: "Trailing stop % inválido" };
+    }
+    if (!Number.isFinite(maxOpenPositions) || maxOpenPositions < 1) {
+      return { ok: false, message: "Máx. posiciones inválido" };
+    }
+    return {
+      ok: true,
+      amountUsdt,
+      stopLossPct,
+      takeProfitPct,
+      trailingStopPct,
+      maxOpenPositions,
+    };
+  }, [
+    strategyAmountUsdt,
+    strategyMaxPositions,
+    strategyStopLossPct,
+    strategyTakeProfitPct,
+    strategyTrailingPct,
+  ]);
+
+  const handleReviewPaperExits = useCallback(async () => {
+    if (strategyLoading || strategyExecuting || strategyReviewing) return;
+    setStrategyReviewing(true);
+    setStrategyError(null);
+    try {
+      const { actions } = await reviewCryptoPaperExits();
+      setStrategyCycle((prev) => ({
+        timeframe: strategyTf.trim() || "1h",
+        candidates: prev?.candidates ?? [],
+        positions_review: prev?.positions_review ?? [],
+        actions,
+        message:
+          actions.length > 0
+            ? `Revisión de salidas: ${actions.filter((a) => a.status === "executed").length} cierre(s).`
+            : "Revisión de salidas: sin cierres por reglas.",
+      }));
+      await loadPaper();
+    } catch (e: unknown) {
+      setStrategyError(e instanceof Error ? e.message : "Error al revisar salidas paper");
+    } finally {
+      setStrategyReviewing(false);
+    }
+  }, [loadPaper, strategyExecuting, strategyLoading, strategyReviewing, strategyTf]);
 
   const handleExecutePaperStrategy = useCallback(async () => {
-    if (strategyLoading || strategyExecuting) return;
-    const amount_usdt = parseFloat(strategyAmountUsdt.replace(",", "."));
-    if (!Number.isFinite(amount_usdt) || amount_usdt <= 0) {
-      setStrategyError("Monto USDT inválido");
+    if (strategyLoading || strategyExecuting || strategyReviewing) return;
+    const risk = parseStrategyRiskParams();
+    if (!risk.ok) {
+      setStrategyError(risk.message);
       return;
     }
     setStrategyExecuting(true);
     setStrategyError(null);
     try {
-      const data = await executeCryptoPaperStrategy(
-        strategyTf.trim() || "1h",
-        ANALYSIS_LIMIT,
-        amount_usdt,
-      );
+      const data = await executeCryptoPaperStrategy({
+        timeframe: strategyTf.trim() || "1h",
+        limit: ANALYSIS_LIMIT,
+        amountUsdt: risk.amountUsdt,
+        stopLossPct: risk.stopLossPct,
+        takeProfitPct: risk.takeProfitPct,
+        trailingStopPct: risk.trailingStopPct,
+        maxOpenPositions: risk.maxOpenPositions,
+      });
       setStrategyLastMode("execute");
       setStrategyCycle(data);
       await loadPaper();
@@ -426,7 +510,14 @@ export function CryptoPage() {
     } finally {
       setStrategyExecuting(false);
     }
-  }, [loadPaper, strategyAmountUsdt, strategyExecuting, strategyLoading, strategyTf]);
+  }, [
+    loadPaper,
+    parseStrategyRiskParams,
+    strategyExecuting,
+    strategyLoading,
+    strategyReviewing,
+    strategyTf,
+  ]);
 
   const handleOpenPaperMarketAmount = useCallback(async () => {
     if (paperOpening) return;
@@ -773,19 +864,71 @@ export function CryptoPage() {
               placeholder="100"
             />
           </label>
+          <label className="radar-toolbar__field">
+            <span className="radar-toolbar__label">Stop loss %</span>
+            <input
+              className="radar-toolbar__input"
+              type="text"
+              inputMode="decimal"
+              value={strategyStopLossPct}
+              onChange={(ev) => setStrategyStopLossPct(ev.target.value)}
+              placeholder="2"
+            />
+          </label>
+          <label className="radar-toolbar__field">
+            <span className="radar-toolbar__label">Take profit %</span>
+            <input
+              className="radar-toolbar__input"
+              type="text"
+              inputMode="decimal"
+              value={strategyTakeProfitPct}
+              onChange={(ev) => setStrategyTakeProfitPct(ev.target.value)}
+              placeholder="4"
+            />
+          </label>
+          <label className="radar-toolbar__field">
+            <span className="radar-toolbar__label">Trailing stop %</span>
+            <input
+              className="radar-toolbar__input"
+              type="text"
+              inputMode="decimal"
+              value={strategyTrailingPct}
+              onChange={(ev) => setStrategyTrailingPct(ev.target.value)}
+              placeholder="1.5"
+            />
+          </label>
+          <label className="radar-toolbar__field">
+            <span className="radar-toolbar__label">Máx. posiciones</span>
+            <input
+              className="radar-toolbar__input"
+              type="text"
+              inputMode="numeric"
+              value={strategyMaxPositions}
+              onChange={(ev) => setStrategyMaxPositions(ev.target.value)}
+              placeholder="3"
+            />
+          </label>
           <button
             type="button"
             className="radar-refresh-btn"
             onClick={() => void handleSearchOpportunities()}
-            disabled={strategyLoading || strategyExecuting}
+            disabled={strategyLoading || strategyExecuting || strategyReviewing}
           >
             {strategyLoading ? "Buscando…" : "Buscar oportunidades"}
           </button>
           <button
             type="button"
             className="radar-refresh-btn"
+            onClick={() => void handleReviewPaperExits()}
+            disabled={strategyLoading || strategyExecuting || strategyReviewing}
+          >
+            {strategyReviewing ? "Revisando…" : "Revisar salidas paper"}
+          </button>
+          <button
+            type="button"
+            className="radar-refresh-btn"
             onClick={() => void handleExecutePaperStrategy()}
-            disabled={strategyLoading || strategyExecuting}
+            disabled={strategyLoading || strategyExecuting || strategyReviewing}
           >
             {strategyExecuting ? "Ejecutando…" : "Ejecutar estrategia paper"}
           </button>
@@ -795,7 +938,7 @@ export function CryptoPage() {
             {strategyError}
           </p>
         ) : null}
-        {strategyCycle && !strategyLoading && !strategyExecuting ? (
+        {strategyCycle && !strategyLoading && !strategyExecuting && !strategyReviewing ? (
           <div style={strategyResultBannerStyle(strategyCycle, strategyLastMode)}>
             <p style={{ margin: 0, fontWeight: 600 }}>{strategyCycle.message ?? "—"}</p>
             <p style={{ margin: "0.4rem 0 0", fontSize: "0.85rem", opacity: 0.95 }}>
@@ -861,22 +1004,21 @@ export function CryptoPage() {
               <table>
                 <thead>
                   <tr>
+                    <th>Acción</th>
                     <th>Símbolo</th>
                     <th>Estado</th>
-                    <th style={{ textAlign: "right" }}>Monto USDT</th>
-                    <th>Detalle</th>
+                    <th>Motivo / detalle</th>
                   </tr>
                 </thead>
                 <tbody>
                   {strategyCycle.actions.map((a, i) => (
-                    <tr key={`${a.symbol}-${i}`}>
+                    <tr key={`${a.action ?? "x"}-${a.symbol}-${i}`}>
+                      <td>{a.action === "exit" ? "Salida" : a.action === "entry" ? "Entrada" : "—"}</td>
                       <td>{a.symbol}</td>
                       <td>{a.status === "executed" ? "Ejecutada" : "Omitida"}</td>
-                      <td style={{ textAlign: "right" }}>
-                        {a.amount_usdt !== undefined ? fmtUsdt(a.amount_usdt) : "—"}
-                      </td>
                       <td className={a.status === "skipped" ? "msg-error" : "msg-muted"} style={{ fontSize: "0.82rem" }}>
                         {a.reason ?? "—"}
+                        {a.amount_usdt !== undefined ? ` · ${fmtUsdt(a.amount_usdt)}` : ""}
                       </td>
                     </tr>
                   ))}
@@ -1031,10 +1173,14 @@ export function CryptoPage() {
                       <th style={{ textAlign: "right" }}>Monto USDT</th>
                       <th style={{ textAlign: "right" }}>Cantidad</th>
                       <th style={{ textAlign: "right" }}>Entrada</th>
+                      <th style={{ textAlign: "right" }}>Stop loss</th>
+                      <th style={{ textAlign: "right" }}>Take profit</th>
+                      <th style={{ textAlign: "right" }}>Trail %</th>
+                      <th style={{ textAlign: "right" }}>Máx precio</th>
+                      <th>Política</th>
                       <th style={{ textAlign: "right" }}>Precio actual</th>
                       <th style={{ textAlign: "right" }}>PnL USDT</th>
                       <th style={{ textAlign: "right" }}>PnL %</th>
-                      <th>Motivo entrada</th>
                       <th />
                     </tr>
                   </thead>
@@ -1047,6 +1193,17 @@ export function CryptoPage() {
                         <td style={{ textAlign: "right" }}>{fmtUsdt(pos.amount_usdt)}</td>
                         <td style={{ textAlign: "right" }}>{pos.quantity}</td>
                         <td style={{ textAlign: "right" }}>{fmtPrice(pos.entry_price)}</td>
+                        <td style={{ textAlign: "right" }}>{fmtPrice(pos.stop_loss)}</td>
+                        <td style={{ textAlign: "right" }}>{fmtPrice(pos.take_profit)}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {pos.trailing_stop_pct !== null && pos.trailing_stop_pct !== undefined
+                            ? `${numFmt2.format(pos.trailing_stop_pct)}%`
+                            : "—"}
+                        </td>
+                        <td style={{ textAlign: "right" }}>{fmtPrice(pos.highest_price)}</td>
+                        <td className="msg-muted" style={{ fontSize: "0.78rem" }}>
+                          {pos.exit_policy || "—"}
+                        </td>
                         <td style={{ textAlign: "right" }}>
                           {pos.current_price !== null && pos.current_price !== undefined
                             ? fmtPrice(pos.current_price)
@@ -1057,15 +1214,6 @@ export function CryptoPage() {
                         </td>
                         <td style={{ textAlign: "right" }}>
                           <span style={pnlStyle(pos.unrealized_pnl_pct)}>{fmtPct(pos.unrealized_pnl_pct)}</span>
-                        </td>
-                        <td className="msg-muted" style={{ fontSize: "0.82rem", maxWidth: "10rem" }}>
-                          {pos.entry_reason || "—"}
-                          {pos.price_error ? (
-                            <>
-                              <br />
-                              <span className="msg-error">{pos.price_error}</span>
-                            </>
-                          ) : null}
                         </td>
                         <td>
                           <button

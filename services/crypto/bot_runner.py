@@ -1,5 +1,5 @@
 """
-Ciclo bot paper cripto: escaneo y evaluación sin órdenes ni aperturas/cierres automáticos.
+Ciclo bot paper cripto: escaneo, gestión de riesgo y ejecución simulada.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def evaluate_entry_candidates(scan_results: list[dict[str, Any]]) -> list[dict[s
 
 
 def evaluate_open_positions(portfolio: dict[str, Any]) -> list[dict[str, Any]]:
-    """Revisión de posiciones abiertas enriquecidas; no cierra automáticamente."""
+    """Revisión de posiciones abiertas enriquecidas."""
     positions = portfolio.get("positions") or []
     review: list[dict[str, Any]] = []
     for p in positions:
@@ -37,6 +37,11 @@ def evaluate_open_positions(portfolio: dict[str, Any]) -> list[dict[str, Any]]:
                 "quantity": p.get("quantity"),
                 "amount_usdt": p.get("amount_usdt"),
                 "entry_price": p.get("entry_price"),
+                "stop_loss": p.get("stop_loss"),
+                "take_profit": p.get("take_profit"),
+                "trailing_stop_pct": p.get("trailing_stop_pct"),
+                "highest_price": p.get("highest_price"),
+                "exit_policy": p.get("exit_policy"),
                 "current_price": p.get("current_price"),
                 "unrealized_pnl_usdt": p.get("unrealized_pnl_usdt"),
                 "unrealized_pnl_pct": p.get("unrealized_pnl_pct"),
@@ -57,10 +62,7 @@ def _cycle_message_search(scanned_count: int, candidates_count: int) -> str:
 
 
 def run_crypto_paper_cycle(timeframe: str = "1h", limit: int = 200) -> dict[str, Any]:
-    """
-    Escanea toda la watchlist (scan_crypto_watchlist), filtra candidatos y revisa cartera.
-    actions vacío: solo búsqueda, sin aperturas automáticas.
-    """
+    """Escanea watchlist completa vía scan_crypto_watchlist; sin aperturas."""
     from services.crypto.paper_portfolio import get_paper_portfolio
     from services.crypto.watchlist import scan_crypto_watchlist
 
@@ -97,38 +99,51 @@ def execute_paper_strategy(
     timeframe: str = "1h",
     limit: int = 200,
     amount_usdt: float = 100.0,
+    stop_loss_pct: float = 2.0,
+    take_profit_pct: float = 4.0,
+    trailing_stop_pct: float = 1.5,
+    max_open_positions: int = 3,
 ) -> dict[str, Any]:
     """
-    Escanea toda la watchlist, filtra compra_potencial e intenta abrir paper por monto USDT.
-    Sin órdenes reales; omite símbolos ya abiertos o sin cash.
+    Revisa salidas, escanea watchlist y abre como máximo 1 posición nueva por ejecución.
     """
     import math
 
     from services.crypto.paper_portfolio import (
+        _count_open_positions,
         get_paper_portfolio,
+        load_portfolio,
         open_paper_position_market_by_amount,
+        review_paper_positions_for_exit,
     )
     from services.crypto.watchlist import scan_crypto_watchlist
 
     if not math.isfinite(amount_usdt) or amount_usdt <= 0:
         raise ValueError("amount_usdt debe ser > 0")
+    max_pos = max(1, int(max_open_positions))
 
     tf = (timeframe or "1h").strip() or "1h"
     lim = max(50, min(int(limit), 1000))
-    _log(f"execute_paper_strategy: inicio timeframe={tf} limit={lim} (watchlist completa)")
+    _log(f"execute_paper_strategy: inicio timeframe={tf} limit={lim} max_open={max_pos}")
+
+    actions: list[dict[str, Any]] = list(review_paper_positions_for_exit())
 
     scan_results = scan_crypto_watchlist(timeframe=tf, limit=lim)
     scanned_count = len(scan_results)
     candidates = evaluate_entry_candidates(scan_results)
     candidates_count = len(candidates)
-    actions: list[dict[str, Any]] = []
+
+    pf = load_portfolio()
+    open_count = _count_open_positions(pf)
+    opened_count = 0
+    entry_attempted = False
 
     if not candidates:
+        portfolio = get_paper_portfolio()
         _log(
             f"execute strategy scanned_count={scanned_count} "
             f"candidates_count=0 opened_count=0"
         )
-        portfolio = get_paper_portfolio()
         return {
             "timeframe": tf,
             "limit": lim,
@@ -140,18 +155,40 @@ def execute_paper_strategy(
             "message": "Sin oportunidades válidas en la watchlist actual.",
             "candidates": [],
             "positions_review": evaluate_open_positions(portfolio),
-            "actions": [],
+            "actions": actions,
         }
 
-    _log(
-        f"execute_paper_strategy: {candidates_count} candidatos "
-        f"amount_usdt={amount_usdt} (scan_crypto_watchlist)"
-    )
     for c in candidates:
         sym = str(c.get("symbol") or "").strip()
         if not sym:
             continue
         score = c.get("score")
+
+        if opened_count >= 1:
+            actions.append(
+                {
+                    "action": "entry",
+                    "symbol": sym,
+                    "status": "skipped",
+                    "reason": "máximo 1 posición nueva por ejecución",
+                    "score": score,
+                }
+            )
+            continue
+
+        if open_count >= max_pos:
+            actions.append(
+                {
+                    "action": "entry",
+                    "symbol": sym,
+                    "status": "skipped",
+                    "reason": f"máximo {max_pos} posiciones abiertas",
+                    "score": score,
+                }
+            )
+            continue
+
+        entry_attempted = True
         reason = f"estrategia_paper score={score}" if score is not None else "estrategia_paper"
         try:
             open_paper_position_market_by_amount(
@@ -159,22 +196,33 @@ def execute_paper_strategy(
                 side="long",
                 amount_usdt=amount_usdt,
                 reason=reason,
+                stop_loss_pct=stop_loss_pct,
+                take_profit_pct=take_profit_pct,
+                trailing_stop_pct=trailing_stop_pct,
             )
+            opened_count += 1
+            open_count += 1
             actions.append(
                 {
+                    "action": "entry",
                     "symbol": sym,
                     "status": "executed",
+                    "reason": reason,
                     "amount_usdt": float(amount_usdt),
                     "score": score,
                 }
             )
-            _log(f"execute: {sym} executed")
+            _log(f"execute: {sym} entry executed")
+            break
         except ValueError as e:
-            actions.append({"symbol": sym, "status": "skipped", "reason": str(e), "score": score})
+            actions.append(
+                {"action": "entry", "symbol": sym, "status": "skipped", "reason": str(e), "score": score}
+            )
             _log(f"execute: {sym} skipped {e}")
         except Exception as e:
             actions.append(
                 {
+                    "action": "entry",
                     "symbol": sym,
                     "status": "skipped",
                     "reason": f"{type(e).__name__}: {e}",
@@ -183,16 +231,21 @@ def execute_paper_strategy(
             )
             _log(f"execute: {sym} error {e}")
 
-    opened_count = sum(1 for a in actions if a.get("status") == "executed")
-    skipped_count = len(actions) - opened_count
     portfolio = get_paper_portfolio()
     positions_review = evaluate_open_positions(portfolio)
+    exit_n = sum(1 for a in actions if a.get("action") == "exit" and a.get("status") == "executed")
 
     if opened_count > 0:
         status = "opened"
         message = f"Estrategia ejecutada: se abrió {opened_count} posición paper."
-        if skipped_count > 0:
-            message += f" ({skipped_count} omitida(s).)"
+        if exit_n > 0:
+            message += f" Se cerraron {exit_n} por reglas de salida."
+    elif not entry_attempted and candidates_count > 0:
+        status = "skipped"
+        message = "Hubo candidatos, pero se omitieron por duplicados/cash/reglas."
+    elif candidates_count == 0:
+        status = "no_opportunity"
+        message = "Sin oportunidades válidas en la watchlist actual."
     else:
         status = "skipped"
         message = "Hubo candidatos, pero se omitieron por duplicados/cash/reglas."

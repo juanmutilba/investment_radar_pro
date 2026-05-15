@@ -397,6 +397,9 @@ export type CryptoPaperPosition = {
   status: string;
   stop_loss: number | null;
   take_profit: number | null;
+  trailing_stop_pct?: number | null;
+  highest_price?: number | null;
+  exit_policy?: string | null;
   current_price?: number | null;
   market_value_usdt?: number | null;
   unrealized_pnl_usdt?: number | null;
@@ -591,11 +594,26 @@ export type CryptoPaperCyclePositionReview = {
 };
 
 export type CryptoPaperCycleAction = {
+  action?: "entry" | "exit";
   symbol: string;
   status: "executed" | "skipped";
   reason?: string;
   amount_usdt?: number;
   score?: number | null;
+};
+
+export type CryptoPaperStrategyParams = {
+  timeframe?: string;
+  limit?: number;
+  amountUsdt?: number;
+  stopLossPct?: number;
+  takeProfitPct?: number;
+  trailingStopPct?: number;
+  maxOpenPositions?: number;
+};
+
+export type CryptoPaperReviewExitsResponse = {
+  actions: CryptoPaperCycleAction[];
 };
 
 export type CryptoPaperCycleStatus = "opened" | "no_opportunity" | "skipped" | "error";
@@ -647,14 +665,16 @@ export async function getCryptoPaperCycle(
 }
 
 export async function executeCryptoPaperStrategy(
-  timeframe = "1h",
-  limit = CRYPTO_PAPER_CYCLE_LIMIT,
-  amountUsdt = 100,
+  params: CryptoPaperStrategyParams = {},
 ): Promise<CryptoPaperCycleResponse> {
   const q = new URLSearchParams({
-    timeframe: timeframe.trim(),
-    limit: String(limit),
-    amount_usdt: String(amountUsdt),
+    timeframe: (params.timeframe ?? "1h").trim(),
+    limit: String(params.limit ?? CRYPTO_PAPER_CYCLE_LIMIT),
+    amount_usdt: String(params.amountUsdt ?? 100),
+    stop_loss_pct: String(params.stopLossPct ?? 2),
+    take_profit_pct: String(params.takeProfitPct ?? 4),
+    trailing_stop_pct: String(params.trailingStopPct ?? 1.5),
+    max_open_positions: String(params.maxOpenPositions ?? 3),
   });
   const res = await fetch(`${BASE}/crypto/bot/execute-paper-strategy?${q.toString()}`, {
     method: "POST",
@@ -667,6 +687,18 @@ export async function executeCryptoPaperStrategy(
     throw new Error("Respuesta inesperada: /crypto/bot/execute-paper-strategy");
   }
   return data;
+}
+
+export async function reviewCryptoPaperExits(): Promise<CryptoPaperReviewExitsResponse> {
+  const res = await fetch(`${BASE}/crypto/bot/review-paper-exits`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object" || !Array.isArray((data as { actions?: unknown }).actions)) {
+    throw new Error("Respuesta inesperada: /crypto/bot/review-paper-exits");
+  }
+  return data as CryptoPaperReviewExitsResponse;
 }
 
 /** Fila tal como viene del Excel (claves pueden variar en casing); usar helpers al renderizar. */

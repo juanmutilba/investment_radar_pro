@@ -683,18 +683,40 @@ def crypto_bot_paper_cycle(
         raise HTTPException(status_code=502, detail=f"Bot paper cycle: {e}") from e
 
 
+@app.post("/crypto/bot/review-paper-exits")
+def crypto_bot_review_paper_exits():
+    """Revisa SL/TP/trailing y cierra posiciones paper que cumplan reglas de salida."""
+    from services.crypto.paper_portfolio import review_paper_positions_for_exit
+
+    try:
+        actions = review_paper_positions_for_exit()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Revisión salidas paper: {e}") from e
+    return {"actions": actions}
+
+
 @app.post("/crypto/bot/execute-paper-strategy")
 def crypto_bot_execute_paper_strategy(
     timeframe: str = Query("1h"),
     limit: int = Query(200, ge=50, le=1000),
     amount_usdt: float = Query(100, gt=0),
+    stop_loss_pct: float = Query(2, ge=0),
+    take_profit_pct: float = Query(4, ge=0),
+    trailing_stop_pct: float = Query(1.5, ge=0),
+    max_open_positions: int = Query(3, ge=1, le=50),
 ):
-    """Ejecuta estrategia paper: abre posiciones simuladas para candidatos válidos."""
+    """Ejecuta estrategia paper con gestión de riesgo (simulación; sin órdenes reales)."""
     from services.crypto.bot_runner import execute_paper_strategy
 
     try:
         return execute_paper_strategy(
-            timeframe=timeframe, limit=limit, amount_usdt=amount_usdt
+            timeframe=timeframe,
+            limit=limit,
+            amount_usdt=amount_usdt,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+            trailing_stop_pct=trailing_stop_pct,
+            max_open_positions=max_open_positions,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

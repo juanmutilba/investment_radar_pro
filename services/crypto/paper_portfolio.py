@@ -102,6 +102,57 @@ def _validate_long_open(symbol: str, side: str, price: float, quantity: float) -
     return sym
 
 
+def _count_open_positions(pf: dict[str, Any] | None = None) -> int:
+    data = pf if pf is not None else load_portfolio()
+    n = 0
+    for p in data.get("positions") or []:
+        if isinstance(p, dict) and str(p.get("status", "open")) == "open":
+            n += 1
+    return n
+
+
+def _apply_risk_fields(
+    pos: dict[str, Any],
+    entry_price: float,
+    stop_loss_pct: float | None = None,
+    take_profit_pct: float | None = None,
+    trailing_stop_pct: float | None = None,
+    exit_policy: str | None = None,
+) -> None:
+    pos["highest_price"] = round(float(entry_price), 8)
+    pos["stop_loss"] = None
+    pos["take_profit"] = None
+    pos["trailing_stop_pct"] = None
+    pos["exit_policy"] = (exit_policy or "").strip() or None
+
+    if stop_loss_pct is not None and math.isfinite(stop_loss_pct) and stop_loss_pct > 0:
+        pos["stop_loss"] = round(entry_price * (1.0 - stop_loss_pct / 100.0), 8)
+    if take_profit_pct is not None and math.isfinite(take_profit_pct) and take_profit_pct > 0:
+        pos["take_profit"] = round(entry_price * (1.0 + take_profit_pct / 100.0), 8)
+    if trailing_stop_pct is not None and math.isfinite(trailing_stop_pct) and trailing_stop_pct > 0:
+        pos["trailing_stop_pct"] = round(float(trailing_stop_pct), 6)
+
+    if not pos["exit_policy"]:
+        parts: list[str] = []
+        if pos["stop_loss"] is not None:
+            parts.append("stop_loss")
+        if pos["take_profit"] is not None:
+            parts.append("take_profit")
+        if pos["trailing_stop_pct"] is not None:
+            parts.append("trailing_stop")
+        if parts:
+            pos["exit_policy"] = "+".join(parts)
+
+
+def _fetch_symbol_price(symbol: str) -> float:
+    from services.crypto.providers import binance_provider as bp
+
+    tick = bp.fetch_ticker(symbol)
+    if not isinstance(tick, dict):
+        raise ValueError("respuesta de ticker inválida")
+    return _ticker_market_price(tick)
+
+
 def _ticker_market_price(tick: dict[str, Any]) -> float:
     for key in ("last", "close"):
         raw = tick.get(key)
@@ -150,6 +201,10 @@ def open_paper_position_market_by_amount(
     side: str,
     amount_usdt: float,
     reason: str = "",
+    stop_loss_pct: float | None = None,
+    take_profit_pct: float | None = None,
+    trailing_stop_pct: float | None = None,
+    exit_policy: str | None = None,
 ) -> dict[str, Any]:
     """Abre posición paper por monto USDT al precio ticker (sin orden real)."""
     sym = (symbol or "").strip().upper()
@@ -190,6 +245,10 @@ def open_paper_position_market_by_amount(
         reason=reason,
         price_source="binance_ticker",
         amount_usdt=amount_usdt,
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct,
+        trailing_stop_pct=trailing_stop_pct,
+        exit_policy=exit_policy,
     )
 
 
@@ -201,6 +260,10 @@ def open_paper_position(
     reason: str = "",
     price_source: str | None = None,
     amount_usdt: float | None = None,
+    stop_loss_pct: float | None = None,
+    take_profit_pct: float | None = None,
+    trailing_stop_pct: float | None = None,
+    exit_policy: str | None = None,
 ) -> dict[str, Any]:
     sym = _validate_long_open(symbol, side, price, quantity)
     cost = price * quantity
@@ -220,9 +283,15 @@ def open_paper_position(
         "entry_time": _now_iso(),
         "entry_reason": (reason or "").strip(),
         "status": "open",
-        "stop_loss": None,
-        "take_profit": None,
     }
+    _apply_risk_fields(
+        pos,
+        price,
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct,
+        trailing_stop_pct=trailing_stop_pct,
+        exit_policy=exit_policy,
+    )
     if price_source:
         pos["price_source"] = price_source
     if amount_usdt is not None and math.isfinite(amount_usdt) and amount_usdt > 0:
@@ -284,6 +353,93 @@ def close_paper_position(position_id: str, price: float, reason: str = "") -> di
     save_portfolio(pf)
     _log(f"close: {pos['symbol']} pnl_usdt={pnl_usdt:.2f}")
     return deepcopy(trade)
+
+
+def review_paper_positions_for_exit() -> list[dict[str, Any]]:
+    """Revisa SL/TP/trailing y cierra posiciones paper que cumplan regla de salida."""
+    pf = load_portfolio()
+    actions: list[dict[str, Any]] = []
+    to_close: list[tuple[str, str, float, str]] = []
+    dirty = False
+
+    for p in pf.get("positions") or []:
+        if not isinstance(p, dict) or str(p.get("status", "open")) != "open":
+            continue
+        sym = str(p.get("symbol") or "").strip()
+        pos_id = str(p.get("id") or "")
+        if not sym or not pos_id:
+            continue
+        try:
+            cp = _fetch_symbol_price(sym)
+        except Exception as e:
+            actions.append(
+                {
+                    "action": "exit",
+                    "symbol": sym,
+                    "status": "skipped",
+                    "reason": f"{type(e).__name__}: {e}",
+                }
+            )
+            _log(f"review_exit: {sym} skip precio {e}")
+            continue
+
+        entry = float(p.get("entry_price") or 0)
+        highest = float(p.get("highest_price") or entry or 0)
+        if cp > highest:
+            p["highest_price"] = round(cp, 8)
+            highest = cp
+            dirty = True
+
+        exit_reason: str | None = None
+        sl = p.get("stop_loss")
+        if sl is not None and math.isfinite(float(sl)) and cp <= float(sl):
+            exit_reason = "stop_loss"
+        else:
+            tp = p.get("take_profit")
+            if tp is not None and math.isfinite(float(tp)) and cp >= float(tp):
+                exit_reason = "take_profit"
+            else:
+                tsp = p.get("trailing_stop_pct")
+                if (
+                    tsp is not None
+                    and math.isfinite(float(tsp))
+                    and float(tsp) > 0
+                    and highest > 0
+                    and cp <= highest * (1.0 - float(tsp) / 100.0)
+                ):
+                    exit_reason = "trailing_stop"
+
+        if exit_reason:
+            to_close.append((pos_id, sym, cp, exit_reason))
+
+    if dirty:
+        save_portfolio(pf)
+
+    for pos_id, sym, cp, exit_reason in to_close:
+        try:
+            close_paper_position(pos_id, cp, reason=exit_reason)
+            actions.append(
+                {
+                    "action": "exit",
+                    "symbol": sym,
+                    "status": "executed",
+                    "reason": exit_reason,
+                }
+            )
+            _log(f"review_exit: {sym} closed {exit_reason} @ {cp}")
+        except Exception as e:
+            actions.append(
+                {
+                    "action": "exit",
+                    "symbol": sym,
+                    "status": "skipped",
+                    "reason": str(e),
+                }
+            )
+            _log(f"review_exit: {sym} error cierre {e}")
+
+    _log(f"review_paper_positions_for_exit: {len(actions)} acciones")
+    return actions
 
 
 def _enrich_position(pos: dict[str, Any]) -> dict[str, Any]:
