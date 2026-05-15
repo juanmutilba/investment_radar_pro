@@ -10,6 +10,7 @@ import {
   getCryptoTicker,
   getCryptoWatchlist,
   openCryptoPaperPositionMarket,
+  openCryptoPaperPositionMarketAmount,
   resetCryptoPaperPortfolio,
   type CryptoAnalysisPayload,
   type CryptoAnalysisSignalKind,
@@ -187,6 +188,7 @@ export function CryptoPage() {
   const [paperError, setPaperError] = useState<string | null>(null);
   const [paperActionError, setPaperActionError] = useState<string | null>(null);
   const [paperSymbol, setPaperSymbol] = useState("BTC/USDT");
+  const [paperAmountUsdt, setPaperAmountUsdt] = useState("");
   const [paperQty, setPaperQty] = useState("");
   const [paperReason, setPaperReason] = useState("");
 
@@ -326,7 +328,29 @@ export function CryptoPage() {
     void loadPaper();
   }, [loadPaper]);
 
-  const handleOpenPaperMarket = useCallback(async () => {
+  const handleOpenPaperMarketAmount = useCallback(async () => {
+    setPaperActionError(null);
+    const amount_usdt = parseFloat(paperAmountUsdt.replace(",", "."));
+    if (!Number.isFinite(amount_usdt) || amount_usdt <= 0) {
+      setPaperActionError("Monto USDT inválido");
+      return;
+    }
+    try {
+      const p = await openCryptoPaperPositionMarketAmount({
+        symbol: paperSymbol.trim(),
+        side: "long",
+        amount_usdt,
+        reason: paperReason.trim() || "entrada paper por monto",
+      });
+      setPaper(p);
+      setPaperAmountUsdt("");
+      setPaperReason("");
+    } catch (e: unknown) {
+      setPaperActionError(e instanceof Error ? e.message : "Error al abrir posición paper");
+    }
+  }, [paperAmountUsdt, paperReason, paperSymbol]);
+
+  const handleOpenPaperMarketQty = useCallback(async () => {
     setPaperActionError(null);
     const quantity = parseFloat(paperQty.replace(",", "."));
     if (!Number.isFinite(quantity) || quantity <= 0) {
@@ -342,11 +366,10 @@ export function CryptoPage() {
       });
       setPaper(p);
       setPaperQty("");
-      setPaperReason("");
     } catch (e: unknown) {
       setPaperActionError(e instanceof Error ? e.message : "Error al abrir posición paper");
     }
-  }, [paperQty, paperReason, paperSymbol]);
+  }, [paperQty, paperSymbol]);
 
   const handleClosePaper = useCallback(
     async (pos: CryptoPaperPosition) => {
@@ -682,14 +705,14 @@ export function CryptoPage() {
                 />
               </label>
               <label className="radar-toolbar__field">
-                <span className="radar-toolbar__label">Cantidad</span>
+                <span className="radar-toolbar__label">Monto USDT</span>
                 <input
                   className="radar-toolbar__input"
                   type="text"
                   inputMode="decimal"
-                  value={paperQty}
-                  onChange={(ev) => setPaperQty(ev.target.value)}
-                  placeholder="0.01"
+                  value={paperAmountUsdt}
+                  onChange={(ev) => setPaperAmountUsdt(ev.target.value)}
+                  placeholder="100"
                 />
               </label>
               <label className="radar-toolbar__field" style={{ minWidth: "12rem" }}>
@@ -698,13 +721,34 @@ export function CryptoPage() {
                   className="radar-toolbar__input"
                   value={paperReason}
                   onChange={(ev) => setPaperReason(ev.target.value)}
-                  placeholder="entrada manual paper a mercado"
+                  placeholder="entrada paper por monto"
                 />
               </label>
-              <button type="button" className="radar-refresh-btn" onClick={() => void handleOpenPaperMarket()}>
-                Abrir paper a mercado
+              <button type="button" className="radar-refresh-btn" onClick={() => void handleOpenPaperMarketAmount()}>
+                Abrir paper por USDT
               </button>
             </div>
+            <details style={{ marginBottom: "1rem" }}>
+              <summary className="msg-muted" style={{ cursor: "pointer", fontSize: "0.875rem", marginBottom: "0.5rem" }}>
+                Abrir por cantidad cripto (avanzado)
+              </summary>
+              <div className="radar-toolbar">
+                <label className="radar-toolbar__field">
+                  <span className="radar-toolbar__label">Cantidad</span>
+                  <input
+                    className="radar-toolbar__input"
+                    type="text"
+                    inputMode="decimal"
+                    value={paperQty}
+                    onChange={(ev) => setPaperQty(ev.target.value)}
+                    placeholder="0.01"
+                  />
+                </label>
+                <button type="button" className="radar-refresh-btn" onClick={() => void handleOpenPaperMarketQty()}>
+                  Abrir paper a mercado (qty)
+                </button>
+              </div>
+            </details>
 
             <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
               Posiciones abiertas ({paper.positions.length})
@@ -719,10 +763,10 @@ export function CryptoPage() {
                   <thead>
                     <tr>
                       <th>Símbolo</th>
+                      <th style={{ textAlign: "right" }}>Monto USDT</th>
                       <th style={{ textAlign: "right" }}>Cantidad</th>
                       <th style={{ textAlign: "right" }}>Entrada</th>
                       <th style={{ textAlign: "right" }}>Precio actual</th>
-                      <th style={{ textAlign: "right" }}>Valor mercado</th>
                       <th style={{ textAlign: "right" }}>PnL USDT</th>
                       <th style={{ textAlign: "right" }}>PnL %</th>
                       <th>Motivo entrada</th>
@@ -735,6 +779,7 @@ export function CryptoPage() {
                         <td>
                           <strong>{pos.symbol}</strong>
                         </td>
+                        <td style={{ textAlign: "right" }}>{fmtUsdt(pos.amount_usdt)}</td>
                         <td style={{ textAlign: "right" }}>{pos.quantity}</td>
                         <td style={{ textAlign: "right" }}>{fmtPrice(pos.entry_price)}</td>
                         <td style={{ textAlign: "right" }}>
@@ -742,7 +787,6 @@ export function CryptoPage() {
                             ? fmtPrice(pos.current_price)
                             : "—"}
                         </td>
-                        <td style={{ textAlign: "right" }}>{fmtUsdt(pos.market_value_usdt)}</td>
                         <td style={{ textAlign: "right" }}>
                           <span style={pnlStyle(pos.unrealized_pnl_usdt)}>{fmtUsdt(pos.unrealized_pnl_usdt)}</span>
                         </td>

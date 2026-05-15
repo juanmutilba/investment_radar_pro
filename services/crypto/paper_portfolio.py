@@ -132,6 +132,54 @@ def open_paper_position_market(
     )
 
 
+def open_paper_position_market_by_amount(
+    symbol: str,
+    side: str,
+    amount_usdt: float,
+    reason: str = "",
+) -> dict[str, Any]:
+    """Abre posición paper por monto USDT al precio ticker (sin orden real)."""
+    sym = (symbol or "").strip().upper()
+    if not sym or "/" not in sym:
+        raise ValueError("symbol inválido (ej. BTC/USDT)")
+    s = (side or "").strip().lower()
+    if s != "long":
+        raise ValueError("solo side='long' está soportado por ahora")
+    if not math.isfinite(amount_usdt) or amount_usdt <= 0:
+        raise ValueError("amount_usdt debe ser > 0")
+
+    pf = load_portfolio()
+    cash = float(pf.get("cash_usdt") or 0)
+    if amount_usdt > cash + 1e-9:
+        raise ValueError(
+            f"cash_usdt insuficiente: necesario {amount_usdt:.2f}, disponible {cash:.2f}"
+        )
+
+    from services.crypto.providers import binance_provider as bp
+
+    tick = bp.fetch_ticker(sym)
+    if not isinstance(tick, dict):
+        raise ValueError("respuesta de ticker inválida")
+    price = _ticker_market_price(tick)
+    quantity = amount_usdt / price
+    if not math.isfinite(quantity) or quantity <= 0:
+        raise ValueError("quantity calculada inválida")
+
+    _log(
+        f"open_market_amount: {sym} amount_usdt={amount_usdt:.2f} "
+        f"price={price} qty={quantity:.8f}"
+    )
+    return open_paper_position(
+        symbol=sym,
+        side=side,
+        price=price,
+        quantity=quantity,
+        reason=reason,
+        price_source="binance_ticker",
+        amount_usdt=amount_usdt,
+    )
+
+
 def open_paper_position(
     symbol: str,
     side: str,
@@ -139,6 +187,7 @@ def open_paper_position(
     quantity: float,
     reason: str = "",
     price_source: str | None = None,
+    amount_usdt: float | None = None,
 ) -> dict[str, Any]:
     sym = _validate_long_open(symbol, side, price, quantity)
     cost = price * quantity
@@ -162,10 +211,13 @@ def open_paper_position(
     }
     if price_source:
         pos["price_source"] = price_source
+    if amount_usdt is not None and math.isfinite(amount_usdt) and amount_usdt > 0:
+        pos["amount_usdt"] = round(float(amount_usdt), 8)
     pf["cash_usdt"] = cash - cost
     pf["positions"].append(pos)
     save_portfolio(pf)
-    _log(f"open: {sym} qty={quantity} @ {price}")
+    amt_log = f" amount_usdt={amount_usdt:.2f}" if amount_usdt else ""
+    _log(f"open: {sym} qty={quantity} @ {price}{amt_log}")
     return deepcopy(pos)
 
 

@@ -584,6 +584,13 @@ class CryptoPaperOpenMarketBody(BaseModel):
     reason: str = ""
 
 
+class CryptoPaperOpenMarketAmountBody(BaseModel):
+    symbol: str = Field(..., min_length=3)
+    side: str = Field(default="long")
+    amount_usdt: float = Field(..., gt=0)
+    reason: str = ""
+
+
 class CryptoPaperCloseBody(BaseModel):
     position_id: str = Field(..., min_length=1)
     price: float = Field(..., gt=0)
@@ -642,6 +649,38 @@ def crypto_paper_open_market(body: CryptoPaperOpenMarketBody):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ticker Binance: {e}") from e
     return get_paper_portfolio()
+
+
+@app.post("/crypto/paper/open-market-amount")
+def crypto_paper_open_market_amount(body: CryptoPaperOpenMarketAmountBody):
+    from services.crypto.paper_portfolio import get_paper_portfolio, open_paper_position_market_by_amount
+
+    try:
+        open_paper_position_market_by_amount(
+            symbol=body.symbol,
+            side=body.side,
+            amount_usdt=body.amount_usdt,
+            reason=body.reason,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ticker Binance: {e}") from e
+    return get_paper_portfolio()
+
+
+@app.get("/crypto/bot/paper-cycle")
+def crypto_bot_paper_cycle(
+    timeframe: str = Query("1h"),
+    limit: int = Query(200, ge=50, le=1000),
+):
+    """Ciclo bot paper (solo evaluación; sin trading real ni acciones automáticas)."""
+    from services.crypto.bot_runner import run_crypto_paper_cycle
+
+    try:
+        return run_crypto_paper_cycle(timeframe=timeframe, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Bot paper cycle: {e}") from e
 
 
 @app.post("/crypto/paper/close")

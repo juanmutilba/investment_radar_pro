@@ -402,6 +402,8 @@ export type CryptoPaperPosition = {
   unrealized_pnl_usdt?: number | null;
   unrealized_pnl_pct?: number | null;
   price_error?: string | null;
+  amount_usdt?: number | null;
+  price_source?: string | null;
 };
 
 export type CryptoPaperTrade = {
@@ -440,6 +442,13 @@ export type CryptoPaperOpenMarketPayload = {
   symbol: string;
   side?: string;
   quantity: number;
+  reason?: string;
+};
+
+export type CryptoPaperOpenMarketAmountPayload = {
+  symbol: string;
+  side?: string;
+  amount_usdt: number;
   reason?: string;
 };
 
@@ -517,6 +526,24 @@ export async function openCryptoPaperPositionMarket(
   const data: unknown = await res.json().catch(() => null);
   if (!isCryptoPaperPortfolio(data)) {
     throw new Error("Respuesta inesperada: /crypto/paper/open-market");
+  }
+  return data;
+}
+
+export async function openCryptoPaperPositionMarketAmount(
+  payload: CryptoPaperOpenMarketAmountPayload,
+): Promise<CryptoPaperPortfolio> {
+  const res = await fetch(`${BASE}/crypto/paper/open-market-amount`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoPaperPortfolio(data)) {
+    throw new Error("Respuesta inesperada: /crypto/paper/open-market-amount");
   }
   return data;
 }
