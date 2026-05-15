@@ -542,6 +542,32 @@ def crypto_analysis(
     return {"symbol": sym, "timeframe": tf, "limit": limit, "analysis": analysis}
 
 
+@app.get("/crypto/watchlist")
+def crypto_watchlist():
+    """Pares incluidos en el scanner cripto."""
+    from services.crypto.watchlist import get_crypto_watchlist
+
+    symbols = get_crypto_watchlist()
+    return {"symbols": symbols, "count": len(symbols)}
+
+
+@app.get("/crypto/scan")
+def crypto_scan(
+    timeframe: str = Query("1h", min_length=1, max_length=16),
+    limit: int = Query(200, ge=50, le=1000),
+):
+    """Scanner multi-activo: ranking por score (errores al final). Solo lectura."""
+    from services.crypto.watchlist import scan_crypto_watchlist
+
+    tf = timeframe.strip()
+    print(f"[CRYPTO_SCAN] /crypto/scan timeframe={tf} limit={limit}", flush=True)
+    try:
+        results = scan_crypto_watchlist(timeframe=tf, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Scanner cripto: {e}") from e
+    return {"timeframe": tf, "limit": limit, "results": results}
+
+
 @app.get("/iol/status")
 def iol_status():
     """Estado de credenciales y token IOL en memoria (sin secretos)."""

@@ -293,6 +293,99 @@ export async function getCryptoAnalysis(
   return data;
 }
 
+export type CryptoWatchlistPayload = {
+  symbols: string[];
+  count: number;
+};
+
+export type CryptoScanRow = {
+  symbol: string;
+  timeframe: string;
+  price: number | null;
+  score: number | null;
+  signal: CryptoAnalysisSignalKind | null;
+  trend: CryptoAnalysisTrend | null;
+  momentum: CryptoAnalysisMomentum | null;
+  risk: CryptoAnalysisRisk | null;
+  rsi_14: number | null;
+  macd_hist: number | null;
+  error: string | null;
+};
+
+export type CryptoScanPayload = {
+  timeframe: string;
+  limit: number;
+  results: CryptoScanRow[];
+};
+
+function isCryptoScanRow(o: unknown): o is CryptoScanRow {
+  if (o === null || typeof o !== "object") return false;
+  const r = o as Record<string, unknown>;
+  const trends: CryptoAnalysisTrend[] = ["alcista", "bajista", "lateral"];
+  const moms: CryptoAnalysisMomentum[] = ["positivo", "negativo", "neutro"];
+  const risks: CryptoAnalysisRisk[] = ["alto", "medio", "bajo"];
+  const sigs: CryptoAnalysisSignalKind[] = ["compra_potencial", "neutral", "cuidado"];
+  const optStr = (v: unknown, allowed: readonly string[]) =>
+    v === null || (typeof v === "string" && allowed.includes(v));
+  const optNum = (v: unknown) => v === null || (typeof v === "number" && Number.isFinite(v));
+  return (
+    typeof r.symbol === "string" &&
+    typeof r.timeframe === "string" &&
+    optNum(r.price) &&
+    optNum(r.score) &&
+    optStr(r.signal, sigs) &&
+    optStr(r.trend, trends) &&
+    optStr(r.momentum, moms) &&
+    optStr(r.risk, risks) &&
+    optNum(r.rsi_14) &&
+    optNum(r.macd_hist) &&
+    (r.error === null || typeof r.error === "string")
+  );
+}
+
+function isCryptoScanPayload(data: unknown): data is CryptoScanPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.timeframe === "string" &&
+    typeof o.limit === "number" &&
+    Array.isArray(o.results) &&
+    o.results.every(isCryptoScanRow)
+  );
+}
+
+export async function getCryptoWatchlist(): Promise<CryptoWatchlistPayload> {
+  const res = await fetch(`${BASE}/crypto/watchlist`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object") {
+    throw new Error("Respuesta inesperada: /crypto/watchlist");
+  }
+  const o = data as { symbols?: unknown; count?: unknown };
+  if (!Array.isArray(o.symbols) || typeof o.count !== "number") {
+    throw new Error("Respuesta inesperada: /crypto/watchlist");
+  }
+  return { symbols: o.symbols as string[], count: o.count };
+}
+
+export async function getCryptoScan(timeframe: string, limit: number): Promise<CryptoScanPayload> {
+  const q = new URLSearchParams({
+    timeframe: timeframe.trim(),
+    limit: String(limit),
+  });
+  const res = await fetch(`${BASE}/crypto/scan?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoScanPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/scan");
+  }
+  return data;
+}
+
 /** Fila tal como viene del Excel (claves pueden variar en casing); usar helpers al renderizar. */
 export type RadarRow = Record<string, unknown>;
 

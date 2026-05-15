@@ -3,12 +3,15 @@ import type { CSSProperties } from "react";
 import {
   getCryptoAnalysis,
   getCryptoOhlcv,
+  getCryptoScan,
   getCryptoStatus,
   getCryptoTicker,
+  getCryptoWatchlist,
   type CryptoAnalysisPayload,
   type CryptoAnalysisSignalKind,
   type CryptoOhlcvCandle,
   type CryptoOhlcvResponse,
+  type CryptoScanRow,
   type CryptoStatusPayload,
   type CryptoTicker,
 } from "@/services/api";
@@ -157,6 +160,23 @@ export function CryptoPage() {
   const [analysisBtc, setAnalysisBtc] = useState<CryptoAnalysisPayload | null>(null);
   const [analysisEth, setAnalysisEth] = useState<CryptoAnalysisPayload | null>(null);
   const [tickerError, setTickerError] = useState<string | null>(null);
+  const [watchlistCount, setWatchlistCount] = useState<number | null>(null);
+  const [scanRows, setScanRows] = useState<CryptoScanRow[] | null>(null);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+
+  const loadScanner = useCallback(async () => {
+    setScanLoading(true);
+    setScanError(null);
+    try {
+      const payload = await getCryptoScan(ANALYSIS_TF, ANALYSIS_LIMIT);
+      setScanRows(payload.results);
+    } catch (e: unknown) {
+      setScanError(e instanceof Error ? e.message : "Error al ejecutar el scanner");
+    } finally {
+      setScanLoading(false);
+    }
+  }, []);
 
   const load = useCallback(async (isRefresh: boolean) => {
     if (isRefresh) setRefreshing(true);
@@ -249,6 +269,20 @@ export function CryptoPage() {
   useEffect(() => {
     void load(false);
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getCryptoWatchlist()
+      .then((w) => {
+        if (!cancelled) setWatchlistCount(w.count);
+      })
+      .catch(() => {
+        if (!cancelled) setWatchlistCount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const statusHeadline = fatalError !== null ? "Error" : status !== null ? "Conectado" : "—";
 
@@ -374,6 +408,97 @@ export function CryptoPage() {
             <CryptoAnalysisCard title="BTC/USDT" payload={analysisBtc} />
             <CryptoAnalysisCard title="ETH/USDT" payload={analysisEth} />
           </div>
+        </div>
+      )}
+
+      {!loading && fatalError === null && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: "0.75rem",
+              marginBottom: "0.75rem",
+            }}
+          >
+            <h2 className="dashboard-section-title" style={{ margin: 0, flex: "1 1 auto" }}>
+              Scanner cripto
+            </h2>
+            <button
+              type="button"
+              className="radar-refresh-btn"
+              onClick={() => void loadScanner()}
+              disabled={scanLoading}
+            >
+              {scanLoading ? "Escaneando…" : "Actualizar scanner"}
+            </button>
+          </div>
+          <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "48rem", fontSize: "0.9rem" }}>
+            Ranking por score sobre la watchlist
+            {watchlistCount !== null ? ` (${watchlistCount} pares)` : ""} · {ANALYSIS_TF} · {ANALYSIS_LIMIT} velas.
+            Los errores por símbolo no detienen el resto.
+          </p>
+          {scanError ? (
+            <p className="msg-error" style={{ fontSize: "0.875rem", marginBottom: "0.65rem" }}>
+              {scanError}
+            </p>
+          ) : null}
+          {scanLoading && scanRows === null ? <p className="msg-muted">Ejecutando scanner…</p> : null}
+          {!scanLoading && scanRows === null && !scanError ? (
+            <p className="msg-muted">Pulsá «Actualizar scanner» para analizar todos los pares de la watchlist.</p>
+          ) : null}
+          {scanRows && scanRows.length > 0 ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Símbolo</th>
+                    <th style={{ textAlign: "right" }}>Precio</th>
+                    <th style={{ textAlign: "right" }}>Score</th>
+                    <th>Señal</th>
+                    <th>Tendencia</th>
+                    <th>Momentum</th>
+                    <th>Riesgo</th>
+                    <th style={{ textAlign: "right" }}>RSI</th>
+                    <th style={{ textAlign: "right" }}>MACD Hist</th>
+                    <th>Error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scanRows.map((row) => {
+                    const hasErr = Boolean(row.error);
+                    return (
+                      <tr key={row.symbol} title={row.error ?? undefined}>
+                        <td>
+                          <strong>{row.symbol}</strong>
+                        </td>
+                        <td style={{ textAlign: "right" }}>{fmtPrice(row.price)}</td>
+                        <td style={{ textAlign: "right" }}>{row.score !== null ? row.score : "—"}</td>
+                        <td>
+                          {row.signal ? (
+                            <span className={signalBadgeClass(row.signal)}>{signalLabelEs(row.signal)}</span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td>{row.trend ?? "—"}</td>
+                        <td>{row.momentum ?? "—"}</td>
+                        <td>{row.risk ?? "—"}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {row.rsi_14 !== null ? row.rsi_14.toFixed(2) : "—"}
+                        </td>
+                        <td style={{ textAlign: "right" }}>{fmtMacd(row.macd_hist)}</td>
+                        <td className={hasErr ? "msg-error" : "msg-muted"} style={{ fontSize: "0.82rem", maxWidth: "14rem" }}>
+                          {row.error ?? "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
         </div>
       )}
 
