@@ -266,6 +266,22 @@ function paperProbableExit(pos: CryptoPaperPosition): { label: string; title: st
   };
 }
 
+function strategyPrimaryReasonLabel(reason: string | null | undefined): string {
+  if (!reason) return "—";
+  const labels: Record<string, string> = {
+    no_opportunity: "Sin oportunidades (compra_potencial)",
+    score_below_min: "Score por debajo del mínimo",
+    already_open: "Posición ya abierta en el símbolo",
+    cooldown_symbol: "Cooldown activo para el símbolo",
+    btc_trend_filter: "BTC sin tendencia alcista",
+    opened: "Se abrió posición",
+    max_one_per_run: "Máximo 1 entrada por ejecución",
+    max_open_positions: "Máximo de posiciones abiertas",
+    no_entry: "Sin entrada tras evaluar candidatos",
+  };
+  return labels[reason] ?? reason;
+}
+
 function strategyResultBannerStyle(
   cycle: CryptoPaperCycleResponse,
   lastMode: "search" | "execute",
@@ -416,6 +432,9 @@ export function CryptoPage() {
   const [strategyMaxPositions, setStrategyMaxPositions] = useState(String(STRATEGY_DEFAULT_MAX_POSITIONS));
   const [strategyBreakEvenTriggerPct, setStrategyBreakEvenTriggerPct] = useState("");
   const [strategyBreakEvenPlusPct, setStrategyBreakEvenPlusPct] = useState("0");
+  const [strategyCooldownMinutes, setStrategyCooldownMinutes] = useState("0");
+  const [strategyRequireBtcTrendUp, setStrategyRequireBtcTrendUp] = useState(false);
+  const [strategyMinEntryScore, setStrategyMinEntryScore] = useState("0");
   const [strategyReviewing, setStrategyReviewing] = useState(false);
 
   const loadPaper = useCallback(async () => {
@@ -580,12 +599,17 @@ export function CryptoPage() {
         maxOpenPositions: number;
         breakEvenTriggerPct: number;
         breakEvenPlusPct: number;
+        cooldownMinutes: number;
+        requireBtcTrendUp: boolean;
+        minEntryScore: number;
       } => {
     const amountUsdt = parseFloat(strategyAmountUsdt.replace(",", "."));
     const stopLossPct = parseFloat(strategyStopLossPct.replace(",", "."));
     const takeProfitPct = parseFloat(strategyTakeProfitPct.replace(",", "."));
     const trailingStopPct = parseFloat(strategyTrailingPct.replace(",", "."));
     const maxOpenPositions = parseInt(strategyMaxPositions, 10);
+    const cooldownMinutes = parseInt(strategyCooldownMinutes.trim() || "0", 10);
+    const minEntryScore = parseFloat(strategyMinEntryScore.replace(",", "."));
     const beParsed = parseBreakEvenPct(strategyBreakEvenTriggerPct, strategyBreakEvenPlusPct);
     if ("error" in beParsed) {
       return { ok: false, message: beParsed.error };
@@ -607,6 +631,12 @@ export function CryptoPage() {
     if (!Number.isFinite(maxOpenPositions) || maxOpenPositions < 1) {
       return { ok: false, message: "Máx. posiciones inválido" };
     }
+    if (!Number.isFinite(cooldownMinutes) || cooldownMinutes < 0) {
+      return { ok: false, message: "Cooldown símbolo (min) inválido" };
+    }
+    if (!Number.isFinite(minEntryScore) || minEntryScore < 0 || minEntryScore > 100) {
+      return { ok: false, message: "Score mínimo entrada inválido (0–100)" };
+    }
     return {
       ok: true,
       amountUsdt,
@@ -616,12 +646,18 @@ export function CryptoPage() {
       maxOpenPositions,
       breakEvenTriggerPct,
       breakEvenPlusPct,
+      cooldownMinutes,
+      requireBtcTrendUp: strategyRequireBtcTrendUp,
+      minEntryScore,
     };
   }, [
     strategyAmountUsdt,
     strategyBreakEvenPlusPct,
     strategyBreakEvenTriggerPct,
+    strategyCooldownMinutes,
     strategyMaxPositions,
+    strategyMinEntryScore,
+    strategyRequireBtcTrendUp,
     strategyStopLossPct,
     strategyTakeProfitPct,
     strategyTrailingPct,
@@ -671,6 +707,9 @@ export function CryptoPage() {
         maxOpenPositions: risk.maxOpenPositions,
         breakEvenTriggerPct: risk.breakEvenTriggerPct,
         breakEvenPlusPct: risk.breakEvenPlusPct,
+        cooldownMinutes: risk.cooldownMinutes,
+        requireBtcTrendUp: risk.requireBtcTrendUp,
+        minEntryScore: risk.minEntryScore,
       });
       setStrategyLastMode("execute");
       setStrategyCycle(data);
@@ -1148,6 +1187,41 @@ export function CryptoPage() {
               placeholder="0"
             />
           </label>
+          <label className="radar-toolbar__field">
+            <span className="radar-toolbar__label">Cooldown símbolo (min)</span>
+            <input
+              className="radar-toolbar__input"
+              type="text"
+              inputMode="numeric"
+              value={strategyCooldownMinutes}
+              onChange={(ev) => setStrategyCooldownMinutes(ev.target.value)}
+              placeholder="0 = off"
+            />
+          </label>
+          <label className="radar-toolbar__field">
+            <span className="radar-toolbar__label">Score mínimo entrada</span>
+            <input
+              className="radar-toolbar__input"
+              type="text"
+              inputMode="decimal"
+              value={strategyMinEntryScore}
+              onChange={(ev) => setStrategyMinEntryScore(ev.target.value)}
+              placeholder="0 = off"
+            />
+          </label>
+          <label
+            className="radar-toolbar__field"
+            style={{ display: "flex", alignItems: "flex-end", gap: "0.4rem", minWidth: "14rem" }}
+          >
+            <input
+              type="checkbox"
+              checked={strategyRequireBtcTrendUp}
+              onChange={(ev) => setStrategyRequireBtcTrendUp(ev.target.checked)}
+            />
+            <span className="radar-toolbar__label" style={{ margin: 0 }}>
+              BTC tendencia alcista para altcoins
+            </span>
+          </label>
           <button
             type="button"
             className="radar-refresh-btn"
@@ -1183,9 +1257,29 @@ export function CryptoPage() {
             <p style={{ margin: 0, fontWeight: 600 }}>{strategyCycle.message ?? "—"}</p>
             <p style={{ margin: "0.4rem 0 0", fontSize: "0.85rem", opacity: 0.95 }}>
               Activos escaneados: {strategyCycle.scanned_count ?? "—"} · Candidatos:{" "}
-              {strategyCycle.candidates_count ?? strategyCycle.candidates.length} · Posiciones abiertas:{" "}
+              {strategyCycle.candidates_count ?? strategyCycle.candidates.length} · Abiertas en ciclo:{" "}
               {strategyCycle.opened_count ?? 0}
             </p>
+            {strategyLastMode === "execute" ? (
+              <p style={{ margin: "0.35rem 0 0", fontSize: "0.85rem", opacity: 0.95 }}>
+                {(strategyCycle.opened_count ?? 0) > 0 ? (
+                  <>
+                    Acción: entrada ejecutada en{" "}
+                    <strong>
+                      {strategyCycle.evaluated?.find((e) => e.status === "accepted")?.symbol ??
+                        strategyCycle.actions.find((a) => a.action === "entry" && a.status === "executed")
+                          ?.symbol ??
+                        "—"}
+                    </strong>
+                  </>
+                ) : (
+                  <>
+                    Sin nueva entrada · motivo principal:{" "}
+                    <strong>{strategyPrimaryReasonLabel(strategyCycle.primary_reason)}</strong>
+                  </>
+                )}
+              </p>
+            ) : null}
           </div>
         ) : null}
         {strategyCycle && strategyCycle.candidates.length > 0 ? (

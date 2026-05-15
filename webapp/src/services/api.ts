@@ -615,6 +615,15 @@ export type CryptoPaperCycleAction = {
   score?: number | null;
 };
 
+export type CryptoPaperEvaluatedCandidate = {
+  symbol: string;
+  signal?: string | null;
+  score?: number | null;
+  status: "accepted" | "rejected" | "skipped";
+  reason?: string;
+  price?: number | null;
+};
+
 export type CryptoPaperStrategyParams = {
   timeframe?: string;
   limit?: number;
@@ -625,6 +634,9 @@ export type CryptoPaperStrategyParams = {
   maxOpenPositions?: number;
   breakEvenTriggerPct?: number;
   breakEvenPlusPct?: number;
+  cooldownMinutes?: number;
+  requireBtcTrendUp?: boolean;
+  minEntryScore?: number;
 };
 
 export type CryptoPaperReviewExitsResponse = {
@@ -642,7 +654,9 @@ export type CryptoPaperCycleResponse = {
   opened_count?: number;
   status?: CryptoPaperCycleStatus;
   message?: string | null;
+  primary_reason?: string | null;
   candidates: CryptoPaperCycleCandidate[];
+  evaluated?: CryptoPaperEvaluatedCandidate[];
   positions_review: CryptoPaperCyclePositionReview[];
   actions: CryptoPaperCycleAction[];
 };
@@ -692,6 +706,9 @@ export async function executeCryptoPaperStrategy(
     max_open_positions: String(params.maxOpenPositions ?? 3),
     break_even_trigger_pct: String(params.breakEvenTriggerPct ?? 0),
     break_even_plus_pct: String(params.breakEvenPlusPct ?? 0),
+    cooldown_minutes: String(params.cooldownMinutes ?? 0),
+    require_btc_trend_up: String(params.requireBtcTrendUp ?? false),
+    min_entry_score: String(params.minEntryScore ?? 0),
   });
   const res = await fetch(`${BASE}/crypto/bot/execute-paper-strategy?${q.toString()}`, {
     method: "POST",
