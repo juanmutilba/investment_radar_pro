@@ -577,6 +577,13 @@ class CryptoPaperOpenBody(BaseModel):
     reason: str = ""
 
 
+class CryptoPaperOpenMarketBody(BaseModel):
+    symbol: str = Field(..., min_length=3)
+    side: str = Field(default="long")
+    quantity: float = Field(..., gt=0)
+    reason: str = ""
+
+
 class CryptoPaperCloseBody(BaseModel):
     position_id: str = Field(..., min_length=1)
     price: float = Field(..., gt=0)
@@ -616,6 +623,24 @@ def crypto_paper_open(body: CryptoPaperOpenBody):
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    return get_paper_portfolio()
+
+
+@app.post("/crypto/paper/open-market")
+def crypto_paper_open_market(body: CryptoPaperOpenMarketBody):
+    from services.crypto.paper_portfolio import get_paper_portfolio, open_paper_position_market
+
+    try:
+        open_paper_position_market(
+            symbol=body.symbol,
+            side=body.side,
+            quantity=body.quantity,
+            reason=body.reason,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ticker Binance: {e}") from e
     return get_paper_portfolio()
 
 

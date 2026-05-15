@@ -9,7 +9,7 @@ import {
   getCryptoStatus,
   getCryptoTicker,
   getCryptoWatchlist,
-  openCryptoPaperPosition,
+  openCryptoPaperPositionMarket,
   resetCryptoPaperPortfolio,
   type CryptoAnalysisPayload,
   type CryptoAnalysisSignalKind,
@@ -187,7 +187,6 @@ export function CryptoPage() {
   const [paperError, setPaperError] = useState<string | null>(null);
   const [paperActionError, setPaperActionError] = useState<string | null>(null);
   const [paperSymbol, setPaperSymbol] = useState("BTC/USDT");
-  const [paperPrice, setPaperPrice] = useState("");
   const [paperQty, setPaperQty] = useState("");
   const [paperReason, setPaperReason] = useState("");
 
@@ -327,34 +326,27 @@ export function CryptoPage() {
     void loadPaper();
   }, [loadPaper]);
 
-  const handleOpenPaper = useCallback(async () => {
+  const handleOpenPaperMarket = useCallback(async () => {
     setPaperActionError(null);
-    const price = parseFloat(paperPrice.replace(",", "."));
     const quantity = parseFloat(paperQty.replace(",", "."));
-    if (!Number.isFinite(price) || price <= 0) {
-      setPaperActionError("Precio inválido");
-      return;
-    }
     if (!Number.isFinite(quantity) || quantity <= 0) {
       setPaperActionError("Cantidad inválida");
       return;
     }
     try {
-      const p = await openCryptoPaperPosition({
+      const p = await openCryptoPaperPositionMarket({
         symbol: paperSymbol.trim(),
         side: "long",
-        price,
         quantity,
-        reason: paperReason.trim() || "apertura_manual_paper",
+        reason: paperReason.trim() || "entrada manual paper a mercado",
       });
       setPaper(p);
-      setPaperPrice("");
       setPaperQty("");
       setPaperReason("");
     } catch (e: unknown) {
       setPaperActionError(e instanceof Error ? e.message : "Error al abrir posición paper");
     }
-  }, [paperPrice, paperQty, paperReason, paperSymbol]);
+  }, [paperQty, paperReason, paperSymbol]);
 
   const handleClosePaper = useCallback(
     async (pos: CryptoPaperPosition) => {
@@ -674,8 +666,11 @@ export function CryptoPage() {
             </div>
 
             <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-              Abrir posición manual
+              Abrir posición paper
             </h3>
+            <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.875rem" }}>
+              Usa precio actual de Binance, no ejecuta orden real.
+            </p>
             <div className="radar-toolbar" style={{ marginBottom: "1rem" }}>
               <label className="radar-toolbar__field">
                 <span className="radar-toolbar__label">Símbolo</span>
@@ -684,17 +679,6 @@ export function CryptoPage() {
                   value={paperSymbol}
                   onChange={(ev) => setPaperSymbol(ev.target.value)}
                   placeholder="BTC/USDT"
-                />
-              </label>
-              <label className="radar-toolbar__field">
-                <span className="radar-toolbar__label">Precio</span>
-                <input
-                  className="radar-toolbar__input"
-                  type="text"
-                  inputMode="decimal"
-                  value={paperPrice}
-                  onChange={(ev) => setPaperPrice(ev.target.value)}
-                  placeholder="65000"
                 />
               </label>
               <label className="radar-toolbar__field">
@@ -714,11 +698,11 @@ export function CryptoPage() {
                   className="radar-toolbar__input"
                   value={paperReason}
                   onChange={(ev) => setPaperReason(ev.target.value)}
-                  placeholder="compra_potencial score 78"
+                  placeholder="entrada manual paper a mercado"
                 />
               </label>
-              <button type="button" className="radar-refresh-btn" onClick={() => void handleOpenPaper()}>
-                Abrir paper
+              <button type="button" className="radar-refresh-btn" onClick={() => void handleOpenPaperMarket()}>
+                Abrir paper a mercado
               </button>
             </div>
 

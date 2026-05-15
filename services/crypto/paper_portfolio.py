@@ -89,12 +89,56 @@ def _validate_long_open(symbol: str, side: str, price: float, quantity: float) -
     return sym
 
 
+def _ticker_market_price(tick: dict[str, Any]) -> float:
+    for key in ("last", "close"):
+        raw = tick.get(key)
+        if raw is not None and isinstance(raw, (int, float)) and math.isfinite(float(raw)):
+            p = float(raw)
+            if p > 0:
+                return p
+    raise ValueError("precio de mercado no disponible en ticker (last/close)")
+
+
+def open_paper_position_market(
+    symbol: str,
+    side: str,
+    quantity: float,
+    reason: str = "",
+) -> dict[str, Any]:
+    """Abre posición paper al precio actual de Binance (ticker público; sin orden real)."""
+    sym = (symbol or "").strip().upper()
+    if not sym or "/" not in sym:
+        raise ValueError("symbol inválido (ej. BTC/USDT)")
+    s = (side or "").strip().lower()
+    if s != "long":
+        raise ValueError("solo side='long' está soportado por ahora")
+    if not math.isfinite(quantity) or quantity <= 0:
+        raise ValueError("quantity debe ser > 0")
+
+    from services.crypto.providers import binance_provider as bp
+
+    tick = bp.fetch_ticker(sym)
+    if not isinstance(tick, dict):
+        raise ValueError("respuesta de ticker inválida")
+    price = _ticker_market_price(tick)
+    _log(f"open_market: {sym} ticker price={price}")
+    return open_paper_position(
+        symbol=sym,
+        side=side,
+        price=price,
+        quantity=quantity,
+        reason=reason,
+        price_source="binance_ticker",
+    )
+
+
 def open_paper_position(
     symbol: str,
     side: str,
     price: float,
     quantity: float,
     reason: str = "",
+    price_source: str | None = None,
 ) -> dict[str, Any]:
     sym = _validate_long_open(symbol, side, price, quantity)
     cost = price * quantity
@@ -116,6 +160,8 @@ def open_paper_position(
         "stop_loss": None,
         "take_profit": None,
     }
+    if price_source:
+        pos["price_source"] = price_source
     pf["cash_usdt"] = cash - cost
     pf["positions"].append(pos)
     save_portfolio(pf)
