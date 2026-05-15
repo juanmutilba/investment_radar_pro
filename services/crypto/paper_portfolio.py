@@ -549,6 +549,109 @@ def _enrich_position(pos: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _trade_pnl_usdt(trade: dict[str, Any]) -> float | None:
+    raw = trade.get("pnl_usdt")
+    if raw is None:
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v):
+        return None
+    return v
+
+
+def _trade_highlight(trade: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": str(trade.get("symbol") or ""),
+        "pnl_usdt": round(float(trade.get("pnl_usdt") or 0), 8),
+        "pnl_pct": round(float(trade.get("pnl_pct") or 0), 6)
+        if trade.get("pnl_pct") is not None
+        else None,
+        "exit_time": trade.get("exit_time"),
+    }
+
+
+def get_paper_trade_metrics() -> dict[str, Any]:
+    """Métricas agregadas de trades cerrados paper (sin posiciones abiertas)."""
+    pf = load_portfolio()
+    trades = [t for t in (pf.get("trades") or []) if isinstance(t, dict)]
+    closed = [t for t in trades if _trade_pnl_usdt(t) is not None]
+
+    empty: dict[str, Any] = {
+        "closed_trades": 0,
+        "winners": 0,
+        "losers": 0,
+        "win_rate_pct": None,
+        "total_pnl_usdt": 0.0,
+        "avg_pnl_usdt": None,
+        "best_trade": None,
+        "worst_trade": None,
+        "current_win_streak": 0,
+        "max_win_streak": 0,
+        "current_loss_streak": 0,
+        "max_loss_streak": 0,
+    }
+    if not closed:
+        return empty
+
+    closed_sorted = sorted(closed, key=lambda t: str(t.get("exit_time") or ""))
+
+    winners = 0
+    losers = 0
+    total_pnl = 0.0
+    best: dict[str, Any] | None = None
+    worst: dict[str, Any] | None = None
+    cur_win = 0
+    cur_loss = 0
+    max_win = 0
+    max_loss = 0
+
+    for t in closed_sorted:
+        pnl = _trade_pnl_usdt(t)
+        if pnl is None:
+            continue
+        total_pnl += pnl
+        if pnl > 0:
+            winners += 1
+        elif pnl < 0:
+            losers += 1
+
+        if best is None or pnl > float(best.get("pnl_usdt") or 0):
+            best = t
+        if worst is None or pnl < float(worst.get("pnl_usdt") or 0):
+            worst = t
+
+        if pnl > 0:
+            cur_win += 1
+            cur_loss = 0
+        elif pnl < 0:
+            cur_loss += 1
+            cur_win = 0
+        else:
+            cur_win = 0
+            cur_loss = 0
+        max_win = max(max_win, cur_win)
+        max_loss = max(max_loss, cur_loss)
+
+    n = len(closed_sorted)
+    return {
+        "closed_trades": n,
+        "winners": winners,
+        "losers": losers,
+        "win_rate_pct": round((winners / n) * 100.0, 4) if n > 0 else None,
+        "total_pnl_usdt": round(total_pnl, 8),
+        "avg_pnl_usdt": round(total_pnl / n, 8) if n > 0 else None,
+        "best_trade": _trade_highlight(best) if best else None,
+        "worst_trade": _trade_highlight(worst) if worst else None,
+        "current_win_streak": cur_win,
+        "max_win_streak": max_win,
+        "current_loss_streak": cur_loss,
+        "max_loss_streak": max_loss,
+    }
+
+
 def get_paper_portfolio() -> dict[str, Any]:
     pf = load_portfolio()
     cash = float(pf.get("cash_usdt") or 0)

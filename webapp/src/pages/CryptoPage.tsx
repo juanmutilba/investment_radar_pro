@@ -7,6 +7,7 @@ import {
   executeCryptoPaperStrategy,
   getCryptoPaperCycle,
   reviewCryptoPaperExits,
+  getCryptoPaperMetrics,
   getCryptoPaperPortfolio,
   getCryptoScan,
   getCryptoStatus,
@@ -20,7 +21,9 @@ import {
   type CryptoOhlcvCandle,
   type CryptoOhlcvResponse,
   type CryptoPaperCycleResponse,
+  type CryptoPaperMetrics,
   type CryptoPaperPortfolio,
+  type CryptoPaperTradeHighlight,
   type CryptoPaperPosition,
   type CryptoScanRow,
   type CryptoStatusPayload,
@@ -98,6 +101,14 @@ function signalLabelEs(s: CryptoAnalysisSignalKind): string {
   if (s === "compra_potencial") return "Compra potencial";
   if (s === "cuidado") return "Cuidado";
   return "Neutral";
+}
+
+function fmtTradeHighlight(t: CryptoPaperTradeHighlight | null | undefined): string {
+  if (!t) return "—";
+  const sym = t.symbol || "—";
+  const pnl = fmtUsdt(t.pnl_usdt);
+  const pct = t.pnl_pct !== null && t.pnl_pct !== undefined ? ` (${fmtPct(t.pnl_pct)})` : "";
+  return `${sym} · ${pnl}${pct}`;
 }
 
 function CryptoRefreshBadge({ active, label = "Actualizando…" }: { active: boolean; label?: string }) {
@@ -420,6 +431,7 @@ export function CryptoPage() {
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [paper, setPaper] = useState<CryptoPaperPortfolio | null>(null);
+  const [paperMetrics, setPaperMetrics] = useState<CryptoPaperMetrics | null>(null);
   const [paperInitialLoading, setPaperInitialLoading] = useState(true);
   const [paperRefreshing, setPaperRefreshing] = useState(false);
   const [paperError, setPaperError] = useState<string | null>(null);
@@ -455,8 +467,9 @@ export function CryptoPage() {
       setPaperInitialLoading(true);
     }
     try {
-      const p = await getCryptoPaperPortfolio();
+      const [p, metrics] = await Promise.all([getCryptoPaperPortfolio(), getCryptoPaperMetrics()]);
       setPaper(p);
+      setPaperMetrics(metrics);
       setPaperError(null);
     } catch (e: unknown) {
       setPaperError(e instanceof Error ? e.message : "Error al cargar cartera paper");
@@ -905,6 +918,8 @@ export function CryptoPage() {
     try {
       const p = await resetCryptoPaperPortfolio(10000);
       setPaper(p);
+      const metrics = await getCryptoPaperMetrics();
+      setPaperMetrics(metrics);
     } catch (e: unknown) {
       setPaperActionError(e instanceof Error ? e.message : "Error al resetear cartera paper");
     }
@@ -1470,6 +1485,81 @@ export function CryptoPage() {
                 </div>
               </div>
             </div>
+
+            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+              Métricas paper
+            </h3>
+            {paperMetrics && paperMetrics.closed_trades > 0 ? (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
+                  gap: "0.65rem",
+                  marginBottom: "1rem",
+                  padding: "0.65rem 0.75rem",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border)",
+                  background: "color-mix(in srgb, var(--bg-panel) 92%, transparent)",
+                }}
+              >
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">Trades cerrados</div>
+                  <div className="stat__value">{paperMetrics.closed_trades}</div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">Ganadoras / Perdedoras</div>
+                  <div className="stat__value" style={{ fontSize: "0.95rem" }}>
+                    {paperMetrics.winners} / {paperMetrics.losers}
+                  </div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">Win rate</div>
+                  <div className="stat__value">
+                    {paperMetrics.win_rate_pct !== null ? fmtPct(paperMetrics.win_rate_pct) : "—"}
+                  </div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">PnL total</div>
+                  <div className="stat__value" style={pnlStyle(paperMetrics.total_pnl_usdt)}>
+                    {fmtUsdt(paperMetrics.total_pnl_usdt)}
+                  </div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">PnL promedio</div>
+                  <div className="stat__value" style={pnlStyle(paperMetrics.avg_pnl_usdt)}>
+                    {paperMetrics.avg_pnl_usdt !== null ? fmtUsdt(paperMetrics.avg_pnl_usdt) : "—"}
+                  </div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">Mejor trade</div>
+                  <div className="stat__value" style={{ ...pnlStyle(paperMetrics.best_trade?.pnl_usdt), fontSize: "0.82rem" }}>
+                    {fmtTradeHighlight(paperMetrics.best_trade)}
+                  </div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">Peor trade</div>
+                  <div className="stat__value" style={{ ...pnlStyle(paperMetrics.worst_trade?.pnl_usdt), fontSize: "0.82rem" }}>
+                    {fmtTradeHighlight(paperMetrics.worst_trade)}
+                  </div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">Racha ganadora</div>
+                  <div className="stat__value" style={{ fontSize: "0.9rem" }}>
+                    {paperMetrics.current_win_streak} (máx. {paperMetrics.max_win_streak})
+                  </div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">Racha perdedora</div>
+                  <div className="stat__value" style={{ fontSize: "0.9rem" }}>
+                    {paperMetrics.current_loss_streak} (máx. {paperMetrics.max_loss_streak})
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="msg-muted" style={{ marginTop: 0, marginBottom: "1rem", fontSize: "0.875rem" }}>
+                Sin trades cerrados todavía.
+              </p>
+            )}
 
             <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
               Abrir posición paper

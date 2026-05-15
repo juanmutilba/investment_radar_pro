@@ -615,6 +615,14 @@ def crypto_paper_portfolio_get():
     return get_paper_portfolio()
 
 
+@app.get("/crypto/paper/metrics")
+def crypto_paper_metrics_get():
+    """Métricas de trades cerrados paper (simulación local)."""
+    from services.crypto.paper_portfolio import get_paper_trade_metrics
+
+    return get_paper_trade_metrics()
+
+
 @app.post("/crypto/paper/reset")
 def crypto_paper_portfolio_reset(initial_cash: float = Query(10000, ge=0)):
     from services.crypto.paper_portfolio import get_paper_portfolio, reset_paper_portfolio

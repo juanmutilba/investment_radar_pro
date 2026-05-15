@@ -436,6 +436,28 @@ export type CryptoPaperPortfolio = {
   trades_total: number;
 };
 
+export type CryptoPaperTradeHighlight = {
+  symbol: string;
+  pnl_usdt: number;
+  pnl_pct?: number | null;
+  exit_time?: string | null;
+};
+
+export type CryptoPaperMetrics = {
+  closed_trades: number;
+  winners: number;
+  losers: number;
+  win_rate_pct: number | null;
+  total_pnl_usdt: number;
+  avg_pnl_usdt: number | null;
+  best_trade: CryptoPaperTradeHighlight | null;
+  worst_trade: CryptoPaperTradeHighlight | null;
+  current_win_streak: number;
+  max_win_streak: number;
+  current_loss_streak: number;
+  max_loss_streak: number;
+};
+
 export type CryptoPaperOpenPayload = {
   symbol: string;
   side?: string;
@@ -487,6 +509,31 @@ function isCryptoPaperPortfolio(data: unknown): data is CryptoPaperPortfolio {
   );
 }
 
+function isCryptoPaperTradeHighlight(data: unknown): data is CryptoPaperTradeHighlight {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return typeof o.symbol === "string" && typeof o.pnl_usdt === "number";
+}
+
+function isCryptoPaperMetrics(data: unknown): data is CryptoPaperMetrics {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.closed_trades === "number" &&
+    typeof o.winners === "number" &&
+    typeof o.losers === "number" &&
+    (o.win_rate_pct === null || typeof o.win_rate_pct === "number") &&
+    typeof o.total_pnl_usdt === "number" &&
+    (o.avg_pnl_usdt === null || typeof o.avg_pnl_usdt === "number") &&
+    (o.best_trade === null || isCryptoPaperTradeHighlight(o.best_trade)) &&
+    (o.worst_trade === null || isCryptoPaperTradeHighlight(o.worst_trade)) &&
+    typeof o.current_win_streak === "number" &&
+    typeof o.max_win_streak === "number" &&
+    typeof o.current_loss_streak === "number" &&
+    typeof o.max_loss_streak === "number"
+  );
+}
+
 export async function getCryptoPaperPortfolio(): Promise<CryptoPaperPortfolio> {
   const res = await fetch(`${BASE}/crypto/paper/portfolio`);
   if (!res.ok) {
@@ -495,6 +542,18 @@ export async function getCryptoPaperPortfolio(): Promise<CryptoPaperPortfolio> {
   const data: unknown = await res.json().catch(() => null);
   if (!isCryptoPaperPortfolio(data)) {
     throw new Error("Respuesta inesperada: /crypto/paper/portfolio");
+  }
+  return data;
+}
+
+export async function getCryptoPaperMetrics(): Promise<CryptoPaperMetrics> {
+  const res = await fetch(`${BASE}/crypto/paper/metrics`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoPaperMetrics(data)) {
+    throw new Error("Respuesta inesperada: /crypto/paper/metrics");
   }
   return data;
 }
