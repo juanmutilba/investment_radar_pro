@@ -219,8 +219,12 @@ def open_paper_position_market(
     side: str,
     quantity: float,
     reason: str = "",
+    stop_loss_pct: float | None = None,
+    take_profit_pct: float | None = None,
+    trailing_stop_pct: float | None = None,
     break_even_trigger_pct: float | None = None,
     break_even_plus_pct: float | None = None,
+    exit_policy: str | None = None,
 ) -> dict[str, Any]:
     """Abre posición paper al precio actual de Binance (ticker público; sin orden real)."""
     sym = (symbol or "").strip().upper()
@@ -246,8 +250,12 @@ def open_paper_position_market(
         quantity=quantity,
         reason=reason,
         price_source="binance_ticker",
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct,
+        trailing_stop_pct=trailing_stop_pct,
         break_even_trigger_pct=break_even_trigger_pct,
         break_even_plus_pct=break_even_plus_pct,
+        exit_policy=exit_policy,
     )
 
 

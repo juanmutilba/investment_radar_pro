@@ -582,6 +582,9 @@ class CryptoPaperOpenMarketBody(BaseModel):
     side: str = Field(default="long")
     quantity: float = Field(..., gt=0)
     reason: str = ""
+    stop_loss_pct: float = Field(default=0, ge=0)
+    take_profit_pct: float = Field(default=0, ge=0)
+    trailing_stop_pct: float = Field(default=0, ge=0)
     break_even_trigger_pct: float = Field(default=0, ge=0)
     break_even_plus_pct: float = Field(default=0, ge=0)
 
@@ -591,6 +594,9 @@ class CryptoPaperOpenMarketAmountBody(BaseModel):
     side: str = Field(default="long")
     amount_usdt: float = Field(..., gt=0)
     reason: str = ""
+    stop_loss_pct: float = Field(default=0, ge=0)
+    take_profit_pct: float = Field(default=0, ge=0)
+    trailing_stop_pct: float = Field(default=0, ge=0)
     break_even_trigger_pct: float = Field(default=0, ge=0)
     break_even_plus_pct: float = Field(default=0, ge=0)
 
@@ -647,6 +653,9 @@ def crypto_paper_open_market(body: CryptoPaperOpenMarketBody):
             side=body.side,
             quantity=body.quantity,
             reason=body.reason,
+            stop_loss_pct=body.stop_loss_pct if body.stop_loss_pct > 0 else None,
+            take_profit_pct=body.take_profit_pct if body.take_profit_pct > 0 else None,
+            trailing_stop_pct=body.trailing_stop_pct if body.trailing_stop_pct > 0 else None,
             break_even_trigger_pct=body.break_even_trigger_pct
             if body.break_even_trigger_pct > 0
             else None,
@@ -669,6 +678,9 @@ def crypto_paper_open_market_amount(body: CryptoPaperOpenMarketAmountBody):
             side=body.side,
             amount_usdt=body.amount_usdt,
             reason=body.reason,
+            stop_loss_pct=body.stop_loss_pct if body.stop_loss_pct > 0 else None,
+            take_profit_pct=body.take_profit_pct if body.take_profit_pct > 0 else None,
+            trailing_stop_pct=body.trailing_stop_pct if body.trailing_stop_pct > 0 else None,
             break_even_trigger_pct=body.break_even_trigger_pct
             if body.break_even_trigger_pct > 0
             else None,

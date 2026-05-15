@@ -125,6 +125,45 @@ function parseBreakEvenPct(triggerStr: string, plusStr: string): { trigger: numb
   return { trigger, plus };
 }
 
+function parseManualRiskPct(
+  stopStr: string,
+  takeProfitStr: string,
+  trailingStr: string,
+):
+  | { stopLossPct: number; takeProfitPct: number; trailingStopPct: number }
+  | { error: string } {
+  const parsePct = (raw: string, label: string): number | { error: string } => {
+    const t = raw.trim();
+    if (t === "") return 0;
+    const v = parseFloat(t.replace(",", "."));
+    if (!Number.isFinite(v) || v < 0) return { error: `${label} inválido` };
+    return v;
+  };
+  const sl = parsePct(stopStr, "Stop loss %");
+  if (typeof sl !== "number") return sl;
+  const tp = parsePct(takeProfitStr, "Take profit %");
+  if (typeof tp !== "number") return tp;
+  const trail = parsePct(trailingStr, "Trailing stop %");
+  if (typeof trail !== "number") return trail;
+  return { stopLossPct: sl, takeProfitPct: tp, trailingStopPct: trail };
+}
+
+function manualRiskApiFields(risk: {
+  stopLossPct: number;
+  takeProfitPct: number;
+  trailingStopPct: number;
+}): {
+  stop_loss_pct?: number;
+  take_profit_pct?: number;
+  trailing_stop_pct?: number;
+} {
+  return {
+    stop_loss_pct: risk.stopLossPct > 0 ? risk.stopLossPct : undefined,
+    take_profit_pct: risk.takeProfitPct > 0 ? risk.takeProfitPct : undefined,
+    trailing_stop_pct: risk.trailingStopPct > 0 ? risk.trailingStopPct : undefined,
+  };
+}
+
 const TOOLTIP_BE_PENDING =
   "Break-even pendiente: el precio todavía no alcanzó el trigger configurado.";
 const TOOLTIP_BE_ACTIVE =
@@ -658,6 +697,11 @@ export function CryptoPage() {
       setPaperActionError("Monto USDT inválido");
       return;
     }
+    const riskParsed = parseManualRiskPct(strategyStopLossPct, strategyTakeProfitPct, strategyTrailingPct);
+    if ("error" in riskParsed) {
+      setPaperActionError(riskParsed.error);
+      return;
+    }
     const beParsed = parseBreakEvenPct(strategyBreakEvenTriggerPct, strategyBreakEvenPlusPct);
     if ("error" in beParsed) {
       setPaperActionError(beParsed.error);
@@ -670,6 +714,7 @@ export function CryptoPage() {
         side: "long",
         amount_usdt,
         reason: paperReason.trim() || "entrada paper por monto",
+        ...manualRiskApiFields(riskParsed),
         break_even_trigger_pct: beParsed.trigger > 0 ? beParsed.trigger : undefined,
         break_even_plus_pct: beParsed.plus,
       });
@@ -689,6 +734,9 @@ export function CryptoPage() {
     paperSymbol,
     strategyBreakEvenPlusPct,
     strategyBreakEvenTriggerPct,
+    strategyStopLossPct,
+    strategyTakeProfitPct,
+    strategyTrailingPct,
   ]);
 
   const handleOpenPaperMarketQty = useCallback(async () => {
@@ -697,6 +745,11 @@ export function CryptoPage() {
     const quantity = parseFloat(paperQty.replace(",", "."));
     if (!Number.isFinite(quantity) || quantity <= 0) {
       setPaperActionError("Cantidad inválida");
+      return;
+    }
+    const riskParsed = parseManualRiskPct(strategyStopLossPct, strategyTakeProfitPct, strategyTrailingPct);
+    if ("error" in riskParsed) {
+      setPaperActionError(riskParsed.error);
       return;
     }
     const beParsed = parseBreakEvenPct(strategyBreakEvenTriggerPct, strategyBreakEvenPlusPct);
@@ -711,6 +764,7 @@ export function CryptoPage() {
         side: "long",
         quantity,
         reason: paperReason.trim() || "entrada manual paper a mercado",
+        ...manualRiskApiFields(riskParsed),
         break_even_trigger_pct: beParsed.trigger > 0 ? beParsed.trigger : undefined,
         break_even_plus_pct: beParsed.plus,
       });
@@ -721,7 +775,18 @@ export function CryptoPage() {
     } finally {
       setPaperOpening(false);
     }
-  }, [loadPaper, paperOpening, paperQty, paperReason, paperSymbol, strategyBreakEvenPlusPct, strategyBreakEvenTriggerPct]);
+  }, [
+    loadPaper,
+    paperOpening,
+    paperQty,
+    paperReason,
+    paperSymbol,
+    strategyBreakEvenPlusPct,
+    strategyBreakEvenTriggerPct,
+    strategyStopLossPct,
+    strategyTakeProfitPct,
+    strategyTrailingPct,
+  ]);
 
   const handleClosePaper = useCallback(
     async (pos: CryptoPaperPosition) => {
@@ -1294,6 +1359,39 @@ export function CryptoPage() {
                   value={paperReason}
                   onChange={(ev) => setPaperReason(ev.target.value)}
                   placeholder="entrada paper por monto"
+                />
+              </label>
+              <label className="radar-toolbar__field">
+                <span className="radar-toolbar__label">Stop loss %</span>
+                <input
+                  className="radar-toolbar__input"
+                  type="text"
+                  inputMode="decimal"
+                  value={strategyStopLossPct}
+                  onChange={(ev) => setStrategyStopLossPct(ev.target.value)}
+                  placeholder="opcional (0 = off)"
+                />
+              </label>
+              <label className="radar-toolbar__field">
+                <span className="radar-toolbar__label">Take profit %</span>
+                <input
+                  className="radar-toolbar__input"
+                  type="text"
+                  inputMode="decimal"
+                  value={strategyTakeProfitPct}
+                  onChange={(ev) => setStrategyTakeProfitPct(ev.target.value)}
+                  placeholder="opcional (0 = off)"
+                />
+              </label>
+              <label className="radar-toolbar__field">
+                <span className="radar-toolbar__label">Trailing stop %</span>
+                <input
+                  className="radar-toolbar__input"
+                  type="text"
+                  inputMode="decimal"
+                  value={strategyTrailingPct}
+                  onChange={(ev) => setStrategyTrailingPct(ev.target.value)}
+                  placeholder="opcional (0 = off)"
                 />
               </label>
               <label className="radar-toolbar__field">

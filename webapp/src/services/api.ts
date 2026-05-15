@@ -449,6 +449,9 @@ export type CryptoPaperOpenMarketPayload = {
   side?: string;
   quantity: number;
   reason?: string;
+  stop_loss_pct?: number;
+  take_profit_pct?: number;
+  trailing_stop_pct?: number;
   break_even_trigger_pct?: number;
   break_even_plus_pct?: number;
 };
@@ -458,6 +461,9 @@ export type CryptoPaperOpenMarketAmountPayload = {
   side?: string;
   amount_usdt: number;
   reason?: string;
+  stop_loss_pct?: number;
+  take_profit_pct?: number;
+  trailing_stop_pct?: number;
   break_even_trigger_pct?: number;
   break_even_plus_pct?: number;
 };
