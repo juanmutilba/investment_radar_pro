@@ -607,6 +607,23 @@ class CryptoPaperCloseBody(BaseModel):
     reason: str = ""
 
 
+class CryptoPaperBotAutoStartBody(BaseModel):
+    exits_interval_minutes: float = Field(default=5, gt=0)
+    strategy_interval_minutes: float = Field(default=30, gt=0)
+    timeframe: str = "1h"
+    limit: int = Field(default=200, ge=50, le=1000)
+    amount_usdt: float = Field(default=100, gt=0)
+    stop_loss_pct: float = Field(default=2, ge=0)
+    take_profit_pct: float = Field(default=4, ge=0)
+    trailing_stop_pct: float = Field(default=1.5, ge=0)
+    max_open_positions: int = Field(default=3, ge=1, le=50)
+    break_even_trigger_pct: float = Field(default=0, ge=0)
+    break_even_plus_pct: float = Field(default=0, ge=0)
+    cooldown_minutes: int = Field(default=0, ge=0)
+    require_btc_trend_up: bool = False
+    min_entry_score: float = Field(default=0, ge=0, le=100)
+
+
 @app.get("/crypto/paper/portfolio")
 def crypto_paper_portfolio_get():
     """Cartera paper cripto (simulación local; sin órdenes Binance)."""
@@ -772,6 +789,53 @@ def crypto_bot_execute_paper_strategy(
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Estrategia paper: {e}") from e
+
+
+@app.get("/crypto/bot/auto-status")
+def crypto_bot_auto_status():
+    """Estado del auto-run paper (memoria; no persiste)."""
+    from services.crypto.paper_bot_scheduler import get_paper_bot_scheduler_status
+
+    return get_paper_bot_scheduler_status()
+
+
+@app.post("/crypto/bot/auto-start")
+def crypto_bot_auto_start(body: CryptoPaperBotAutoStartBody):
+    """Inicia auto-run paper: revisión de salidas y estrategia por intervalos."""
+    from services.crypto.paper_bot_scheduler import start_paper_bot_scheduler
+
+    exits_s = max(60, int(body.exits_interval_minutes * 60))
+    strategy_s = max(60, int(body.strategy_interval_minutes * 60))
+    strategy_params = {
+        "timeframe": (body.timeframe or "1h").strip() or "1h",
+        "limit": body.limit,
+        "amount_usdt": body.amount_usdt,
+        "stop_loss_pct": body.stop_loss_pct,
+        "take_profit_pct": body.take_profit_pct,
+        "trailing_stop_pct": body.trailing_stop_pct,
+        "max_open_positions": body.max_open_positions,
+        "break_even_trigger_pct": body.break_even_trigger_pct,
+        "break_even_plus_pct": body.break_even_plus_pct,
+        "cooldown_minutes": body.cooldown_minutes,
+        "require_btc_trend_up": body.require_btc_trend_up,
+        "min_entry_score": body.min_entry_score,
+    }
+    try:
+        return start_paper_bot_scheduler(
+            exits_interval_seconds=exits_s,
+            strategy_interval_seconds=strategy_s,
+            strategy_params=strategy_params,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Auto-run paper: {e}") from e
+
+
+@app.post("/crypto/bot/auto-stop")
+def crypto_bot_auto_stop():
+    """Detiene el auto-run paper."""
+    from services.crypto.paper_bot_scheduler import stop_paper_bot_scheduler
+
+    return stop_paper_bot_scheduler()
 
 
 @app.post("/crypto/paper/close")

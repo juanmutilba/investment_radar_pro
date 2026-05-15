@@ -5,8 +5,11 @@ import {
   getCryptoAnalysis,
   getCryptoOhlcv,
   executeCryptoPaperStrategy,
+  getCryptoPaperBotAutoStatus,
   getCryptoPaperCycle,
   reviewCryptoPaperExits,
+  startCryptoPaperBotAuto,
+  stopCryptoPaperBotAuto,
   getCryptoPaperEquityCurve,
   getCryptoPaperMetrics,
   getCryptoPaperPortfolio,
@@ -21,6 +24,7 @@ import {
   type CryptoAnalysisSignalKind,
   type CryptoOhlcvCandle,
   type CryptoOhlcvResponse,
+  type CryptoPaperBotAutoStatus,
   type CryptoPaperCycleResponse,
   type CryptoPaperEquityCurve,
   type CryptoPaperMetrics,
@@ -42,6 +46,9 @@ const STRATEGY_DEFAULT_TAKE_PROFIT = 4;
 const STRATEGY_DEFAULT_TRAILING = 1.5;
 const STRATEGY_DEFAULT_MAX_POSITIONS = 3;
 const STRATEGY_DEFAULT_REQUIRE_BTC_TREND_UP = true;
+const AUTO_DEFAULT_EXITS_INTERVAL_MIN = 5;
+const AUTO_DEFAULT_STRATEGY_INTERVAL_MIN = 30;
+const AUTO_STATUS_POLL_MS = 20_000;
 
 const dtFmt = new Intl.DateTimeFormat("es-AR", {
   dateStyle: "short",
@@ -104,6 +111,18 @@ function signalLabelEs(s: CryptoAnalysisSignalKind): string {
   if (s === "compra_potencial") return "Compra potencial";
   if (s === "cuidado") return "Cuidado";
   return "Neutral";
+}
+
+function fmtSchedulerIso(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+function paperBotAutoStatusLabel(status: CryptoPaperBotAutoStatus | null): string {
+  if (!status?.enabled) return "Detenido";
+  if (status.running) return "Ejecutando";
+  return "Activo";
 }
 
 function fmtProfitFactor(v: number | null | undefined): string {
@@ -471,6 +490,15 @@ export function CryptoPage() {
   );
   const [strategyMinEntryScore, setStrategyMinEntryScore] = useState("0");
   const [strategyReviewing, setStrategyReviewing] = useState(false);
+  const [autoStatus, setAutoStatus] = useState<CryptoPaperBotAutoStatus | null>(null);
+  const [autoStatusLoading, setAutoStatusLoading] = useState(false);
+  const [autoStarting, setAutoStarting] = useState(false);
+  const [autoStopping, setAutoStopping] = useState(false);
+  const [autoError, setAutoError] = useState<string | null>(null);
+  const [autoExitsIntervalMin, setAutoExitsIntervalMin] = useState(String(AUTO_DEFAULT_EXITS_INTERVAL_MIN));
+  const [autoStrategyIntervalMin, setAutoStrategyIntervalMin] = useState(
+    String(AUTO_DEFAULT_STRATEGY_INTERVAL_MIN),
+  );
 
   const loadPaper = useCallback(async (isRefresh = false) => {
     if (isRefresh) {
@@ -752,6 +780,105 @@ export function CryptoPage() {
       setStrategyReviewing(false);
     }
   }, [loadPaper, strategyExecuting, strategyLoading, strategyReviewing, strategyTf]);
+
+  const refreshAutoStatus = useCallback(async (soft = false) => {
+    if (!soft) setAutoStatusLoading(true);
+    try {
+      const status = await getCryptoPaperBotAutoStatus();
+      setAutoStatus(status);
+      setAutoError(null);
+    } catch (e: unknown) {
+      if (!soft) {
+        setAutoError(e instanceof Error ? e.message : "Error al leer estado auto-run");
+      }
+    } finally {
+      if (!soft) setAutoStatusLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAutoStatus(true);
+  }, [refreshAutoStatus]);
+
+  useEffect(() => {
+    if (!autoStatus?.enabled) return;
+    const id = window.setInterval(() => {
+      void refreshAutoStatus(true);
+    }, AUTO_STATUS_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [autoStatus?.enabled, refreshAutoStatus]);
+
+  useEffect(() => {
+    if (!autoStatus?.enabled || autoStatus.running) return;
+    void loadPaper(true);
+  }, [autoStatus?.enabled, autoStatus?.last_run_at, autoStatus?.running, loadPaper]);
+
+  const handleStartPaperAuto = useCallback(async () => {
+    if (autoStarting || autoStopping) return;
+    const risk = parseStrategyRiskParams();
+    if (!risk.ok) {
+      setAutoError(risk.message);
+      return;
+    }
+    const exitsMin = parseFloat(autoExitsIntervalMin.replace(",", "."));
+    const strategyMin = parseFloat(autoStrategyIntervalMin.replace(",", "."));
+    if (!Number.isFinite(exitsMin) || exitsMin <= 0) {
+      setAutoError("Intervalo de salidas (min) inválido");
+      return;
+    }
+    if (!Number.isFinite(strategyMin) || strategyMin <= 0) {
+      setAutoError("Intervalo de entradas (min) inválido");
+      return;
+    }
+    setAutoStarting(true);
+    setAutoError(null);
+    try {
+      const status = await startCryptoPaperBotAuto({
+        timeframe: strategyTf.trim() || "1h",
+        limit: ANALYSIS_LIMIT,
+        amountUsdt: risk.amountUsdt,
+        stopLossPct: risk.stopLossPct,
+        takeProfitPct: risk.takeProfitPct,
+        trailingStopPct: risk.trailingStopPct,
+        maxOpenPositions: risk.maxOpenPositions,
+        breakEvenTriggerPct: risk.breakEvenTriggerPct,
+        breakEvenPlusPct: risk.breakEvenPlusPct,
+        cooldownMinutes: risk.cooldownMinutes,
+        requireBtcTrendUp: risk.requireBtcTrendUp,
+        minEntryScore: risk.minEntryScore,
+        exitsIntervalMinutes: exitsMin,
+        strategyIntervalMinutes: strategyMin,
+      });
+      setAutoStatus(status);
+      await loadPaper(true);
+    } catch (e: unknown) {
+      setAutoError(e instanceof Error ? e.message : "Error al iniciar auto-run");
+    } finally {
+      setAutoStarting(false);
+    }
+  }, [
+    autoExitsIntervalMin,
+    autoStarting,
+    autoStopping,
+    autoStrategyIntervalMin,
+    loadPaper,
+    parseStrategyRiskParams,
+    strategyTf,
+  ]);
+
+  const handleStopPaperAuto = useCallback(async () => {
+    if (autoStarting || autoStopping) return;
+    setAutoStopping(true);
+    setAutoError(null);
+    try {
+      const status = await stopCryptoPaperBotAuto();
+      setAutoStatus(status);
+    } catch (e: unknown) {
+      setAutoError(e instanceof Error ? e.message : "Error al detener auto-run");
+    } finally {
+      setAutoStopping(false);
+    }
+  }, [autoStarting, autoStopping]);
 
   const handleExecutePaperStrategy = useCallback(async () => {
     if (strategyLoading || strategyExecuting || strategyReviewing) return;
@@ -1450,6 +1577,113 @@ export function CryptoPage() {
               </table>
             </div>
           </>
+        ) : null}
+      </div>
+
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
+          Auto-run paper
+        </h2>
+        <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "48rem", fontSize: "0.9rem" }}>
+          Ejecuta en segundo plano la revisión de salidas y la estrategia paper según intervalos. Usa los
+          parámetros de riesgo de la sección anterior. Solo simulación; no inicia al abrir la app.
+        </p>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+            gap: "0.65rem",
+            marginBottom: "0.75rem",
+          }}
+        >
+          <div className="stat dashboard-stat" style={{ margin: 0 }}>
+            <div className="stat__label">Estado</div>
+            <div className="stat__value" style={{ fontSize: "0.95rem" }}>
+              {paperBotAutoStatusLabel(autoStatus)}
+              {autoStatusLoading ? " · …" : null}
+            </div>
+          </div>
+          <div className="stat dashboard-stat" style={{ margin: 0 }}>
+            <div className="stat__label">Última ejecución</div>
+            <div className="stat__value" style={{ fontSize: "0.82rem" }}>
+              {fmtSchedulerIso(autoStatus?.last_run_at)}
+            </div>
+          </div>
+          <div className="stat dashboard-stat" style={{ margin: 0 }}>
+            <div className="stat__label">Próxima ejecución</div>
+            <div className="stat__value" style={{ fontSize: "0.82rem" }}>
+              {autoStatus?.enabled ? fmtSchedulerIso(autoStatus?.next_run_at) : "—"}
+            </div>
+          </div>
+          <div className="stat dashboard-stat" style={{ margin: 0 }}>
+            <div className="stat__label">Último error</div>
+            <div
+              className="stat__value"
+              style={{ fontSize: "0.82rem", color: autoStatus?.last_error ? "var(--danger)" : undefined }}
+            >
+              {autoStatus?.last_error ?? "—"}
+            </div>
+          </div>
+        </div>
+        <div className="radar-toolbar" style={{ marginBottom: "0.75rem" }}>
+          <label className="radar-toolbar__field">
+            <span className="radar-toolbar__label">Revisar salidas cada (min)</span>
+            <input
+              className="radar-toolbar__input"
+              type="text"
+              inputMode="decimal"
+              value={autoExitsIntervalMin}
+              onChange={(ev) => setAutoExitsIntervalMin(ev.target.value)}
+              placeholder="5"
+              disabled={autoStatus?.enabled === true}
+            />
+          </label>
+          <label className="radar-toolbar__field">
+            <span className="radar-toolbar__label">Buscar entradas cada (min)</span>
+            <input
+              className="radar-toolbar__input"
+              type="text"
+              inputMode="decimal"
+              value={autoStrategyIntervalMin}
+              onChange={(ev) => setAutoStrategyIntervalMin(ev.target.value)}
+              placeholder="30"
+              disabled={autoStatus?.enabled === true}
+            />
+          </label>
+          <button
+            type="button"
+            className="radar-refresh-btn"
+            onClick={() => void handleStartPaperAuto()}
+            disabled={autoStarting || autoStopping || autoStatus?.enabled === true || pageBusy}
+          >
+            {autoStarting ? "Iniciando…" : "Iniciar auto-run"}
+          </button>
+          <button
+            type="button"
+            className="radar-refresh-btn"
+            onClick={() => void handleStopPaperAuto()}
+            disabled={autoStarting || autoStopping || !autoStatus?.enabled}
+          >
+            {autoStopping ? "Deteniendo…" : "Detener"}
+          </button>
+          <button
+            type="button"
+            className="radar-refresh-btn"
+            onClick={() => void refreshAutoStatus()}
+            disabled={autoStatusLoading || autoStarting || autoStopping}
+          >
+            {autoStatusLoading ? "Refrescando…" : "Refrescar estado"}
+          </button>
+        </div>
+        {autoError ? (
+          <p className="msg-error" style={{ fontSize: "0.875rem", marginBottom: "0.65rem" }}>
+            {autoError}
+          </p>
+        ) : null}
+        {autoStatus?.enabled && (autoStatus.last_actions?.length ?? 0) > 0 ? (
+          <p className="msg-muted" style={{ margin: 0, fontSize: "0.85rem" }}>
+            Último ciclo: {autoStatus.last_actions.length} acción(es) registrada(s).
+          </p>
         ) : null}
       </div>
 

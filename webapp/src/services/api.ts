@@ -450,6 +450,12 @@ export type CryptoPaperMetrics = {
   win_rate_pct: number | null;
   total_pnl_usdt: number;
   avg_pnl_usdt: number | null;
+  gross_profit_usdt: number;
+  gross_loss_usdt: number;
+  profit_factor: number | null;
+  avg_winner_usdt: number | null;
+  avg_loser_usdt: number | null;
+  expectancy_usdt: number | null;
   best_trade: CryptoPaperTradeHighlight | null;
   worst_trade: CryptoPaperTradeHighlight | null;
   current_win_streak: number;
@@ -546,6 +552,12 @@ function isCryptoPaperMetrics(data: unknown): data is CryptoPaperMetrics {
     (o.win_rate_pct === null || typeof o.win_rate_pct === "number") &&
     typeof o.total_pnl_usdt === "number" &&
     (o.avg_pnl_usdt === null || typeof o.avg_pnl_usdt === "number") &&
+    typeof o.gross_profit_usdt === "number" &&
+    typeof o.gross_loss_usdt === "number" &&
+    (o.profit_factor === null || typeof o.profit_factor === "number") &&
+    (o.avg_winner_usdt === null || typeof o.avg_winner_usdt === "number") &&
+    (o.avg_loser_usdt === null || typeof o.avg_loser_usdt === "number") &&
+    (o.expectancy_usdt === null || typeof o.expectancy_usdt === "number") &&
     (o.best_trade === null || isCryptoPaperTradeHighlight(o.best_trade)) &&
     (o.worst_trade === null || isCryptoPaperTradeHighlight(o.worst_trade)) &&
     typeof o.current_win_streak === "number" &&
@@ -854,6 +866,102 @@ export async function reviewCryptoPaperExits(): Promise<CryptoPaperReviewExitsRe
     throw new Error("Respuesta inesperada: /crypto/bot/review-paper-exits");
   }
   return data as CryptoPaperReviewExitsResponse;
+}
+
+export type CryptoPaperBotAutoAction = CryptoPaperCycleAction & {
+  phase?: string;
+  opened_count?: number;
+  primary_reason?: string | null;
+  message?: string | null;
+};
+
+export type CryptoPaperBotAutoStatus = {
+  enabled: boolean;
+  running: boolean;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_error: string | null;
+  last_actions: CryptoPaperBotAutoAction[];
+  strategy_interval_seconds: number;
+  exits_interval_seconds: number;
+};
+
+export type CryptoPaperBotAutoStartParams = CryptoPaperStrategyParams & {
+  exitsIntervalMinutes?: number;
+  strategyIntervalMinutes?: number;
+};
+
+function isCryptoPaperBotAutoStatus(data: unknown): data is CryptoPaperBotAutoStatus {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.enabled === "boolean" &&
+    typeof o.running === "boolean" &&
+    (o.last_run_at === null || typeof o.last_run_at === "string") &&
+    (o.next_run_at === null || typeof o.next_run_at === "string") &&
+    (o.last_error === null || typeof o.last_error === "string") &&
+    Array.isArray(o.last_actions) &&
+    typeof o.strategy_interval_seconds === "number" &&
+    typeof o.exits_interval_seconds === "number"
+  );
+}
+
+export async function getCryptoPaperBotAutoStatus(): Promise<CryptoPaperBotAutoStatus> {
+  const res = await fetch(`${BASE}/crypto/bot/auto-status`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoPaperBotAutoStatus(data)) {
+    throw new Error("Respuesta inesperada: /crypto/bot/auto-status");
+  }
+  return data;
+}
+
+export async function startCryptoPaperBotAuto(
+  params: CryptoPaperBotAutoStartParams = {},
+): Promise<CryptoPaperBotAutoStatus> {
+  const body = {
+    exits_interval_minutes: params.exitsIntervalMinutes ?? 5,
+    strategy_interval_minutes: params.strategyIntervalMinutes ?? 30,
+    timeframe: (params.timeframe ?? "1h").trim(),
+    limit: params.limit ?? CRYPTO_PAPER_CYCLE_LIMIT,
+    amount_usdt: params.amountUsdt ?? 100,
+    stop_loss_pct: params.stopLossPct ?? 2,
+    take_profit_pct: params.takeProfitPct ?? 4,
+    trailing_stop_pct: params.trailingStopPct ?? 1.5,
+    max_open_positions: params.maxOpenPositions ?? 3,
+    break_even_trigger_pct: params.breakEvenTriggerPct ?? 0,
+    break_even_plus_pct: params.breakEvenPlusPct ?? 0,
+    cooldown_minutes: params.cooldownMinutes ?? 0,
+    require_btc_trend_up: params.requireBtcTrendUp ?? false,
+    min_entry_score: params.minEntryScore ?? 0,
+  };
+  const res = await fetch(`${BASE}/crypto/bot/auto-start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoPaperBotAutoStatus(data)) {
+    throw new Error("Respuesta inesperada: /crypto/bot/auto-start");
+  }
+  return data;
+}
+
+export async function stopCryptoPaperBotAuto(): Promise<CryptoPaperBotAutoStatus> {
+  const res = await fetch(`${BASE}/crypto/bot/auto-stop`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoPaperBotAutoStatus(data)) {
+    throw new Error("Respuesta inesperada: /crypto/bot/auto-stop");
+  }
+  return data;
 }
 
 /** Fila tal como viene del Excel (claves pueden variar en casing); usar helpers al renderizar. */
