@@ -105,12 +105,6 @@ function signalLabelEs(s: CryptoAnalysisSignalKind): string {
   return "Neutral";
 }
 
-function fmtClosedAt(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return Number.isFinite(d.getTime()) ? dtFmt.format(d) : iso;
-}
-
 function fmtTradeHighlight(t: CryptoPaperTradeHighlight | null | undefined): string {
   if (!t) return "—";
   const sym = t.symbol || "—";
@@ -1569,6 +1563,24 @@ export function CryptoPage() {
                     {paperMetrics.current_loss_streak} (máx. {paperMetrics.max_loss_streak})
                   </div>
                 </div>
+                {paperEquityCurve && paperEquityCurve.summary.trades_count > 0 ? (
+                  <>
+                    <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                      <div className="stat__label">Max drawdown</div>
+                      <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.max_drawdown_usdt)}>
+                        {fmtUsdt(paperEquityCurve.summary.max_drawdown_usdt)}
+                      </div>
+                    </div>
+                    <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                      <div className="stat__label">Max drawdown %</div>
+                      <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.max_drawdown_pct)}>
+                        {paperEquityCurve.summary.max_drawdown_pct !== null
+                          ? fmtPct(paperEquityCurve.summary.max_drawdown_pct)
+                          : "—"}
+                      </div>
+                    </div>
+                  </>
+                ) : null}
               </div>
             ) : (
               <p className="msg-muted" style={{ marginTop: 0, marginBottom: "1rem", fontSize: "0.875rem" }}>
@@ -1576,87 +1588,6 @@ export function CryptoPage() {
               </p>
             )}
 
-            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-              Curva paper cerrada
-            </h3>
-            {paperEquityCurve && paperEquityCurve.summary.trades_count > 0 ? (
-              <>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
-                    gap: "0.65rem",
-                    marginBottom: "0.75rem",
-                    padding: "0.65rem 0.75rem",
-                    borderRadius: "8px",
-                    border: "1px solid var(--border)",
-                    background: "color-mix(in srgb, var(--bg-panel) 92%, transparent)",
-                  }}
-                >
-                  <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                    <div className="stat__label">PnL acumulado cerrado</div>
-                    <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.last_equity_usdt)}>
-                      {fmtUsdt(paperEquityCurve.summary.last_equity_usdt)}
-                    </div>
-                  </div>
-                  <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                    <div className="stat__label">Max drawdown</div>
-                    <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.max_drawdown_usdt)}>
-                      {fmtUsdt(paperEquityCurve.summary.max_drawdown_usdt)}
-                    </div>
-                  </div>
-                  <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                    <div className="stat__label">Max drawdown %</div>
-                    <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.max_drawdown_pct)}>
-                      {paperEquityCurve.summary.max_drawdown_pct !== null
-                        ? fmtPct(paperEquityCurve.summary.max_drawdown_pct)
-                        : "—"}
-                    </div>
-                  </div>
-                  <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                    <div className="stat__label">Trades en curva</div>
-                    <div className="stat__value">{paperEquityCurve.summary.trades_count}</div>
-                  </div>
-                </div>
-                <div className="table-wrap" style={{ marginBottom: "1rem" }}>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Fecha</th>
-                        <th>Símbolo</th>
-                        <th style={{ textAlign: "right" }}>PnL</th>
-                        <th style={{ textAlign: "right" }}>Equity</th>
-                        <th style={{ textAlign: "right" }}>Drawdown</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...paperEquityCurve.points].reverse().slice(0, 15).map((pt, i) => (
-                        <tr key={`${pt.closed_at ?? "x"}-${pt.symbol}-${i}`}>
-                          <td className="table-cell--nowrap">{fmtClosedAt(pt.closed_at)}</td>
-                          <td>{pt.symbol}</td>
-                          <td style={{ textAlign: "right" }}>
-                            <span style={pnlStyle(pt.pnl_usdt)}>{fmtUsdt(pt.pnl_usdt)}</span>
-                          </td>
-                          <td style={{ textAlign: "right" }}>
-                            <span style={pnlStyle(pt.equity_usdt)}>{fmtUsdt(pt.equity_usdt)}</span>
-                          </td>
-                          <td style={{ textAlign: "right" }}>
-                            <span style={pnlStyle(pt.drawdown_usdt)}>
-                              {fmtUsdt(pt.drawdown_usdt)}
-                              {pt.drawdown_pct !== null ? ` (${fmtPct(pt.drawdown_pct)})` : ""}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            ) : (
-              <p className="msg-muted" style={{ marginTop: 0, marginBottom: "1rem", fontSize: "0.875rem" }}>
-                Sin curva todavía.
-              </p>
-            )}
 
             <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
               Abrir posición paper
@@ -1937,7 +1868,7 @@ export function CryptoPage() {
             )}
 
             <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-              Trades cerrados recientes
+              Últimos trades cerrados
               {paper.trades_total > paper.trades.length
                 ? ` (mostrando ${paper.trades.length} de ${paper.trades_total})`
                 : ""}
