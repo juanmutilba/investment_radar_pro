@@ -1719,6 +1719,29 @@ table.radar-table thead .radar-table__sticky-col {
   color: #f0b8b8;
 }
 
+.crypto-inline-spinner {
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 2px solid var(--text-muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  display: inline-block;
+  animation: crypto-inline-spin 0.65s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes crypto-inline-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.crypto-refresh-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 /** Tabla CEDEAR: texto largo de fuente_ratio */
 .cedear-table__fuente {
   overflow: hidden;

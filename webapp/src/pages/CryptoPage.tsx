@@ -100,6 +100,16 @@ function signalLabelEs(s: CryptoAnalysisSignalKind): string {
   return "Neutral";
 }
 
+function CryptoRefreshBadge({ active, label = "Actualizando…" }: { active: boolean; label?: string }) {
+  if (!active) return null;
+  return (
+    <span className="radar-badge radar-badge--conv-media crypto-refresh-badge" role="status" aria-live="polite">
+      <span className="crypto-inline-spinner" aria-hidden />
+      {label}
+    </span>
+  );
+}
+
 function fmtUsdt(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "—";
   return `USDT ${numFmt2.format(v)}`;
@@ -395,7 +405,7 @@ function CryptoAnalysisCard({ title, payload }: { title: string; payload: Crypto
 }
 
 export function CryptoPage() {
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [status, setStatus] = useState<CryptoStatusPayload | null>(null);
@@ -410,7 +420,8 @@ export function CryptoPage() {
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [paper, setPaper] = useState<CryptoPaperPortfolio | null>(null);
-  const [paperLoading, setPaperLoading] = useState(false);
+  const [paperInitialLoading, setPaperInitialLoading] = useState(true);
+  const [paperRefreshing, setPaperRefreshing] = useState(false);
   const [paperError, setPaperError] = useState<string | null>(null);
   const [paperActionError, setPaperActionError] = useState<string | null>(null);
   const [paperSymbol, setPaperSymbol] = useState("BTC/USDT");
@@ -437,16 +448,21 @@ export function CryptoPage() {
   const [strategyMinEntryScore, setStrategyMinEntryScore] = useState("0");
   const [strategyReviewing, setStrategyReviewing] = useState(false);
 
-  const loadPaper = useCallback(async () => {
-    setPaperLoading(true);
-    setPaperError(null);
+  const loadPaper = useCallback(async (isRefresh = false) => {
+    if (isRefresh) {
+      setPaperRefreshing(true);
+    } else {
+      setPaperInitialLoading(true);
+    }
     try {
       const p = await getCryptoPaperPortfolio();
       setPaper(p);
+      setPaperError(null);
     } catch (e: unknown) {
       setPaperError(e instanceof Error ? e.message : "Error al cargar cartera paper");
     } finally {
-      setPaperLoading(false);
+      setPaperInitialLoading(false);
+      setPaperRefreshing(false);
     }
   }, []);
 
@@ -464,12 +480,15 @@ export function CryptoPage() {
   }, []);
 
   const load = useCallback(async (isRefresh: boolean) => {
-    if (isRefresh) setRefreshing(true);
-    else {
-      setLoading(true);
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setInitialLoading(true);
       setFatalError(null);
     }
-    setTickerError(null);
+    if (!isRefresh) {
+      setTickerError(null);
+    }
     try {
       const results = await Promise.allSettled([
         getCryptoStatus(),
@@ -479,6 +498,8 @@ export function CryptoPage() {
         getCryptoAnalysis(SYM_BTC, ANALYSIS_TF, ANALYSIS_LIMIT),
         getCryptoAnalysis(SYM_ETH, ANALYSIS_TF, ANALYSIS_LIMIT),
       ]);
+
+      const parts: string[] = [];
 
       const st = results[0];
       if (st.status === "rejected") {
@@ -491,44 +512,54 @@ export function CryptoPage() {
           setOhlcv(null);
           setAnalysisBtc(null);
           setAnalysisEth(null);
-        } else {
-          setTickerError(msg);
+          return;
         }
-        return;
+        parts.push(msg);
+      } else {
+        setStatus(st.value);
+        if (!isRefresh) {
+          setFatalError(null);
+        }
       }
-      setStatus(st.value);
-      setFatalError(null);
-
-      const parts: string[] = [];
 
       const rBtc = results[1];
       if (rBtc.status === "fulfilled") setBtc(rBtc.value);
-      else {
+      else if (!isRefresh) {
         setBtc(null);
+        parts.push(`BTC: ${rBtc.reason instanceof Error ? rBtc.reason.message : "error"}`);
+      } else {
         parts.push(`BTC: ${rBtc.reason instanceof Error ? rBtc.reason.message : "error"}`);
       }
       const rEth = results[2];
       if (rEth.status === "fulfilled") setEth(rEth.value);
-      else {
+      else if (!isRefresh) {
         setEth(null);
+        parts.push(`ETH: ${rEth.reason instanceof Error ? rEth.reason.message : "error"}`);
+      } else {
         parts.push(`ETH: ${rEth.reason instanceof Error ? rEth.reason.message : "error"}`);
       }
       const rOh = results[3];
       if (rOh.status === "fulfilled") setOhlcv(rOh.value);
-      else {
+      else if (!isRefresh) {
         setOhlcv(null);
+        parts.push(`OHLCV: ${rOh.reason instanceof Error ? rOh.reason.message : "error"}`);
+      } else {
         parts.push(`OHLCV: ${rOh.reason instanceof Error ? rOh.reason.message : "error"}`);
       }
       const rAb = results[4];
       if (rAb.status === "fulfilled") setAnalysisBtc(rAb.value);
-      else {
+      else if (!isRefresh) {
         setAnalysisBtc(null);
+        parts.push(`Análisis BTC: ${rAb.reason instanceof Error ? rAb.reason.message : "error"}`);
+      } else {
         parts.push(`Análisis BTC: ${rAb.reason instanceof Error ? rAb.reason.message : "error"}`);
       }
       const rAe = results[5];
       if (rAe.status === "fulfilled") setAnalysisEth(rAe.value);
-      else {
+      else if (!isRefresh) {
         setAnalysisEth(null);
+        parts.push(`Análisis ETH: ${rAe.reason instanceof Error ? rAe.reason.message : "error"}`);
+      } else {
         parts.push(`Análisis ETH: ${rAe.reason instanceof Error ? rAe.reason.message : "error"}`);
       }
       setTickerError(parts.length > 0 ? parts.join(" · ") : null);
@@ -546,10 +577,15 @@ export function CryptoPage() {
         setAnalysisEth(null);
       }
     } finally {
-      setLoading(false);
+      setInitialLoading(false);
       setRefreshing(false);
     }
   }, []);
+
+  const handleRefreshAll = useCallback(() => {
+    void load(true);
+    void loadPaper(true);
+  }, [load, loadPaper]);
 
   useEffect(() => {
     void load(false);
@@ -570,7 +606,7 @@ export function CryptoPage() {
   }, []);
 
   useEffect(() => {
-    void loadPaper();
+    void loadPaper(false);
   }, [loadPaper]);
 
   const handleSearchOpportunities = useCallback(async () => {
@@ -679,7 +715,7 @@ export function CryptoPage() {
             ? `Revisión de salidas: ${actions.filter((a) => a.status === "executed").length} cierre(s).`
             : "Revisión de salidas: sin cierres por reglas.",
       }));
-      await loadPaper();
+      await loadPaper(true);
     } catch (e: unknown) {
       setStrategyError(e instanceof Error ? e.message : "Error al revisar salidas paper");
     } finally {
@@ -713,7 +749,7 @@ export function CryptoPage() {
       });
       setStrategyLastMode("execute");
       setStrategyCycle(data);
-      await loadPaper();
+      await loadPaper(true);
     } catch (e: unknown) {
       setStrategyError(e instanceof Error ? e.message : "Error al ejecutar estrategia paper");
     } finally {
@@ -759,7 +795,7 @@ export function CryptoPage() {
       });
       setPaperAmountUsdt("");
       setPaperReason("");
-      await loadPaper();
+      await loadPaper(true);
     } catch (e: unknown) {
       setPaperActionError(e instanceof Error ? e.message : "Error al abrir posición paper");
     } finally {
@@ -808,7 +844,7 @@ export function CryptoPage() {
         break_even_plus_pct: beParsed.plus,
       });
       setPaperQty("");
-      await loadPaper();
+      await loadPaper(true);
     } catch (e: unknown) {
       setPaperActionError(e instanceof Error ? e.message : "Error al abrir posición paper");
     } finally {
@@ -851,7 +887,7 @@ export function CryptoPage() {
           price,
           reason: "cierre_manual_paper",
         });
-        await loadPaper();
+        await loadPaper(true);
       } catch (e: unknown) {
         setPaperActionError(e instanceof Error ? e.message : "Error al cerrar posición paper");
       } finally {
@@ -875,6 +911,9 @@ export function CryptoPage() {
   }, []);
 
   const statusHeadline = fatalError !== null ? "Error" : status !== null ? "Conectado" : "—";
+  const marketReady = fatalError === null && !initialLoading;
+  const paperBusy = paperInitialLoading || paperRefreshing;
+  const pageBusy = initialLoading || refreshing || paperRefreshing;
 
   return (
     <>
@@ -885,9 +924,16 @@ export function CryptoPage() {
       </p>
 
       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-        <button type="button" className="radar-refresh-btn" onClick={() => void load(true)} disabled={loading || refreshing}>
-          {refreshing ? "Actualizando…" : "Actualizar"}
+        <button
+          type="button"
+          className="radar-refresh-btn"
+          onClick={() => void handleRefreshAll()}
+          disabled={initialLoading || pageBusy}
+        >
+          Actualizar
         </button>
+        <CryptoRefreshBadge active={refreshing} label="Actualizando mercado…" />
+        <CryptoRefreshBadge active={paperRefreshing} label="Actualizando cartera…" />
         {tickerError ? (
           <span className="msg-error" style={{ fontSize: "0.875rem" }}>
             {tickerError}
@@ -895,10 +941,10 @@ export function CryptoPage() {
         ) : null}
       </div>
 
-      {loading && <p className="msg-muted">Cargando…</p>}
-      {fatalError && !loading && <p className="msg-error">{fatalError}</p>}
+      {initialLoading && <p className="msg-muted">Cargando datos iniciales…</p>}
+      {fatalError && !initialLoading && <p className="msg-error">{fatalError}</p>}
 
-      {!loading && fatalError === null && status && (
+      {marketReady && status && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
             Estado Binance
@@ -929,7 +975,7 @@ export function CryptoPage() {
         </div>
       )}
 
-      {!loading && fatalError === null && (
+      {marketReady && (
         <div
           style={{
             display: "grid",
@@ -979,7 +1025,7 @@ export function CryptoPage() {
         </div>
       )}
 
-      {!loading && fatalError === null && (
+      {marketReady && (
         <div style={{ marginBottom: "1rem" }}>
           <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
             Señales técnicas
@@ -1001,7 +1047,7 @@ export function CryptoPage() {
         </div>
       )}
 
-      {!loading && fatalError === null && (
+      {marketReady && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <div
             style={{
@@ -1226,7 +1272,7 @@ export function CryptoPage() {
             type="button"
             className="radar-refresh-btn"
             onClick={() => void handleSearchOpportunities()}
-            disabled={strategyLoading || strategyExecuting || strategyReviewing}
+            disabled={strategyLoading || strategyExecuting || strategyReviewing || pageBusy}
           >
             {strategyLoading ? "Buscando…" : "Buscar oportunidades"}
           </button>
@@ -1234,7 +1280,7 @@ export function CryptoPage() {
             type="button"
             className="radar-refresh-btn"
             onClick={() => void handleReviewPaperExits()}
-            disabled={strategyLoading || strategyExecuting || strategyReviewing}
+            disabled={strategyLoading || strategyExecuting || strategyReviewing || pageBusy}
           >
             {strategyReviewing ? "Revisando…" : "Revisar salidas paper"}
           </button>
@@ -1242,7 +1288,7 @@ export function CryptoPage() {
             type="button"
             className="radar-refresh-btn"
             onClick={() => void handleExecutePaperStrategy()}
-            disabled={strategyLoading || strategyExecuting || strategyReviewing}
+            disabled={strategyLoading || strategyExecuting || strategyReviewing || pageBusy}
           >
             {strategyExecuting ? "Ejecutando…" : "Ejecutar estrategia paper"}
           </button>
@@ -1376,9 +1422,15 @@ export function CryptoPage() {
           <h2 className="dashboard-section-title" style={{ margin: 0, flex: "1 1 auto" }}>
             Cartera paper cripto
           </h2>
-          <button type="button" className="radar-refresh-btn" onClick={() => void loadPaper()} disabled={paperLoading}>
-            {paperLoading ? "Cargando…" : "Actualizar cartera"}
+          <button
+            type="button"
+            className="radar-refresh-btn"
+            onClick={() => void loadPaper(true)}
+            disabled={paperBusy || paperOpening}
+          >
+            Actualizar cartera
           </button>
+          <CryptoRefreshBadge active={paperRefreshing} />
           <button type="button" className="radar-refresh-btn" onClick={() => void handleResetPaper()}>
             Reset paper
           </button>
@@ -1392,9 +1444,9 @@ export function CryptoPage() {
             {paperActionError}
           </p>
         ) : null}
-        {paperLoading && !paper ? <p className="msg-muted">Cargando cartera paper…</p> : null}
+        {paperInitialLoading && !paper ? <p className="msg-muted">Cargando cartera paper…</p> : null}
         {paper ? (
-          <>
+          <div style={{ opacity: paperRefreshing ? 0.88 : 1, transition: "opacity 0.15s ease" }}>
             <div
               style={{
                 display: "grid",
@@ -1514,7 +1566,7 @@ export function CryptoPage() {
                 type="button"
                 className="radar-refresh-btn"
                 onClick={() => void handleOpenPaperMarketAmount()}
-                disabled={paperOpening}
+                disabled={paperOpening || paperBusy}
               >
                 {paperOpening ? "Abriendo…" : "Abrir paper por USDT"}
               </button>
@@ -1741,11 +1793,11 @@ export function CryptoPage() {
                 </table>
               </div>
             )}
-          </>
+          </div>
         ) : null}
       </div>
 
-      {!loading && fatalError === null && ohlcv && ohlcv.candles.length > 0 && (
+      {marketReady && ohlcv && ohlcv.candles.length > 0 && (
         <div className="card">
           <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
             Velas {ohlcv.symbol} · {ohlcv.timeframe} · últimas {ohlcv.candles.length}
@@ -1783,7 +1835,7 @@ export function CryptoPage() {
         </div>
       )}
 
-      {!loading && fatalError === null && ohlcv && ohlcv.candles.length === 0 && (
+      {marketReady && ohlcv && ohlcv.candles.length === 0 && (
         <p className="msg-muted">No hay velas en la respuesta de /crypto/ohlcv.</p>
       )}
     </>
