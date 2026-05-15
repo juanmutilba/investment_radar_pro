@@ -41,6 +41,7 @@ const STRATEGY_DEFAULT_STOP_LOSS = 2;
 const STRATEGY_DEFAULT_TAKE_PROFIT = 4;
 const STRATEGY_DEFAULT_TRAILING = 1.5;
 const STRATEGY_DEFAULT_MAX_POSITIONS = 3;
+const STRATEGY_DEFAULT_REQUIRE_BTC_TREND_UP = true;
 
 const dtFmt = new Intl.DateTimeFormat("es-AR", {
   dateStyle: "short",
@@ -103,6 +104,12 @@ function signalLabelEs(s: CryptoAnalysisSignalKind): string {
   if (s === "compra_potencial") return "Compra potencial";
   if (s === "cuidado") return "Cuidado";
   return "Neutral";
+}
+
+function fmtProfitFactor(v: number | null | undefined): string {
+  if (v === null || v === undefined) return "Sin pérdidas";
+  if (!Number.isFinite(v)) return "—";
+  return numFmt2.format(v);
 }
 
 function fmtTradeHighlight(t: CryptoPaperTradeHighlight | null | undefined): string {
@@ -459,7 +466,9 @@ export function CryptoPage() {
   const [strategyBreakEvenTriggerPct, setStrategyBreakEvenTriggerPct] = useState("");
   const [strategyBreakEvenPlusPct, setStrategyBreakEvenPlusPct] = useState("0");
   const [strategyCooldownMinutes, setStrategyCooldownMinutes] = useState("0");
-  const [strategyRequireBtcTrendUp, setStrategyRequireBtcTrendUp] = useState(false);
+  const [strategyRequireBtcTrendUp, setStrategyRequireBtcTrendUp] = useState(
+    STRATEGY_DEFAULT_REQUIRE_BTC_TREND_UP,
+  );
   const [strategyMinEntryScore, setStrategyMinEntryScore] = useState("0");
   const [strategyReviewing, setStrategyReviewing] = useState(false);
 
@@ -1281,15 +1290,26 @@ export function CryptoPage() {
           </label>
           <label
             className="radar-toolbar__field"
-            style={{ display: "flex", alignItems: "flex-end", gap: "0.4rem", minWidth: "14rem" }}
+            title="Evita compras de altcoins si BTC no está en tendencia alcista."
+            style={{
+              flexBasis: "100%",
+              flexDirection: "row",
+              alignItems: "center",
+              gap: "0.5rem",
+              cursor: "pointer",
+              padding: "0.35rem 0",
+            }}
           >
             <input
               type="checkbox"
               checked={strategyRequireBtcTrendUp}
               onChange={(ev) => setStrategyRequireBtcTrendUp(ev.target.checked)}
             />
-            <span className="radar-toolbar__label" style={{ margin: 0 }}>
-              BTC tendencia alcista para altcoins
+            <span
+              className="radar-toolbar__label"
+              style={{ margin: 0, textTransform: "none", fontSize: "0.85rem", letterSpacing: 0 }}
+            >
+              Requerir BTC alcista para altcoins
             </span>
           </label>
           <button
@@ -1534,9 +1554,44 @@ export function CryptoPage() {
                   </div>
                 </div>
                 <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">PnL promedio</div>
-                  <div className="stat__value" style={pnlStyle(paperMetrics.avg_pnl_usdt)}>
-                    {paperMetrics.avg_pnl_usdt !== null ? fmtUsdt(paperMetrics.avg_pnl_usdt) : "—"}
+                  <div
+                    className="stat__label"
+                    title="Ganancias brutas / pérdidas brutas (solo trades con pérdidas en el denominador)."
+                  >
+                    Profit factor
+                  </div>
+                  <div className="stat__value">{fmtProfitFactor(paperMetrics.profit_factor)}</div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label" title="Ganancia esperada promedio por trade cerrado.">
+                    Expectancy
+                  </div>
+                  <div className="stat__value" style={pnlStyle(paperMetrics.expectancy_usdt)}>
+                    {paperMetrics.expectancy_usdt !== null ? fmtUsdt(paperMetrics.expectancy_usdt) : "—"}
+                  </div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">Total ganado</div>
+                  <div className="stat__value" style={pnlStyle(paperMetrics.gross_profit_usdt)}>
+                    {fmtUsdt(paperMetrics.gross_profit_usdt)}
+                  </div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">Total perdido</div>
+                  <div className="stat__value" style={pnlStyle(-paperMetrics.gross_loss_usdt)}>
+                    {fmtUsdt(-paperMetrics.gross_loss_usdt)}
+                  </div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">Ganancia prom.</div>
+                  <div className="stat__value" style={pnlStyle(paperMetrics.avg_winner_usdt)}>
+                    {paperMetrics.avg_winner_usdt !== null ? fmtUsdt(paperMetrics.avg_winner_usdt) : "—"}
+                  </div>
+                </div>
+                <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                  <div className="stat__label">Pérdida prom.</div>
+                  <div className="stat__value" style={pnlStyle(paperMetrics.avg_loser_usdt)}>
+                    {paperMetrics.avg_loser_usdt !== null ? fmtUsdt(paperMetrics.avg_loser_usdt) : "—"}
                   </div>
                 </div>
                 <div className="stat dashboard-stat" style={{ margin: 0 }}>
