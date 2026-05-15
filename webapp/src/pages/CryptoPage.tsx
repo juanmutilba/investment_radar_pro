@@ -191,6 +191,8 @@ export function CryptoPage() {
   const [paperAmountUsdt, setPaperAmountUsdt] = useState("");
   const [paperQty, setPaperQty] = useState("");
   const [paperReason, setPaperReason] = useState("");
+  const [paperOpening, setPaperOpening] = useState(false);
+  const [paperClosingId, setPaperClosingId] = useState<string | null>(null);
 
   const loadPaper = useCallback(async () => {
     setPaperLoading(true);
@@ -329,50 +331,59 @@ export function CryptoPage() {
   }, [loadPaper]);
 
   const handleOpenPaperMarketAmount = useCallback(async () => {
+    if (paperOpening) return;
     setPaperActionError(null);
     const amount_usdt = parseFloat(paperAmountUsdt.replace(",", "."));
     if (!Number.isFinite(amount_usdt) || amount_usdt <= 0) {
       setPaperActionError("Monto USDT inválido");
       return;
     }
+    setPaperOpening(true);
     try {
-      const p = await openCryptoPaperPositionMarketAmount({
+      await openCryptoPaperPositionMarketAmount({
         symbol: paperSymbol.trim(),
         side: "long",
         amount_usdt,
         reason: paperReason.trim() || "entrada paper por monto",
       });
-      setPaper(p);
       setPaperAmountUsdt("");
       setPaperReason("");
+      await loadPaper();
     } catch (e: unknown) {
       setPaperActionError(e instanceof Error ? e.message : "Error al abrir posición paper");
+    } finally {
+      setPaperOpening(false);
     }
-  }, [paperAmountUsdt, paperReason, paperSymbol]);
+  }, [loadPaper, paperAmountUsdt, paperOpening, paperReason, paperSymbol]);
 
   const handleOpenPaperMarketQty = useCallback(async () => {
+    if (paperOpening) return;
     setPaperActionError(null);
     const quantity = parseFloat(paperQty.replace(",", "."));
     if (!Number.isFinite(quantity) || quantity <= 0) {
       setPaperActionError("Cantidad inválida");
       return;
     }
+    setPaperOpening(true);
     try {
-      const p = await openCryptoPaperPositionMarket({
+      await openCryptoPaperPositionMarket({
         symbol: paperSymbol.trim(),
         side: "long",
         quantity,
         reason: paperReason.trim() || "entrada manual paper a mercado",
       });
-      setPaper(p);
       setPaperQty("");
+      await loadPaper();
     } catch (e: unknown) {
       setPaperActionError(e instanceof Error ? e.message : "Error al abrir posición paper");
+    } finally {
+      setPaperOpening(false);
     }
-  }, [paperQty, paperSymbol]);
+  }, [loadPaper, paperOpening, paperQty, paperSymbol]);
 
   const handleClosePaper = useCallback(
     async (pos: CryptoPaperPosition) => {
+      if (paperClosingId !== null) return;
       setPaperActionError(null);
       let price = pos.current_price ?? null;
       if (price === null || !Number.isFinite(price)) {
@@ -387,18 +398,21 @@ export function CryptoPage() {
           return;
         }
       }
+      setPaperClosingId(pos.id);
       try {
-        const p = await closeCryptoPaperPosition({
+        await closeCryptoPaperPosition({
           position_id: pos.id,
           price,
           reason: "cierre_manual_paper",
         });
-        setPaper(p);
+        await loadPaper();
       } catch (e: unknown) {
         setPaperActionError(e instanceof Error ? e.message : "Error al cerrar posición paper");
+      } finally {
+        setPaperClosingId(null);
       }
     },
-    [],
+    [loadPaper, paperClosingId],
   );
 
   const handleResetPaper = useCallback(async () => {
@@ -724,8 +738,13 @@ export function CryptoPage() {
                   placeholder="entrada paper por monto"
                 />
               </label>
-              <button type="button" className="radar-refresh-btn" onClick={() => void handleOpenPaperMarketAmount()}>
-                Abrir paper por USDT
+              <button
+                type="button"
+                className="radar-refresh-btn"
+                onClick={() => void handleOpenPaperMarketAmount()}
+                disabled={paperOpening}
+              >
+                {paperOpening ? "Abriendo…" : "Abrir paper por USDT"}
               </button>
             </div>
             <details style={{ marginBottom: "1rem" }}>
@@ -744,8 +763,13 @@ export function CryptoPage() {
                     placeholder="0.01"
                   />
                 </label>
-                <button type="button" className="radar-refresh-btn" onClick={() => void handleOpenPaperMarketQty()}>
-                  Abrir paper a mercado (qty)
+                <button
+                  type="button"
+                  className="radar-refresh-btn"
+                  onClick={() => void handleOpenPaperMarketQty()}
+                  disabled={paperOpening}
+                >
+                  {paperOpening ? "Abriendo…" : "Abrir paper a mercado (qty)"}
                 </button>
               </div>
             </details>
@@ -808,8 +832,9 @@ export function CryptoPage() {
                             className="radar-refresh-btn"
                             style={{ padding: "0.25rem 0.55rem", fontSize: "0.78rem" }}
                             onClick={() => void handleClosePaper(pos)}
+                            disabled={paperClosingId !== null}
                           >
-                            Cerrar paper
+                            {paperClosingId === pos.id ? "Cerrando…" : "Cerrar paper"}
                           </button>
                         </td>
                       </tr>

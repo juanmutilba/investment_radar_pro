@@ -75,6 +75,19 @@ def reset_paper_portfolio(initial_cash: float = _DEFAULT_INITIAL_CASH) -> dict[s
     return deepcopy(pf)
 
 
+def _reject_duplicate_open(symbol: str, pf: dict[str, Any] | None = None) -> None:
+    """Evita dos posiciones long abiertas en el mismo símbolo."""
+    sym = (symbol or "").strip().upper()
+    data = pf if pf is not None else load_portfolio()
+    for p in data.get("positions") or []:
+        if not isinstance(p, dict):
+            continue
+        if str(p.get("status", "open")) != "open":
+            continue
+        if str(p.get("symbol") or "").strip().upper() == sym:
+            raise ValueError(f"Ya existe una posición paper abierta para {sym}")
+
+
 def _validate_long_open(symbol: str, side: str, price: float, quantity: float) -> str:
     sym = (symbol or "").strip().upper()
     if not sym or "/" not in sym:
@@ -192,6 +205,7 @@ def open_paper_position(
     sym = _validate_long_open(symbol, side, price, quantity)
     cost = price * quantity
     pf = load_portfolio()
+    _reject_duplicate_open(sym, pf)
     cash = float(pf.get("cash_usdt") or 0)
     if cost > cash + 1e-9:
         raise ValueError(
