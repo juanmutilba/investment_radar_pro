@@ -179,6 +179,16 @@ export async function getCryptoStatus(): Promise<CryptoStatusPayload> {
 export type CryptoTestnetStatusPayload = {
   configured: boolean;
   enabled: boolean;
+  api_key_present?: boolean;
+  api_secret_present?: boolean;
+  enabled_raw?: string | null;
+  sandbox_mode?: boolean;
+  exchange_id?: string | null;
+  default_type?: string | null;
+  urls_api_safe?: "sandbox" | "testnet" | "real" | "unknown";
+  diagnosis?: string;
+  ticker_error?: string | null;
+  balance_error?: string | null;
   ccxt_available: boolean;
   can_read_balance: boolean;
   can_read_ticker: boolean;

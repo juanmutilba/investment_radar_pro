@@ -1354,6 +1354,22 @@ tr.moneyness-row-none td:first-child {
   font-size: 0.82rem;
 }
 
+.crypto-principal-markets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.crypto-principal-card--featured {
+  border-color: rgba(67, 56, 202, 0.28);
+  box-shadow: 0 1px 0 rgba(67, 56, 202, 0.06);
+}
+
+.crypto-favorites-table tbody tr.crypto-favorite-row--primary td:first-child strong {
+  color: var(--text, #1a1a1a);
+}
+
 .crypto-history-details > summary {
   cursor: pointer;
   font-weight: 600;

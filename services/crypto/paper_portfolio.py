@@ -586,6 +586,12 @@ def get_paper_trade_metrics() -> dict[str, Any]:
         "win_rate_pct": None,
         "total_pnl_usdt": 0.0,
         "avg_pnl_usdt": None,
+        "gross_profit_usdt": 0.0,
+        "gross_loss_usdt": 0.0,
+        "profit_factor": None,
+        "avg_winner_usdt": None,
+        "avg_loser_usdt": None,
+        "expectancy_usdt": None,
         "best_trade": None,
         "worst_trade": None,
         "current_win_streak": 0,
@@ -601,6 +607,10 @@ def get_paper_trade_metrics() -> dict[str, Any]:
     winners = 0
     losers = 0
     total_pnl = 0.0
+    gross_profit = 0.0
+    gross_loss = 0.0
+    winner_pnls: list[float] = []
+    loser_pnls: list[float] = []
     best: dict[str, Any] | None = None
     worst: dict[str, Any] | None = None
     cur_win = 0
@@ -615,8 +625,12 @@ def get_paper_trade_metrics() -> dict[str, Any]:
         total_pnl += pnl
         if pnl > 0:
             winners += 1
+            gross_profit += pnl
+            winner_pnls.append(pnl)
         elif pnl < 0:
             losers += 1
+            gross_loss += abs(pnl)
+            loser_pnls.append(pnl)
 
         if best is None or pnl > float(best.get("pnl_usdt") or 0):
             best = t
@@ -636,13 +650,26 @@ def get_paper_trade_metrics() -> dict[str, Any]:
         max_loss = max(max_loss, cur_loss)
 
     n = len(closed_sorted)
+    avg_winner = sum(winner_pnls) / len(winner_pnls) if winner_pnls else None
+    avg_loser = sum(loser_pnls) / len(loser_pnls) if loser_pnls else None
+    expectancy = total_pnl / n if n > 0 else None
+    profit_factor: float | None = None
+    if gross_loss > 0:
+        profit_factor = gross_profit / gross_loss
+
     return {
         "closed_trades": n,
         "winners": winners,
         "losers": losers,
         "win_rate_pct": round((winners / n) * 100.0, 4) if n > 0 else None,
         "total_pnl_usdt": round(total_pnl, 8),
-        "avg_pnl_usdt": round(total_pnl / n, 8) if n > 0 else None,
+        "avg_pnl_usdt": round(expectancy, 8) if expectancy is not None else None,
+        "gross_profit_usdt": round(gross_profit, 8),
+        "gross_loss_usdt": round(gross_loss, 8),
+        "profit_factor": round(profit_factor, 6) if profit_factor is not None else None,
+        "avg_winner_usdt": round(avg_winner, 8) if avg_winner is not None else None,
+        "avg_loser_usdt": round(avg_loser, 8) if avg_loser is not None else None,
+        "expectancy_usdt": round(expectancy, 8) if expectancy is not None else None,
         "best_trade": _trade_highlight(best) if best else None,
         "worst_trade": _trade_highlight(worst) if worst else None,
         "current_win_streak": cur_win,

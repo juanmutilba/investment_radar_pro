@@ -7,6 +7,12 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+# Cargar .env al importar (no solo en lifespan): uvicorn puede arrancar antes del lifespan
+# y dotenv por defecto no pisa variables ya definidas en el proceso.
+_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+if _ENV_FILE.is_file():
+    load_dotenv(_ENV_FILE, override=True)
+
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -45,8 +51,8 @@ import json as _json
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # .env en la raíz del repo (api/ -> padre); no depender solo del CWD de uvicorn.
-    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+    if _ENV_FILE.is_file():
+        load_dotenv(_ENV_FILE, override=True)
 
     iol_u_present = bool(os.getenv("IOL_USERNAME", "").strip())
     iol_p_present = bool(os.getenv("IOL_PASSWORD", "").strip())
