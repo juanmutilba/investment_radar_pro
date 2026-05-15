@@ -683,6 +683,25 @@ def crypto_bot_paper_cycle(
         raise HTTPException(status_code=502, detail=f"Bot paper cycle: {e}") from e
 
 
+@app.post("/crypto/bot/execute-paper-strategy")
+def crypto_bot_execute_paper_strategy(
+    timeframe: str = Query("1h"),
+    limit: int = Query(200, ge=50, le=1000),
+    amount_usdt: float = Query(100, gt=0),
+):
+    """Ejecuta estrategia paper: abre posiciones simuladas para candidatos válidos."""
+    from services.crypto.bot_runner import execute_paper_strategy
+
+    try:
+        return execute_paper_strategy(
+            timeframe=timeframe, limit=limit, amount_usdt=amount_usdt
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Estrategia paper: {e}") from e
+
+
 @app.post("/crypto/paper/close")
 def crypto_paper_close(body: CryptoPaperCloseBody):
     from services.crypto.paper_portfolio import close_paper_position, get_paper_portfolio

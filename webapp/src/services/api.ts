@@ -564,6 +564,105 @@ export async function closeCryptoPaperPosition(payload: CryptoPaperClosePayload)
   return data;
 }
 
+export type CryptoPaperCycleCandidate = {
+  symbol: string;
+  timeframe?: string;
+  price?: number | null;
+  score?: number | null;
+  signal?: string | null;
+  trend?: string | null;
+  momentum?: string | null;
+  risk?: string | null;
+  rsi_14?: number | null;
+  macd_hist?: number | null;
+  error?: string | null;
+};
+
+export type CryptoPaperCyclePositionReview = {
+  id?: string;
+  symbol?: string;
+  quantity?: number;
+  amount_usdt?: number | null;
+  entry_price?: number;
+  current_price?: number | null;
+  unrealized_pnl_usdt?: number | null;
+  unrealized_pnl_pct?: number | null;
+  price_error?: string | null;
+};
+
+export type CryptoPaperCycleAction = {
+  symbol: string;
+  status: "executed" | "skipped";
+  reason?: string;
+  amount_usdt?: number;
+  score?: number | null;
+};
+
+export type CryptoPaperCycleResponse = {
+  timeframe: string;
+  limit?: number;
+  amount_usdt?: number;
+  candidates: CryptoPaperCycleCandidate[];
+  positions_review: CryptoPaperCyclePositionReview[];
+  actions: CryptoPaperCycleAction[];
+  message?: string | null;
+};
+
+function isCryptoPaperCycleResponse(data: unknown): data is CryptoPaperCycleResponse {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.timeframe === "string" &&
+    Array.isArray(o.candidates) &&
+    Array.isArray(o.positions_review) &&
+    Array.isArray(o.actions)
+  );
+}
+
+const CRYPTO_PAPER_CYCLE_LIMIT = 200;
+
+export async function getCryptoPaperCycle(
+  timeframe = "1h",
+  limit = CRYPTO_PAPER_CYCLE_LIMIT,
+): Promise<CryptoPaperCycleResponse> {
+  const q = new URLSearchParams({
+    timeframe: timeframe.trim(),
+    limit: String(limit),
+  });
+  const res = await fetch(`${BASE}/crypto/bot/paper-cycle?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoPaperCycleResponse(data)) {
+    throw new Error("Respuesta inesperada: /crypto/bot/paper-cycle");
+  }
+  return data;
+}
+
+export async function executeCryptoPaperStrategy(
+  timeframe = "1h",
+  limit = CRYPTO_PAPER_CYCLE_LIMIT,
+  amountUsdt = 100,
+): Promise<CryptoPaperCycleResponse> {
+  const q = new URLSearchParams({
+    timeframe: timeframe.trim(),
+    limit: String(limit),
+    amount_usdt: String(amountUsdt),
+  });
+  const res = await fetch(`${BASE}/crypto/bot/execute-paper-strategy?${q.toString()}`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoPaperCycleResponse(data)) {
+    throw new Error("Respuesta inesperada: /crypto/bot/execute-paper-strategy");
+  }
+  return data;
+}
+
 /** Fila tal como viene del Excel (claves pueden variar en casing); usar helpers al renderizar. */
 export type RadarRow = Record<string, unknown>;
 

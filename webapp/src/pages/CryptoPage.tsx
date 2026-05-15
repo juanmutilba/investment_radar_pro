@@ -4,6 +4,8 @@ import {
   closeCryptoPaperPosition,
   getCryptoAnalysis,
   getCryptoOhlcv,
+  executeCryptoPaperStrategy,
+  getCryptoPaperCycle,
   getCryptoPaperPortfolio,
   getCryptoScan,
   getCryptoStatus,
@@ -16,6 +18,7 @@ import {
   type CryptoAnalysisSignalKind,
   type CryptoOhlcvCandle,
   type CryptoOhlcvResponse,
+  type CryptoPaperCycleResponse,
   type CryptoPaperPortfolio,
   type CryptoPaperPosition,
   type CryptoScanRow,
@@ -27,6 +30,7 @@ const SYM_BTC = "BTC/USDT";
 const SYM_ETH = "ETH/USDT";
 const ANALYSIS_TF = "1h";
 const ANALYSIS_LIMIT = 200;
+const STRATEGY_DEFAULT_AMOUNT = 100;
 
 const dtFmt = new Intl.DateTimeFormat("es-AR", {
   dateStyle: "short",
@@ -193,6 +197,12 @@ export function CryptoPage() {
   const [paperReason, setPaperReason] = useState("");
   const [paperOpening, setPaperOpening] = useState(false);
   const [paperClosingId, setPaperClosingId] = useState<string | null>(null);
+  const [strategyTf, setStrategyTf] = useState("1h");
+  const [strategyAmountUsdt, setStrategyAmountUsdt] = useState(String(STRATEGY_DEFAULT_AMOUNT));
+  const [strategyCycle, setStrategyCycle] = useState<CryptoPaperCycleResponse | null>(null);
+  const [strategyLoading, setStrategyLoading] = useState(false);
+  const [strategyExecuting, setStrategyExecuting] = useState(false);
+  const [strategyError, setStrategyError] = useState<string | null>(null);
 
   const loadPaper = useCallback(async () => {
     setPaperLoading(true);
@@ -329,6 +339,44 @@ export function CryptoPage() {
   useEffect(() => {
     void loadPaper();
   }, [loadPaper]);
+
+  const handleSearchOpportunities = useCallback(async () => {
+    if (strategyLoading || strategyExecuting) return;
+    setStrategyLoading(true);
+    setStrategyError(null);
+    try {
+      const data = await getCryptoPaperCycle(strategyTf.trim() || "1h", ANALYSIS_LIMIT);
+      setStrategyCycle(data);
+    } catch (e: unknown) {
+      setStrategyError(e instanceof Error ? e.message : "Error al buscar oportunidades");
+    } finally {
+      setStrategyLoading(false);
+    }
+  }, [strategyExecuting, strategyLoading, strategyTf]);
+
+  const handleExecutePaperStrategy = useCallback(async () => {
+    if (strategyLoading || strategyExecuting) return;
+    const amount_usdt = parseFloat(strategyAmountUsdt.replace(",", "."));
+    if (!Number.isFinite(amount_usdt) || amount_usdt <= 0) {
+      setStrategyError("Monto USDT inválido");
+      return;
+    }
+    setStrategyExecuting(true);
+    setStrategyError(null);
+    try {
+      const data = await executeCryptoPaperStrategy(
+        strategyTf.trim() || "1h",
+        ANALYSIS_LIMIT,
+        amount_usdt,
+      );
+      setStrategyCycle(data);
+      await loadPaper();
+    } catch (e: unknown) {
+      setStrategyError(e instanceof Error ? e.message : "Error al ejecutar estrategia paper");
+    } finally {
+      setStrategyExecuting(false);
+    }
+  }, [loadPaper, strategyAmountUsdt, strategyExecuting, strategyLoading, strategyTf]);
 
   const handleOpenPaperMarketAmount = useCallback(async () => {
     if (paperOpening) return;
@@ -645,6 +693,150 @@ export function CryptoPage() {
           ) : null}
         </div>
       )}
+
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
+          Estrategia paper
+        </h2>
+        <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "48rem", fontSize: "0.9rem" }}>
+          Escanea señales compra_potencial en la watchlist. Buscar no abre posiciones; ejecutar abre paper
+          simulado por monto USDT (sin órdenes reales en Binance).
+        </p>
+        <div className="radar-toolbar" style={{ marginBottom: "0.75rem" }}>
+          <label className="radar-toolbar__field">
+            <span className="radar-toolbar__label">Timeframe</span>
+            <input
+              className="radar-toolbar__input"
+              value={strategyTf}
+              onChange={(ev) => setStrategyTf(ev.target.value)}
+              placeholder="1h"
+            />
+          </label>
+          <label className="radar-toolbar__field">
+            <span className="radar-toolbar__label">Monto USDT</span>
+            <input
+              className="radar-toolbar__input"
+              type="text"
+              inputMode="decimal"
+              value={strategyAmountUsdt}
+              onChange={(ev) => setStrategyAmountUsdt(ev.target.value)}
+              placeholder="100"
+            />
+          </label>
+          <button
+            type="button"
+            className="radar-refresh-btn"
+            onClick={() => void handleSearchOpportunities()}
+            disabled={strategyLoading || strategyExecuting}
+          >
+            {strategyLoading ? "Buscando…" : "Buscar oportunidades"}
+          </button>
+          <button
+            type="button"
+            className="radar-refresh-btn"
+            onClick={() => void handleExecutePaperStrategy()}
+            disabled={strategyLoading || strategyExecuting}
+          >
+            {strategyExecuting ? "Ejecutando…" : "Ejecutar estrategia paper"}
+          </button>
+        </div>
+        {strategyError ? (
+          <p className="msg-error" style={{ fontSize: "0.875rem", marginBottom: "0.65rem" }}>
+            {strategyError}
+          </p>
+        ) : null}
+        {strategyCycle && strategyCycle.candidates.length === 0 && !strategyLoading && !strategyExecuting ? (
+          <p className="msg-muted" style={{ marginBottom: "0.75rem" }}>
+            {strategyCycle.message ?? "No hay oportunidades (compra_potencial) en este ciclo."}
+          </p>
+        ) : null}
+        {strategyCycle && strategyCycle.candidates.length > 0 ? (
+          <>
+            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+              Candidatos ({strategyCycle.candidates.length})
+            </h3>
+            <div className="table-wrap" style={{ marginBottom: "1rem" }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Símbolo</th>
+                    <th style={{ textAlign: "right" }}>Score</th>
+                    <th>Señal</th>
+                    <th style={{ textAlign: "right" }}>Precio</th>
+                    <th style={{ textAlign: "right" }}>RSI</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {strategyCycle.candidates.map((c) => (
+                    <tr key={c.symbol}>
+                      <td>
+                        <strong>{c.symbol}</strong>
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        {c.score !== null && c.score !== undefined ? c.score : "—"}
+                      </td>
+                      <td>
+                        {c.signal ? (
+                          <span className={signalBadgeClass(c.signal as CryptoAnalysisSignalKind)}>
+                            {signalLabelEs(c.signal as CryptoAnalysisSignalKind)}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td style={{ textAlign: "right" }}>{fmtPrice(c.price ?? null)}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {c.rsi_14 !== null && c.rsi_14 !== undefined ? c.rsi_14.toFixed(2) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {strategyCycle.positions_review.length > 0 ? (
+              <p className="msg-muted" style={{ fontSize: "0.85rem", marginBottom: "0.75rem" }}>
+                Posiciones abiertas revisadas: {strategyCycle.positions_review.length}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+        {strategyCycle && strategyCycle.actions.length > 0 ? (
+          <>
+            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+              Acciones ({strategyCycle.actions.length})
+            </h3>
+            <div className="table-wrap" style={{ marginBottom: "0.5rem" }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Símbolo</th>
+                    <th>Estado</th>
+                    <th style={{ textAlign: "right" }}>Monto USDT</th>
+                    <th>Detalle</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {strategyCycle.actions.map((a, i) => (
+                    <tr key={`${a.symbol}-${i}`}>
+                      <td>{a.symbol}</td>
+                      <td>{a.status === "executed" ? "Ejecutada" : "Omitida"}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {a.amount_usdt !== undefined ? fmtUsdt(a.amount_usdt) : "—"}
+                      </td>
+                      <td className={a.status === "skipped" ? "msg-error" : "msg-muted"} style={{ fontSize: "0.82rem" }}>
+                        {a.reason ?? "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : null}
+        {strategyCycle?.message && strategyCycle.candidates.length > 0 && strategyCycle.actions.length === 0 ? (
+          <p className="msg-muted">{strategyCycle.message}</p>
+        ) : null}
+      </div>
 
       <div className="card" style={{ marginBottom: "1rem" }}>
         <div
