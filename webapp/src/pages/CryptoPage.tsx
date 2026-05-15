@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { PaperSimEquityCurvePanel } from "@/components/crypto/PaperSimEquityCurvePanel";
 import type { CSSProperties } from "react";
 import {
   closeCryptoPaperPosition,
@@ -444,13 +445,7 @@ function CryptoAnalysisCard({ title, payload }: { title: string; payload: Crypto
   );
 }
 
-function PaperMetricsPanel({
-  paperMetrics,
-  paperEquityCurve,
-}: {
-  paperMetrics: CryptoPaperMetrics | null;
-  paperEquityCurve: CryptoPaperEquityCurve | null;
-}) {
+function PaperMetricsPanel({ paperMetrics }: { paperMetrics: CryptoPaperMetrics | null }) {
   if (!paperMetrics || paperMetrics.closed_trades <= 0) {
     return (
       <p className="msg-muted" style={{ marginTop: 0, marginBottom: 0, fontSize: "0.875rem" }}>
@@ -557,24 +552,6 @@ function PaperMetricsPanel({
           {paperMetrics.current_loss_streak} (máx. {paperMetrics.max_loss_streak})
         </div>
       </div>
-      {paperEquityCurve && paperEquityCurve.summary.trades_count > 0 ? (
-        <>
-          <div className="stat dashboard-stat" style={{ margin: 0 }}>
-            <div className="stat__label">Max drawdown</div>
-            <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.max_drawdown_usdt)}>
-              {fmtUsdt(paperEquityCurve.summary.max_drawdown_usdt)}
-            </div>
-          </div>
-          <div className="stat dashboard-stat" style={{ margin: 0 }}>
-            <div className="stat__label">Max drawdown %</div>
-            <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.max_drawdown_pct)}>
-              {paperEquityCurve.summary.max_drawdown_pct !== null
-                ? fmtPct(paperEquityCurve.summary.max_drawdown_pct)
-                : "—"}
-            </div>
-          </div>
-        </>
-      ) : null}
     </div>
   );
 }
@@ -585,7 +562,7 @@ function PaperClosedTradesPanel({ paper }: { paper: CryptoPaperPortfolio }) {
       ? ` (mostrando ${paper.trades.length} de ${paper.trades_total})`
       : "";
   return (
-    <details className="crypto-history-details" open>
+    <details className="crypto-history-details">
       <summary className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
         Últimos trades cerrados{summary}
       </summary>
@@ -2348,10 +2325,13 @@ export function CryptoPage() {
         </div>
         {paperError ? <p className="msg-error">{paperError}</p> : null}
         {paperInitialLoading && !paper ? <p className="msg-muted">Cargando historial…</p> : null}
+      </div>
+      <PaperSimEquityCurvePanel paperEquityCurve={paperEquityCurve} />
+      <div className="card" style={{ marginBottom: "1rem" }}>
         <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
           Métricas paper
         </h3>
-        <PaperMetricsPanel paperMetrics={paperMetrics} paperEquityCurve={paperEquityCurve} />
+        <PaperMetricsPanel paperMetrics={paperMetrics} />
         {paper ? (
           <div style={{ marginTop: "1.25rem", opacity: paperRefreshing ? 0.88 : 1, transition: "opacity 0.15s ease" }}>
             <PaperClosedTradesPanel paper={paper} />
