@@ -598,14 +598,20 @@ export type CryptoPaperCycleAction = {
   score?: number | null;
 };
 
+export type CryptoPaperCycleStatus = "opened" | "no_opportunity" | "skipped" | "error";
+
 export type CryptoPaperCycleResponse = {
   timeframe: string;
   limit?: number;
   amount_usdt?: number;
+  scanned_count?: number;
+  candidates_count?: number;
+  opened_count?: number;
+  status?: CryptoPaperCycleStatus;
+  message?: string | null;
   candidates: CryptoPaperCycleCandidate[];
   positions_review: CryptoPaperCyclePositionReview[];
   actions: CryptoPaperCycleAction[];
-  message?: string | null;
 };
 
 function isCryptoPaperCycleResponse(data: unknown): data is CryptoPaperCycleResponse {

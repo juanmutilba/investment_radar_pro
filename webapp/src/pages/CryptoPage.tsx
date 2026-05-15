@@ -107,6 +107,53 @@ function pnlStyle(v: number | null | undefined): CSSProperties {
   return { color: "var(--text-muted)" };
 }
 
+function strategyResultBannerStyle(
+  cycle: CryptoPaperCycleResponse,
+  lastMode: "search" | "execute",
+): CSSProperties {
+  const base: CSSProperties = {
+    marginBottom: "0.85rem",
+    padding: "0.65rem 0.85rem",
+    borderRadius: "8px",
+    border: "1px solid var(--border)",
+    fontSize: "0.9rem",
+  };
+  if (lastMode === "search") {
+    return {
+      ...base,
+      background: "rgba(100, 116, 139, 0.12)",
+      borderColor: "rgba(100, 116, 139, 0.35)",
+      color: "var(--text-muted)",
+    };
+  }
+  const opened = cycle.opened_count ?? 0;
+  if (cycle.status === "opened" || opened > 0) {
+    return {
+      ...base,
+      background: "rgba(21, 128, 61, 0.1)",
+      borderColor: "rgba(21, 128, 61, 0.45)",
+      color: "rgba(21, 128, 61, 0.96)",
+    };
+  }
+  if (cycle.status === "no_opportunity" || (cycle.status === "skipped" && opened === 0)) {
+    return {
+      ...base,
+      background: "rgba(194, 65, 12, 0.1)",
+      borderColor: "rgba(194, 65, 12, 0.45)",
+      color: "rgba(194, 65, 12, 0.96)",
+    };
+  }
+  if (cycle.status === "error") {
+    return {
+      ...base,
+      background: "rgba(185, 28, 28, 0.1)",
+      borderColor: "rgba(185, 28, 28, 0.45)",
+      color: "rgba(185, 28, 28, 0.96)",
+    };
+  }
+  return base;
+}
+
 function CryptoAnalysisCard({ title, payload }: { title: string; payload: CryptoAnalysisPayload | null }) {
   if (!payload) {
     return (
@@ -203,6 +250,7 @@ export function CryptoPage() {
   const [strategyLoading, setStrategyLoading] = useState(false);
   const [strategyExecuting, setStrategyExecuting] = useState(false);
   const [strategyError, setStrategyError] = useState<string | null>(null);
+  const [strategyLastMode, setStrategyLastMode] = useState<"search" | "execute">("search");
 
   const loadPaper = useCallback(async () => {
     setPaperLoading(true);
@@ -346,6 +394,7 @@ export function CryptoPage() {
     setStrategyError(null);
     try {
       const data = await getCryptoPaperCycle(strategyTf.trim() || "1h", ANALYSIS_LIMIT);
+      setStrategyLastMode("search");
       setStrategyCycle(data);
     } catch (e: unknown) {
       setStrategyError(e instanceof Error ? e.message : "Error al buscar oportunidades");
@@ -369,6 +418,7 @@ export function CryptoPage() {
         ANALYSIS_LIMIT,
         amount_usdt,
       );
+      setStrategyLastMode("execute");
       setStrategyCycle(data);
       await loadPaper();
     } catch (e: unknown) {
@@ -745,10 +795,15 @@ export function CryptoPage() {
             {strategyError}
           </p>
         ) : null}
-        {strategyCycle && strategyCycle.candidates.length === 0 && !strategyLoading && !strategyExecuting ? (
-          <p className="msg-muted" style={{ marginBottom: "0.75rem" }}>
-            {strategyCycle.message ?? "No hay oportunidades (compra_potencial) en este ciclo."}
-          </p>
+        {strategyCycle && !strategyLoading && !strategyExecuting ? (
+          <div style={strategyResultBannerStyle(strategyCycle, strategyLastMode)}>
+            <p style={{ margin: 0, fontWeight: 600 }}>{strategyCycle.message ?? "—"}</p>
+            <p style={{ margin: "0.4rem 0 0", fontSize: "0.85rem", opacity: 0.95 }}>
+              Activos escaneados: {strategyCycle.scanned_count ?? "—"} · Candidatos:{" "}
+              {strategyCycle.candidates_count ?? strategyCycle.candidates.length} · Posiciones abiertas:{" "}
+              {strategyCycle.opened_count ?? 0}
+            </p>
+          </div>
         ) : null}
         {strategyCycle && strategyCycle.candidates.length > 0 ? (
           <>
@@ -762,7 +817,8 @@ export function CryptoPage() {
                     <th>Símbolo</th>
                     <th style={{ textAlign: "right" }}>Score</th>
                     <th>Señal</th>
-                    <th style={{ textAlign: "right" }}>Precio</th>
+                    <th>Tendencia</th>
+                    <th>Riesgo</th>
                     <th style={{ textAlign: "right" }}>RSI</th>
                   </tr>
                 </thead>
@@ -784,7 +840,8 @@ export function CryptoPage() {
                           "—"
                         )}
                       </td>
-                      <td style={{ textAlign: "right" }}>{fmtPrice(c.price ?? null)}</td>
+                      <td>{c.trend ?? "—"}</td>
+                      <td>{c.risk ?? "—"}</td>
                       <td style={{ textAlign: "right" }}>
                         {c.rsi_14 !== null && c.rsi_14 !== undefined ? c.rsi_14.toFixed(2) : "—"}
                       </td>
@@ -793,11 +850,6 @@ export function CryptoPage() {
                 </tbody>
               </table>
             </div>
-            {strategyCycle.positions_review.length > 0 ? (
-              <p className="msg-muted" style={{ fontSize: "0.85rem", marginBottom: "0.75rem" }}>
-                Posiciones abiertas revisadas: {strategyCycle.positions_review.length}
-              </p>
-            ) : null}
           </>
         ) : null}
         {strategyCycle && strategyCycle.actions.length > 0 ? (
@@ -832,9 +884,6 @@ export function CryptoPage() {
               </table>
             </div>
           </>
-        ) : null}
-        {strategyCycle?.message && strategyCycle.candidates.length > 0 && strategyCycle.actions.length === 0 ? (
-          <p className="msg-muted">{strategyCycle.message}</p>
         ) : null}
       </div>
 

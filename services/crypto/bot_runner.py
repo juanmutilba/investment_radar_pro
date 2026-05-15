@@ -47,27 +47,46 @@ def evaluate_open_positions(portfolio: dict[str, Any]) -> list[dict[str, Any]]:
     return review
 
 
+def _cycle_message_search(scanned_count: int, candidates_count: int) -> str:
+    if candidates_count == 0:
+        return "Sin oportunidades válidas en la watchlist actual."
+    return (
+        f"Búsqueda completada: {candidates_count} candidato(s) compra_potencial "
+        f"de {scanned_count} activos escaneados."
+    )
+
+
 def run_crypto_paper_cycle(timeframe: str = "1h", limit: int = 200) -> dict[str, Any]:
     """
-    Ejecuta scanner watchlist, filtra candidatos y revisa cartera paper.
-    actions siempre vacío hasta activar lógica automática.
+    Escanea toda la watchlist (scan_crypto_watchlist), filtra candidatos y revisa cartera.
+    actions vacío: solo búsqueda, sin aperturas automáticas.
     """
     from services.crypto.paper_portfolio import get_paper_portfolio
     from services.crypto.watchlist import scan_crypto_watchlist
 
     tf = (timeframe or "1h").strip() or "1h"
     lim = max(50, min(int(limit), 1000))
-    _log(f"run_crypto_paper_cycle: inicio timeframe={tf} limit={lim}")
+    _log(f"run_crypto_paper_cycle: inicio timeframe={tf} limit={lim} (watchlist completa)")
 
     scan_results = scan_crypto_watchlist(timeframe=tf, limit=lim)
+    scanned_count = len(scan_results)
     candidates = evaluate_entry_candidates(scan_results)
+    candidates_count = len(candidates)
     portfolio = get_paper_portfolio()
     positions_review = evaluate_open_positions(portfolio)
 
-    _log("run_crypto_paper_cycle: fin (sin acciones automáticas)")
+    message = _cycle_message_search(scanned_count, candidates_count)
+    _log(
+        f"run_crypto_paper_cycle: fin scanned_count={scanned_count} "
+        f"candidates_count={candidates_count}"
+    )
     return {
         "timeframe": tf,
         "limit": lim,
+        "scanned_count": scanned_count,
+        "candidates_count": candidates_count,
+        "opened_count": 0,
+        "message": message,
         "candidates": candidates,
         "positions_review": positions_review,
         "actions": [],
@@ -80,7 +99,7 @@ def execute_paper_strategy(
     amount_usdt: float = 100.0,
 ) -> dict[str, Any]:
     """
-    Escanea candidatos compra_potencial e intenta abrir paper por monto USDT.
+    Escanea toda la watchlist, filtra compra_potencial e intenta abrir paper por monto USDT.
     Sin órdenes reales; omite símbolos ya abiertos o sin cash.
     """
     import math
@@ -89,24 +108,45 @@ def execute_paper_strategy(
         get_paper_portfolio,
         open_paper_position_market_by_amount,
     )
+    from services.crypto.watchlist import scan_crypto_watchlist
 
     if not math.isfinite(amount_usdt) or amount_usdt <= 0:
         raise ValueError("amount_usdt debe ser > 0")
 
-    cycle = run_crypto_paper_cycle(timeframe=timeframe, limit=limit)
-    candidates: list[dict[str, Any]] = cycle.get("candidates") or []
+    tf = (timeframe or "1h").strip() or "1h"
+    lim = max(50, min(int(limit), 1000))
+    _log(f"execute_paper_strategy: inicio timeframe={tf} limit={lim} (watchlist completa)")
+
+    scan_results = scan_crypto_watchlist(timeframe=tf, limit=lim)
+    scanned_count = len(scan_results)
+    candidates = evaluate_entry_candidates(scan_results)
+    candidates_count = len(candidates)
     actions: list[dict[str, Any]] = []
 
     if not candidates:
-        _log("execute_paper_strategy: sin candidatos")
+        _log(
+            f"execute strategy scanned_count={scanned_count} "
+            f"candidates_count=0 opened_count=0"
+        )
+        portfolio = get_paper_portfolio()
         return {
-            **cycle,
+            "timeframe": tf,
+            "limit": lim,
             "amount_usdt": float(amount_usdt),
-            "actions": actions,
-            "message": "Sin oportunidades",
+            "scanned_count": scanned_count,
+            "candidates_count": 0,
+            "opened_count": 0,
+            "status": "no_opportunity",
+            "message": "Sin oportunidades válidas en la watchlist actual.",
+            "candidates": [],
+            "positions_review": evaluate_open_positions(portfolio),
+            "actions": [],
         }
 
-    _log(f"execute_paper_strategy: {len(candidates)} candidatos amount_usdt={amount_usdt}")
+    _log(
+        f"execute_paper_strategy: {candidates_count} candidatos "
+        f"amount_usdt={amount_usdt} (scan_crypto_watchlist)"
+    )
     for c in candidates:
         sym = str(c.get("symbol") or "").strip()
         if not sym:
@@ -143,16 +183,34 @@ def execute_paper_strategy(
             )
             _log(f"execute: {sym} error {e}")
 
+    opened_count = sum(1 for a in actions if a.get("status") == "executed")
+    skipped_count = len(actions) - opened_count
     portfolio = get_paper_portfolio()
     positions_review = evaluate_open_positions(portfolio)
-    executed_n = sum(1 for a in actions if a.get("status") == "executed")
-    _log(f"execute_paper_strategy: fin executed={executed_n} skipped={len(actions) - executed_n}")
+
+    if opened_count > 0:
+        status = "opened"
+        message = f"Estrategia ejecutada: se abrió {opened_count} posición paper."
+        if skipped_count > 0:
+            message += f" ({skipped_count} omitida(s).)"
+    else:
+        status = "skipped"
+        message = "Hubo candidatos, pero se omitieron por duplicados/cash/reglas."
+
+    _log(
+        f"execute strategy scanned_count={scanned_count} "
+        f"candidates_count={candidates_count} opened_count={opened_count}"
+    )
     return {
-        "timeframe": cycle["timeframe"],
-        "limit": cycle["limit"],
+        "timeframe": tf,
+        "limit": lim,
         "amount_usdt": float(amount_usdt),
+        "scanned_count": scanned_count,
+        "candidates_count": candidates_count,
+        "opened_count": opened_count,
+        "status": status,
+        "message": message,
         "candidates": candidates,
         "positions_review": positions_review,
         "actions": actions,
-        "message": None if executed_n > 0 else "Sin oportunidades ejecutadas",
     }
