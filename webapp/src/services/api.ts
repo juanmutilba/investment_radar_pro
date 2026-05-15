@@ -175,6 +175,98 @@ export async function getCryptoStatus(): Promise<CryptoStatusPayload> {
   return data;
 }
 
+/** GET /crypto/testnet/status — capa Testnet separada (sin secretos). */
+export type CryptoTestnetStatusPayload = {
+  configured: boolean;
+  enabled: boolean;
+  ccxt_available: boolean;
+  can_read_balance: boolean;
+  can_read_ticker: boolean;
+  testnet: boolean;
+  message: string;
+};
+
+export type CryptoTestnetBalanceRow = {
+  asset: string;
+  free: number;
+  used: number;
+  total: number;
+};
+
+export type CryptoTestnetBalancesPayload = {
+  ok: boolean;
+  error: string | null;
+  balances: CryptoTestnetBalanceRow[];
+  highlights: Record<string, number>;
+};
+
+export type CryptoTestnetTickerPayload = {
+  symbol: string;
+  last?: number | null;
+  percentage?: number | null;
+  bid?: number | null;
+  ask?: number | null;
+  baseVolume?: number | null;
+  quoteVolume?: number | null;
+};
+
+function isCryptoTestnetStatusPayload(data: unknown): data is CryptoTestnetStatusPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.configured === "boolean" &&
+    typeof o.enabled === "boolean" &&
+    typeof o.ccxt_available === "boolean" &&
+    typeof o.can_read_balance === "boolean" &&
+    typeof o.can_read_ticker === "boolean" &&
+    typeof o.testnet === "boolean" &&
+    typeof o.message === "string"
+  );
+}
+
+function isCryptoTestnetBalancesPayload(data: unknown): data is CryptoTestnetBalancesPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  if (typeof o.ok !== "boolean") return false;
+  if (o.error !== null && typeof o.error !== "string") return false;
+  if (!Array.isArray(o.balances)) return false;
+  if (o.highlights === null || typeof o.highlights !== "object") return false;
+  return true;
+}
+
+export async function getCryptoTestnetStatus(): Promise<CryptoTestnetStatusPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/status`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetStatusPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/testnet/status");
+  }
+  return data;
+}
+
+export async function getCryptoTestnetBalances(): Promise<CryptoTestnetBalancesPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/balances`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetBalancesPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/testnet/balances");
+  }
+  return data;
+}
+
+export async function getCryptoTestnetTicker(symbol: string): Promise<CryptoTestnetTickerPayload> {
+  const q = new URLSearchParams({ symbol: symbol.trim() });
+  const res = await fetch(`${BASE}/crypto/testnet/ticker?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  return (await res.json()) as CryptoTestnetTickerPayload;
+}
+
 export async function getCryptoTicker(symbol: string): Promise<CryptoTicker> {
   const q = new URLSearchParams({ symbol: symbol.trim() });
   const res = await fetch(`${BASE}/crypto/ticker?${q.toString()}`);

@@ -13,6 +13,7 @@ import {
   saveUseFavoritesForSignals,
 } from "@/components/crypto/cryptoPrincipalPrefs";
 import { PaperSimEquityCurvePanel } from "@/components/crypto/PaperSimEquityCurvePanel";
+import { CryptoTestnetPanel } from "@/components/crypto/CryptoTestnetPanel";
 import type { CSSProperties } from "react";
 import {
   closeCryptoPaperPosition,
@@ -60,7 +61,7 @@ const AUTO_DEFAULT_EXITS_INTERVAL_MIN = 5;
 const AUTO_DEFAULT_STRATEGY_INTERVAL_MIN = 30;
 const AUTO_STATUS_POLL_MS = 20_000;
 
-type CryptoPageTab = "principal" | "bot" | "historial";
+type CryptoPageTab = "principal" | "bot" | "historial" | "testnet";
 
 const numFmt2 = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
@@ -1322,6 +1323,15 @@ export function CryptoPage() {
         >
           Historial (Simulado)
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeCryptoTab === "testnet"}
+          className={`crypto-page-tab${activeCryptoTab === "testnet" ? " crypto-page-tab-active" : ""}`}
+          onClick={() => setActiveCryptoTab("testnet")}
+        >
+          Testnet Binance
+        </button>
       </div>
 
       {activeCryptoTab === "principal" && (
@@ -2316,6 +2326,8 @@ export function CryptoPage() {
 
         </>
       )}
+
+      {activeCryptoTab === "testnet" && <CryptoTestnetPanel />}
 
       {activeCryptoTab === "historial" && (
         <>

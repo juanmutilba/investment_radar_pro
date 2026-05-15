@@ -467,6 +467,39 @@ def crypto_status():
     return crypto_status_payload()
 
 
+@app.get("/crypto/testnet/status")
+def crypto_testnet_status():
+    """Estado Binance Spot Testnet (capa separada; sin secretos)."""
+    from services.crypto import binance_testnet as tn
+
+    return tn.get_testnet_status()
+
+
+@app.get("/crypto/testnet/balances")
+def crypto_testnet_balances():
+    """Balances spot testnet (solo lectura)."""
+    from services.crypto import binance_testnet as tn
+
+    return tn.get_testnet_balances()
+
+
+@app.get("/crypto/testnet/ticker")
+def crypto_testnet_ticker(
+    symbol: str = Query("BTC/USDT", min_length=3, description="Par spot CCXT, ej. BTC/USDT"),
+):
+    """Ticker spot testnet (sandbox; solo lectura)."""
+    from services.crypto import binance_testnet as tn
+
+    try:
+        return tn.get_testnet_ticker(symbol.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Binance testnet: {e}") from e
+
+
 @app.get("/crypto/ticker")
 def crypto_ticker(
     symbol: str = Query(..., min_length=3, description="Par spot CCXT, ej. BTC/USDT"),
