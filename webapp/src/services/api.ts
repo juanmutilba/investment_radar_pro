@@ -399,6 +399,9 @@ export type CryptoPaperPosition = {
   take_profit: number | null;
   trailing_stop_pct?: number | null;
   highest_price?: number | null;
+  break_even_trigger_pct?: number | null;
+  break_even_plus_pct?: number | null;
+  break_even_active?: boolean | null;
   exit_policy?: string | null;
   current_price?: number | null;
   market_value_usdt?: number | null;
@@ -610,6 +613,8 @@ export type CryptoPaperStrategyParams = {
   takeProfitPct?: number;
   trailingStopPct?: number;
   maxOpenPositions?: number;
+  breakEvenTriggerPct?: number;
+  breakEvenPlusPct?: number;
 };
 
 export type CryptoPaperReviewExitsResponse = {
@@ -675,6 +680,8 @@ export async function executeCryptoPaperStrategy(
     take_profit_pct: String(params.takeProfitPct ?? 4),
     trailing_stop_pct: String(params.trailingStopPct ?? 1.5),
     max_open_positions: String(params.maxOpenPositions ?? 3),
+    break_even_trigger_pct: String(params.breakEvenTriggerPct ?? 0),
+    break_even_plus_pct: String(params.breakEvenPlusPct ?? 0),
   });
   const res = await fetch(`${BASE}/crypto/bot/execute-paper-strategy?${q.toString()}`, {
     method: "POST",

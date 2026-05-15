@@ -117,12 +117,17 @@ def _apply_risk_fields(
     stop_loss_pct: float | None = None,
     take_profit_pct: float | None = None,
     trailing_stop_pct: float | None = None,
+    break_even_trigger_pct: float | None = None,
+    break_even_plus_pct: float | None = None,
     exit_policy: str | None = None,
 ) -> None:
     pos["highest_price"] = round(float(entry_price), 8)
     pos["stop_loss"] = None
     pos["take_profit"] = None
     pos["trailing_stop_pct"] = None
+    pos["break_even_trigger_pct"] = None
+    pos["break_even_plus_pct"] = None
+    pos["break_even_active"] = False
     pos["exit_policy"] = (exit_policy or "").strip() or None
 
     if stop_loss_pct is not None and math.isfinite(stop_loss_pct) and stop_loss_pct > 0:
@@ -131,6 +136,14 @@ def _apply_risk_fields(
         pos["take_profit"] = round(entry_price * (1.0 + take_profit_pct / 100.0), 8)
     if trailing_stop_pct is not None and math.isfinite(trailing_stop_pct) and trailing_stop_pct > 0:
         pos["trailing_stop_pct"] = round(float(trailing_stop_pct), 6)
+    if (
+        break_even_trigger_pct is not None
+        and math.isfinite(break_even_trigger_pct)
+        and break_even_trigger_pct > 0
+    ):
+        pos["break_even_trigger_pct"] = round(float(break_even_trigger_pct), 6)
+        plus = break_even_plus_pct if break_even_plus_pct is not None else 0.0
+        pos["break_even_plus_pct"] = round(float(plus), 6) if math.isfinite(float(plus)) else 0.0
 
     if not pos["exit_policy"]:
         parts: list[str] = []
@@ -140,8 +153,46 @@ def _apply_risk_fields(
             parts.append("take_profit")
         if pos["trailing_stop_pct"] is not None:
             parts.append("trailing_stop")
+        if pos.get("break_even_trigger_pct") is not None:
+            parts.append("break_even")
         if parts:
             pos["exit_policy"] = "+".join(parts)
+
+
+def _maybe_apply_break_even(p: dict[str, Any], current_price: float) -> bool:
+    """Sube stop_loss a break-even si se alcanzó el trigger; nunca baja el stop existente."""
+    raw_trig = p.get("break_even_trigger_pct")
+    if raw_trig is None:
+        return False
+    try:
+        trigger_pct = float(raw_trig)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(trigger_pct) or trigger_pct <= 0:
+        return False
+
+    entry = float(p.get("entry_price") or 0)
+    if entry <= 0 or current_price < entry * (1.0 + trigger_pct / 100.0):
+        return False
+
+    plus_raw = p.get("break_even_plus_pct")
+    plus_pct = float(plus_raw) if plus_raw is not None and math.isfinite(float(plus_raw)) else 0.0
+    be_sl = entry * (1.0 + plus_pct / 100.0)
+
+    cur_sl = p.get("stop_loss")
+    if cur_sl is None or not math.isfinite(float(cur_sl)):
+        new_sl = be_sl
+    else:
+        new_sl = max(float(cur_sl), be_sl)
+
+    changed = False
+    if cur_sl is None or abs(new_sl - float(cur_sl)) > 1e-12:
+        p["stop_loss"] = round(new_sl, 8)
+        changed = True
+    if not p.get("break_even_active"):
+        p["break_even_active"] = True
+        changed = True
+    return changed
 
 
 def _fetch_symbol_price(symbol: str) -> float:
@@ -204,6 +255,8 @@ def open_paper_position_market_by_amount(
     stop_loss_pct: float | None = None,
     take_profit_pct: float | None = None,
     trailing_stop_pct: float | None = None,
+    break_even_trigger_pct: float | None = None,
+    break_even_plus_pct: float | None = None,
     exit_policy: str | None = None,
 ) -> dict[str, Any]:
     """Abre posición paper por monto USDT al precio ticker (sin orden real)."""
@@ -248,6 +301,8 @@ def open_paper_position_market_by_amount(
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
         trailing_stop_pct=trailing_stop_pct,
+        break_even_trigger_pct=break_even_trigger_pct,
+        break_even_plus_pct=break_even_plus_pct,
         exit_policy=exit_policy,
     )
 
@@ -263,6 +318,8 @@ def open_paper_position(
     stop_loss_pct: float | None = None,
     take_profit_pct: float | None = None,
     trailing_stop_pct: float | None = None,
+    break_even_trigger_pct: float | None = None,
+    break_even_plus_pct: float | None = None,
     exit_policy: str | None = None,
 ) -> dict[str, Any]:
     sym = _validate_long_open(symbol, side, price, quantity)
@@ -290,6 +347,8 @@ def open_paper_position(
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
         trailing_stop_pct=trailing_stop_pct,
+        break_even_trigger_pct=break_even_trigger_pct,
+        break_even_plus_pct=break_even_plus_pct,
         exit_policy=exit_policy,
     )
     if price_source:
@@ -388,6 +447,9 @@ def review_paper_positions_for_exit() -> list[dict[str, Any]]:
         if cp > highest:
             p["highest_price"] = round(cp, 8)
             highest = cp
+            dirty = True
+
+        if _maybe_apply_break_even(p, cp):
             dirty = True
 
         exit_reason: str | None = None

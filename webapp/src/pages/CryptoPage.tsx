@@ -260,6 +260,8 @@ export function CryptoPage() {
   const [strategyTakeProfitPct, setStrategyTakeProfitPct] = useState(String(STRATEGY_DEFAULT_TAKE_PROFIT));
   const [strategyTrailingPct, setStrategyTrailingPct] = useState(String(STRATEGY_DEFAULT_TRAILING));
   const [strategyMaxPositions, setStrategyMaxPositions] = useState(String(STRATEGY_DEFAULT_MAX_POSITIONS));
+  const [strategyBreakEvenTriggerPct, setStrategyBreakEvenTriggerPct] = useState("");
+  const [strategyBreakEvenPlusPct, setStrategyBreakEvenPlusPct] = useState("0");
   const [strategyReviewing, setStrategyReviewing] = useState(false);
 
   const loadPaper = useCallback(async () => {
@@ -422,12 +424,20 @@ export function CryptoPage() {
         takeProfitPct: number;
         trailingStopPct: number;
         maxOpenPositions: number;
+        breakEvenTriggerPct: number;
+        breakEvenPlusPct: number;
       } => {
     const amountUsdt = parseFloat(strategyAmountUsdt.replace(",", "."));
     const stopLossPct = parseFloat(strategyStopLossPct.replace(",", "."));
     const takeProfitPct = parseFloat(strategyTakeProfitPct.replace(",", "."));
     const trailingStopPct = parseFloat(strategyTrailingPct.replace(",", "."));
     const maxOpenPositions = parseInt(strategyMaxPositions, 10);
+    const beTrigRaw = strategyBreakEvenTriggerPct.trim();
+    const breakEvenTriggerPct = beTrigRaw === "" ? 0 : parseFloat(beTrigRaw.replace(",", "."));
+    const breakEvenPlusPct =
+      strategyBreakEvenPlusPct.trim() === ""
+        ? 0
+        : parseFloat(strategyBreakEvenPlusPct.replace(",", "."));
     if (!Number.isFinite(amountUsdt) || amountUsdt <= 0) {
       return { ok: false, message: "Monto USDT inválido" };
     }
@@ -443,6 +453,12 @@ export function CryptoPage() {
     if (!Number.isFinite(maxOpenPositions) || maxOpenPositions < 1) {
       return { ok: false, message: "Máx. posiciones inválido" };
     }
+    if (beTrigRaw !== "" && (!Number.isFinite(breakEvenTriggerPct) || breakEvenTriggerPct < 0)) {
+      return { ok: false, message: "Break even trigger % inválido" };
+    }
+    if (!Number.isFinite(breakEvenPlusPct) || breakEvenPlusPct < 0) {
+      return { ok: false, message: "Break even plus % inválido" };
+    }
     return {
       ok: true,
       amountUsdt,
@@ -450,9 +466,13 @@ export function CryptoPage() {
       takeProfitPct,
       trailingStopPct,
       maxOpenPositions,
+      breakEvenTriggerPct,
+      breakEvenPlusPct,
     };
   }, [
     strategyAmountUsdt,
+    strategyBreakEvenPlusPct,
+    strategyBreakEvenTriggerPct,
     strategyMaxPositions,
     strategyStopLossPct,
     strategyTakeProfitPct,
@@ -501,6 +521,8 @@ export function CryptoPage() {
         takeProfitPct: risk.takeProfitPct,
         trailingStopPct: risk.trailingStopPct,
         maxOpenPositions: risk.maxOpenPositions,
+        breakEvenTriggerPct: risk.breakEvenTriggerPct,
+        breakEvenPlusPct: risk.breakEvenPlusPct,
       });
       setStrategyLastMode("execute");
       setStrategyCycle(data);
@@ -908,6 +930,28 @@ export function CryptoPage() {
               placeholder="3"
             />
           </label>
+          <label className="radar-toolbar__field">
+            <span className="radar-toolbar__label">Break even trigger %</span>
+            <input
+              className="radar-toolbar__input"
+              type="text"
+              inputMode="decimal"
+              value={strategyBreakEvenTriggerPct}
+              onChange={(ev) => setStrategyBreakEvenTriggerPct(ev.target.value)}
+              placeholder="opcional"
+            />
+          </label>
+          <label className="radar-toolbar__field">
+            <span className="radar-toolbar__label">Break even plus %</span>
+            <input
+              className="radar-toolbar__input"
+              type="text"
+              inputMode="decimal"
+              value={strategyBreakEvenPlusPct}
+              onChange={(ev) => setStrategyBreakEvenPlusPct(ev.target.value)}
+              placeholder="0"
+            />
+          </label>
           <button
             type="button"
             className="radar-refresh-btn"
@@ -1177,6 +1221,7 @@ export function CryptoPage() {
                       <th style={{ textAlign: "right" }}>Take profit</th>
                       <th style={{ textAlign: "right" }}>Trail %</th>
                       <th style={{ textAlign: "right" }}>Máx precio</th>
+                      <th>Break-even</th>
                       <th>Política</th>
                       <th style={{ textAlign: "right" }}>Precio actual</th>
                       <th style={{ textAlign: "right" }}>PnL USDT</th>
@@ -1201,6 +1246,19 @@ export function CryptoPage() {
                             : "—"}
                         </td>
                         <td style={{ textAlign: "right" }}>{fmtPrice(pos.highest_price)}</td>
+                        <td>
+                          {pos.break_even_active ? (
+                            <span className="radar-badge radar-badge--conv-alta">Activo</span>
+                          ) : pos.break_even_trigger_pct !== null &&
+                              pos.break_even_trigger_pct !== undefined &&
+                              pos.break_even_trigger_pct > 0 ? (
+                            <span className="msg-muted" style={{ fontSize: "0.78rem" }}>
+                              Pendiente
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
                         <td className="msg-muted" style={{ fontSize: "0.78rem" }}>
                           {pos.exit_policy || "—"}
                         </td>

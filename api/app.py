@@ -704,6 +704,8 @@ def crypto_bot_execute_paper_strategy(
     take_profit_pct: float = Query(4, ge=0),
     trailing_stop_pct: float = Query(1.5, ge=0),
     max_open_positions: int = Query(3, ge=1, le=50),
+    break_even_trigger_pct: float = Query(0, ge=0),
+    break_even_plus_pct: float = Query(0, ge=0),
 ):
     """Ejecuta estrategia paper con gestión de riesgo (simulación; sin órdenes reales)."""
     from services.crypto.bot_runner import execute_paper_strategy
@@ -717,6 +719,8 @@ def crypto_bot_execute_paper_strategy(
             take_profit_pct=take_profit_pct,
             trailing_stop_pct=trailing_stop_pct,
             max_open_positions=max_open_positions,
+            break_even_trigger_pct=break_even_trigger_pct,
+            break_even_plus_pct=break_even_plus_pct,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

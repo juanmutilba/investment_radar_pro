@@ -41,6 +41,7 @@ def evaluate_open_positions(portfolio: dict[str, Any]) -> list[dict[str, Any]]:
                 "take_profit": p.get("take_profit"),
                 "trailing_stop_pct": p.get("trailing_stop_pct"),
                 "highest_price": p.get("highest_price"),
+                "break_even_active": p.get("break_even_active"),
                 "exit_policy": p.get("exit_policy"),
                 "current_price": p.get("current_price"),
                 "unrealized_pnl_usdt": p.get("unrealized_pnl_usdt"),
@@ -103,6 +104,8 @@ def execute_paper_strategy(
     take_profit_pct: float = 4.0,
     trailing_stop_pct: float = 1.5,
     max_open_positions: int = 3,
+    break_even_trigger_pct: float = 0.0,
+    break_even_plus_pct: float = 0.0,
 ) -> dict[str, Any]:
     """
     Revisa salidas, escanea watchlist y abre como máximo 1 posición nueva por ejecución.
@@ -199,6 +202,10 @@ def execute_paper_strategy(
                 stop_loss_pct=stop_loss_pct,
                 take_profit_pct=take_profit_pct,
                 trailing_stop_pct=trailing_stop_pct,
+                break_even_trigger_pct=break_even_trigger_pct
+                if break_even_trigger_pct > 0
+                else None,
+                break_even_plus_pct=break_even_plus_pct,
             )
             opened_count += 1
             open_count += 1
