@@ -154,8 +154,7 @@ export function CryptoFavoritesSection({
         Favoritos
       </h2>
       <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", fontSize: "0.9rem" }}>
-        Lista editable en esta sesión (sin guardar en servidor). BTC y ETH también aparecen arriba como mercados
-        principales.
+        Lista editable; se guarda en este navegador. BTC y ETH también aparecen arriba como mercados principales.
       </p>
       <div className="radar-toolbar" style={{ marginBottom: "0.75rem" }}>
         <label className="radar-toolbar__field" style={{ minWidth: "12rem", flex: "1 1 200px" }}>

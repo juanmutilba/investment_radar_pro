@@ -2,11 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CryptoFavoritesSection,
   CryptoPrincipalTickerCard,
-  DEFAULT_FAVORITE_SYMBOLS,
   normalizeFavoriteSymbolInput,
   SYM_ARS_BINANCE,
   type PrincipalFavoriteQuote,
 } from "@/components/crypto/CryptoPrincipalMarket";
+import {
+  loadFavoriteSymbols,
+  loadUseFavoritesForSignals,
+  saveFavoriteSymbols,
+  saveUseFavoritesForSignals,
+} from "@/components/crypto/cryptoPrincipalPrefs";
 import { PaperSimEquityCurvePanel } from "@/components/crypto/PaperSimEquityCurvePanel";
 import type { CSSProperties } from "react";
 import {
@@ -587,8 +592,8 @@ export function CryptoPage() {
   const [status, setStatus] = useState<CryptoStatusPayload | null>(null);
   const [tickerCache, setTickerCache] = useState<Record<string, CryptoTicker | null>>({});
   const [analysisCache, setAnalysisCache] = useState<Record<string, CryptoAnalysisPayload | null>>({});
-  const [favoriteSymbols, setFavoriteSymbols] = useState<string[]>(() => [...DEFAULT_FAVORITE_SYMBOLS]);
-  const [signalsUseFavorites, setSignalsUseFavorites] = useState(true);
+  const [favoriteSymbols, setFavoriteSymbols] = useState<string[]>(() => loadFavoriteSymbols());
+  const [signalsUseFavorites, setSignalsUseFavorites] = useState(() => loadUseFavoritesForSignals());
   const [favoriteAddDraft, setFavoriteAddDraft] = useState("");
   const [favoriteAddError, setFavoriteAddError] = useState<string | null>(null);
   const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([]);
@@ -794,6 +799,14 @@ export function CryptoPage() {
   useEffect(() => {
     void load(false);
   }, [load]);
+
+  useEffect(() => {
+    saveFavoriteSymbols(favoriteSymbols);
+  }, [favoriteSymbols]);
+
+  useEffect(() => {
+    saveUseFavoritesForSignals(signalsUseFavorites);
+  }, [signalsUseFavorites]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1393,6 +1406,9 @@ export function CryptoPage() {
             />
             Usar favoritos para señales técnicas
           </label>
+          <p className="msg-muted" style={{ margin: "0 0 0.75rem", maxWidth: "48rem", fontSize: "0.82rem" }}>
+            Se guarda en este navegador.
+          </p>
           <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "48rem", fontSize: "0.9rem" }}>
             Indicadores calculados en backend (SMA, EMA, RSI, MACD) sobre OHLCV; clasificación orientativa, no
             recomendación de inversión.
