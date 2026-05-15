@@ -7,6 +7,7 @@ import {
   executeCryptoPaperStrategy,
   getCryptoPaperCycle,
   reviewCryptoPaperExits,
+  getCryptoPaperEquityCurve,
   getCryptoPaperMetrics,
   getCryptoPaperPortfolio,
   getCryptoScan,
@@ -21,6 +22,7 @@ import {
   type CryptoOhlcvCandle,
   type CryptoOhlcvResponse,
   type CryptoPaperCycleResponse,
+  type CryptoPaperEquityCurve,
   type CryptoPaperMetrics,
   type CryptoPaperPortfolio,
   type CryptoPaperTradeHighlight,
@@ -101,6 +103,12 @@ function signalLabelEs(s: CryptoAnalysisSignalKind): string {
   if (s === "compra_potencial") return "Compra potencial";
   if (s === "cuidado") return "Cuidado";
   return "Neutral";
+}
+
+function fmtClosedAt(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isFinite(d.getTime()) ? dtFmt.format(d) : iso;
 }
 
 function fmtTradeHighlight(t: CryptoPaperTradeHighlight | null | undefined): string {
@@ -432,6 +440,7 @@ export function CryptoPage() {
   const [scanError, setScanError] = useState<string | null>(null);
   const [paper, setPaper] = useState<CryptoPaperPortfolio | null>(null);
   const [paperMetrics, setPaperMetrics] = useState<CryptoPaperMetrics | null>(null);
+  const [paperEquityCurve, setPaperEquityCurve] = useState<CryptoPaperEquityCurve | null>(null);
   const [paperInitialLoading, setPaperInitialLoading] = useState(true);
   const [paperRefreshing, setPaperRefreshing] = useState(false);
   const [paperError, setPaperError] = useState<string | null>(null);
@@ -467,9 +476,14 @@ export function CryptoPage() {
       setPaperInitialLoading(true);
     }
     try {
-      const [p, metrics] = await Promise.all([getCryptoPaperPortfolio(), getCryptoPaperMetrics()]);
+      const [p, metrics, curve] = await Promise.all([
+        getCryptoPaperPortfolio(),
+        getCryptoPaperMetrics(),
+        getCryptoPaperEquityCurve(),
+      ]);
       setPaper(p);
       setPaperMetrics(metrics);
+      setPaperEquityCurve(curve);
       setPaperError(null);
     } catch (e: unknown) {
       setPaperError(e instanceof Error ? e.message : "Error al cargar cartera paper");
@@ -918,8 +932,9 @@ export function CryptoPage() {
     try {
       const p = await resetCryptoPaperPortfolio(10000);
       setPaper(p);
-      const metrics = await getCryptoPaperMetrics();
+      const [metrics, curve] = await Promise.all([getCryptoPaperMetrics(), getCryptoPaperEquityCurve()]);
       setPaperMetrics(metrics);
+      setPaperEquityCurve(curve);
     } catch (e: unknown) {
       setPaperActionError(e instanceof Error ? e.message : "Error al resetear cartera paper");
     }
@@ -1558,6 +1573,88 @@ export function CryptoPage() {
             ) : (
               <p className="msg-muted" style={{ marginTop: 0, marginBottom: "1rem", fontSize: "0.875rem" }}>
                 Sin trades cerrados todavía.
+              </p>
+            )}
+
+            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+              Curva paper cerrada
+            </h3>
+            {paperEquityCurve && paperEquityCurve.summary.trades_count > 0 ? (
+              <>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+                    gap: "0.65rem",
+                    marginBottom: "0.75rem",
+                    padding: "0.65rem 0.75rem",
+                    borderRadius: "8px",
+                    border: "1px solid var(--border)",
+                    background: "color-mix(in srgb, var(--bg-panel) 92%, transparent)",
+                  }}
+                >
+                  <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                    <div className="stat__label">PnL acumulado cerrado</div>
+                    <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.last_equity_usdt)}>
+                      {fmtUsdt(paperEquityCurve.summary.last_equity_usdt)}
+                    </div>
+                  </div>
+                  <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                    <div className="stat__label">Max drawdown</div>
+                    <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.max_drawdown_usdt)}>
+                      {fmtUsdt(paperEquityCurve.summary.max_drawdown_usdt)}
+                    </div>
+                  </div>
+                  <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                    <div className="stat__label">Max drawdown %</div>
+                    <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.max_drawdown_pct)}>
+                      {paperEquityCurve.summary.max_drawdown_pct !== null
+                        ? fmtPct(paperEquityCurve.summary.max_drawdown_pct)
+                        : "—"}
+                    </div>
+                  </div>
+                  <div className="stat dashboard-stat" style={{ margin: 0 }}>
+                    <div className="stat__label">Trades en curva</div>
+                    <div className="stat__value">{paperEquityCurve.summary.trades_count}</div>
+                  </div>
+                </div>
+                <div className="table-wrap" style={{ marginBottom: "1rem" }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Fecha</th>
+                        <th>Símbolo</th>
+                        <th style={{ textAlign: "right" }}>PnL</th>
+                        <th style={{ textAlign: "right" }}>Equity</th>
+                        <th style={{ textAlign: "right" }}>Drawdown</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...paperEquityCurve.points].reverse().slice(0, 15).map((pt, i) => (
+                        <tr key={`${pt.closed_at ?? "x"}-${pt.symbol}-${i}`}>
+                          <td className="table-cell--nowrap">{fmtClosedAt(pt.closed_at)}</td>
+                          <td>{pt.symbol}</td>
+                          <td style={{ textAlign: "right" }}>
+                            <span style={pnlStyle(pt.pnl_usdt)}>{fmtUsdt(pt.pnl_usdt)}</span>
+                          </td>
+                          <td style={{ textAlign: "right" }}>
+                            <span style={pnlStyle(pt.equity_usdt)}>{fmtUsdt(pt.equity_usdt)}</span>
+                          </td>
+                          <td style={{ textAlign: "right" }}>
+                            <span style={pnlStyle(pt.drawdown_usdt)}>
+                              {fmtUsdt(pt.drawdown_usdt)}
+                              {pt.drawdown_pct !== null ? ` (${fmtPct(pt.drawdown_pct)})` : ""}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <p className="msg-muted" style={{ marginTop: 0, marginBottom: "1rem", fontSize: "0.875rem" }}>
+                Sin curva todavía.
               </p>
             )}
 

@@ -458,6 +458,27 @@ export type CryptoPaperMetrics = {
   max_loss_streak: number;
 };
 
+export type CryptoPaperEquityCurvePoint = {
+  closed_at: string | null;
+  symbol: string;
+  pnl_usdt: number;
+  equity_usdt: number;
+  drawdown_usdt: number;
+  drawdown_pct: number | null;
+};
+
+export type CryptoPaperEquityCurveSummary = {
+  max_drawdown_usdt: number;
+  max_drawdown_pct: number | null;
+  last_equity_usdt: number;
+  trades_count: number;
+};
+
+export type CryptoPaperEquityCurve = {
+  points: CryptoPaperEquityCurvePoint[];
+  summary: CryptoPaperEquityCurveSummary;
+};
+
 export type CryptoPaperOpenPayload = {
   symbol: string;
   side?: string;
@@ -554,6 +575,47 @@ export async function getCryptoPaperMetrics(): Promise<CryptoPaperMetrics> {
   const data: unknown = await res.json().catch(() => null);
   if (!isCryptoPaperMetrics(data)) {
     throw new Error("Respuesta inesperada: /crypto/paper/metrics");
+  }
+  return data;
+}
+
+function isCryptoPaperEquityCurvePoint(data: unknown): data is CryptoPaperEquityCurvePoint {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    (o.closed_at === null || typeof o.closed_at === "string") &&
+    typeof o.symbol === "string" &&
+    typeof o.pnl_usdt === "number" &&
+    typeof o.equity_usdt === "number" &&
+    typeof o.drawdown_usdt === "number" &&
+    (o.drawdown_pct === null || typeof o.drawdown_pct === "number")
+  );
+}
+
+function isCryptoPaperEquityCurve(data: unknown): data is CryptoPaperEquityCurve {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  if (!Array.isArray(o.points)) return false;
+  if (!o.points.every(isCryptoPaperEquityCurvePoint)) return false;
+  const s = o.summary;
+  if (s === null || typeof s !== "object") return false;
+  const sum = s as Record<string, unknown>;
+  return (
+    typeof sum.max_drawdown_usdt === "number" &&
+    (sum.max_drawdown_pct === null || typeof sum.max_drawdown_pct === "number") &&
+    typeof sum.last_equity_usdt === "number" &&
+    typeof sum.trades_count === "number"
+  );
+}
+
+export async function getCryptoPaperEquityCurve(): Promise<CryptoPaperEquityCurve> {
+  const res = await fetch(`${BASE}/crypto/paper/equity-curve`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoPaperEquityCurve(data)) {
+    throw new Error("Respuesta inesperada: /crypto/paper/equity-curve");
   }
   return data;
 }

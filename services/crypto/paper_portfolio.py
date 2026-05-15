@@ -652,6 +652,62 @@ def get_paper_trade_metrics() -> dict[str, Any]:
     }
 
 
+def get_paper_equity_curve() -> dict[str, Any]:
+    """Curva de equity y drawdown sobre trades cerrados (PnL acumulado USDT)."""
+    empty_summary: dict[str, Any] = {
+        "max_drawdown_usdt": 0.0,
+        "max_drawdown_pct": None,
+        "last_equity_usdt": 0.0,
+        "trades_count": 0,
+    }
+    pf = load_portfolio()
+    trades = [t for t in (pf.get("trades") or []) if isinstance(t, dict)]
+    closed = [t for t in trades if _trade_pnl_usdt(t) is not None]
+    if not closed:
+        return {"points": [], "summary": empty_summary}
+
+    closed_sorted = sorted(closed, key=lambda t: str(t.get("exit_time") or ""))
+    points: list[dict[str, Any]] = []
+    equity = 0.0
+    peak = 0.0
+    max_dd_usdt = 0.0
+    max_dd_pct: float | None = None
+
+    for t in closed_sorted:
+        pnl = _trade_pnl_usdt(t) or 0.0
+        equity += pnl
+        peak = max(peak, equity)
+        dd_usdt = equity - peak
+        dd_pct: float | None = None
+        if peak > 0:
+            dd_pct = round((dd_usdt / peak) * 100.0, 6)
+        if dd_usdt < max_dd_usdt:
+            max_dd_usdt = dd_usdt
+        if dd_pct is not None and (max_dd_pct is None or dd_pct < max_dd_pct):
+            max_dd_pct = dd_pct
+
+        points.append(
+            {
+                "closed_at": t.get("exit_time"),
+                "symbol": str(t.get("symbol") or ""),
+                "pnl_usdt": round(pnl, 8),
+                "equity_usdt": round(equity, 8),
+                "drawdown_usdt": round(dd_usdt, 8),
+                "drawdown_pct": dd_pct,
+            }
+        )
+
+    return {
+        "points": points,
+        "summary": {
+            "max_drawdown_usdt": round(max_dd_usdt, 8),
+            "max_drawdown_pct": max_dd_pct,
+            "last_equity_usdt": round(equity, 8),
+            "trades_count": len(points),
+        },
+    }
+
+
 def get_paper_portfolio() -> dict[str, Any]:
     pf = load_portfolio()
     cash = float(pf.get("cash_usdt") or 0)

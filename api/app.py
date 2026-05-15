@@ -623,6 +623,14 @@ def crypto_paper_metrics_get():
     return get_paper_trade_metrics()
 
 
+@app.get("/crypto/paper/equity-curve")
+def crypto_paper_equity_curve_get():
+    """Curva de equity y drawdown de trades cerrados paper."""
+    from services.crypto.paper_portfolio import get_paper_equity_curve
+
+    return get_paper_equity_curve()
+
+
 @app.post("/crypto/paper/reset")
 def crypto_paper_portfolio_reset(initial_cash: float = Query(10000, ge=0)):
     from services.crypto.paper_portfolio import get_paper_portfolio, reset_paper_portfolio
