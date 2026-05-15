@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  CryptoFavoritesSection,
+  CryptoPrincipalTickerCard,
+  DEFAULT_FAVORITE_SYMBOLS,
+  normalizeFavoriteSymbolInput,
+  SYM_ARS_BINANCE,
+  type PrincipalFavoriteQuote,
+} from "@/components/crypto/CryptoPrincipalMarket";
 import { PaperSimEquityCurvePanel } from "@/components/crypto/PaperSimEquityCurvePanel";
 import type { CSSProperties } from "react";
 import {
   closeCryptoPaperPosition,
   getCryptoAnalysis,
-  getCryptoOhlcv,
   executeCryptoPaperStrategy,
   getCryptoPaperBotAutoStatus,
   reviewCryptoPaperExits,
@@ -22,8 +29,6 @@ import {
   resetCryptoPaperPortfolio,
   type CryptoAnalysisPayload,
   type CryptoAnalysisSignalKind,
-  type CryptoOhlcvCandle,
-  type CryptoOhlcvResponse,
   type CryptoPaperBotAutoStatus,
   type CryptoPaperCycleResponse,
   type CryptoPaperEquityCurve,
@@ -52,13 +57,7 @@ const AUTO_STATUS_POLL_MS = 20_000;
 
 type CryptoPageTab = "principal" | "bot" | "historial";
 
-const dtFmt = new Intl.DateTimeFormat("es-AR", {
-  dateStyle: "short",
-  timeStyle: "short",
-});
-
 const numFmt2 = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 2, minimumFractionDigits: 2 });
-const numFmt0 = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 0 });
 
 function fmtPrice(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "—";
@@ -69,33 +68,6 @@ function fmtPct(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "—";
   const s = `${v >= 0 ? "+" : ""}${numFmt2.format(v)}%`;
   return s;
-}
-
-function fmtVol(v: number | null | undefined): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "—";
-  return numFmt0.format(v);
-}
-
-function readTickerLast(t: CryptoTicker): number | null {
-  const x = t.last;
-  return typeof x === "number" && Number.isFinite(x) ? x : null;
-}
-
-function readTickerPct(t: CryptoTicker): number | null {
-  const x = t.percentage;
-  return typeof x === "number" && Number.isFinite(x) ? x : null;
-}
-
-function readTickerVol(t: CryptoTicker): number | null {
-  const x = t.baseVolume;
-  return typeof x === "number" && Number.isFinite(x) ? x : null;
-}
-
-function pctStyle(pct: number | null): CSSProperties {
-  if (pct === null || !Number.isFinite(pct)) return { color: "var(--text-muted)" };
-  if (pct > 0) return { color: "rgba(21, 128, 61, 0.96)", fontWeight: 700 };
-  if (pct < 0) return { color: "rgba(185, 28, 28, 0.96)", fontWeight: 700 };
-  return { color: "var(--text-muted)" };
 }
 
 function fmtMacd(v: number | null | undefined): string {
@@ -613,11 +585,13 @@ export function CryptoPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [status, setStatus] = useState<CryptoStatusPayload | null>(null);
-  const [btc, setBtc] = useState<CryptoTicker | null>(null);
-  const [eth, setEth] = useState<CryptoTicker | null>(null);
-  const [ohlcv, setOhlcv] = useState<CryptoOhlcvResponse | null>(null);
-  const [analysisBtc, setAnalysisBtc] = useState<CryptoAnalysisPayload | null>(null);
-  const [analysisEth, setAnalysisEth] = useState<CryptoAnalysisPayload | null>(null);
+  const [tickerCache, setTickerCache] = useState<Record<string, CryptoTicker | null>>({});
+  const [analysisCache, setAnalysisCache] = useState<Record<string, CryptoAnalysisPayload | null>>({});
+  const [favoriteSymbols, setFavoriteSymbols] = useState<string[]>(() => [...DEFAULT_FAVORITE_SYMBOLS]);
+  const [signalsUseFavorites, setSignalsUseFavorites] = useState(true);
+  const [favoriteAddDraft, setFavoriteAddDraft] = useState("");
+  const [favoriteAddError, setFavoriteAddError] = useState<string | null>(null);
+  const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([]);
   const [tickerError, setTickerError] = useState<string | null>(null);
   const [watchlistCount, setWatchlistCount] = useState<number | null>(null);
   const [scanRows, setScanRows] = useState<CryptoScanRow[] | null>(null);
@@ -702,108 +676,115 @@ export function CryptoPage() {
     }
   }, []);
 
-  const load = useCallback(async (isRefresh: boolean) => {
-    if (isRefresh) {
-      setRefreshing(true);
-    } else {
-      setInitialLoading(true);
-      setFatalError(null);
-    }
-    if (!isRefresh) {
-      setTickerError(null);
-    }
-    try {
-      const results = await Promise.allSettled([
-        getCryptoStatus(),
-        getCryptoTicker(SYM_BTC),
-        getCryptoTicker(SYM_ETH),
-        getCryptoOhlcv("BTC/USDT", "1h", 100),
-        getCryptoAnalysis(SYM_BTC, ANALYSIS_TF, ANALYSIS_LIMIT),
-        getCryptoAnalysis(SYM_ETH, ANALYSIS_TF, ANALYSIS_LIMIT),
-      ]);
+  const fetchSymbolMarketData = useCallback(async (symbol: string) => {
+    const [tR, aR] = await Promise.allSettled([
+      getCryptoTicker(symbol),
+      getCryptoAnalysis(symbol, ANALYSIS_TF, ANALYSIS_LIMIT),
+    ]);
+    setTickerCache((prev) => ({
+      ...prev,
+      [symbol]: tR.status === "fulfilled" ? tR.value : null,
+    }));
+    setAnalysisCache((prev) => ({
+      ...prev,
+      [symbol]: aR.status === "fulfilled" ? aR.value : null,
+    }));
+  }, []);
 
-      const parts: string[] = [];
+  const load = useCallback(
+    async (isRefresh: boolean) => {
+      if (isRefresh) {
+        setRefreshing(true);
+      } else {
+        setInitialLoading(true);
+        setFatalError(null);
+      }
+      if (!isRefresh) {
+        setTickerError(null);
+      }
+      const symbolsForMarket = [...new Set([SYM_BTC, SYM_ETH, SYM_ARS_BINANCE, ...favoriteSymbols])];
+      try {
+        const results = await Promise.allSettled([
+          getCryptoStatus(),
+          ...symbolsForMarket.map((s) => getCryptoTicker(s)),
+          ...symbolsForMarket.map((s) => getCryptoAnalysis(s, ANALYSIS_TF, ANALYSIS_LIMIT)),
+        ]);
 
-      const st = results[0];
-      if (st.status === "rejected") {
-        const msg = st.reason instanceof Error ? st.reason.message : "Error en /crypto/status";
-        if (!isRefresh) {
+        const parts: string[] = [];
+        const errMsg = (r: PromiseRejectedResult) =>
+          r.reason instanceof Error ? r.reason.message : "error";
+
+        const st = results[0];
+        if (st.status === "rejected") {
+          const msg = st.reason instanceof Error ? st.reason.message : "Error en /crypto/status";
+          if (!isRefresh) {
+            setFatalError(msg);
+            setStatus(null);
+            setTickerCache({});
+            setAnalysisCache({});
+            return;
+          }
+          parts.push(msg);
+        } else {
+          setStatus(st.value);
+          if (!isRefresh) {
+            setFatalError(null);
+          }
+        }
+
+        const tickerResults = results.slice(1, 1 + symbolsForMarket.length);
+        const analysisResults = results.slice(1 + symbolsForMarket.length);
+
+        setTickerCache((prev) => {
+          const next = { ...prev };
+          symbolsForMarket.forEach((sym, i) => {
+            const r = tickerResults[i] as PromiseSettledResult<CryptoTicker>;
+            if (r.status === "fulfilled") {
+              next[sym] = r.value;
+            } else if (!isRefresh) {
+              next[sym] = null;
+              parts.push(`${sym}: ${errMsg(r)}`);
+            } else {
+              parts.push(`${sym}: ${errMsg(r)}`);
+            }
+          });
+          return next;
+        });
+
+        setAnalysisCache((prev) => {
+          const next = { ...prev };
+          symbolsForMarket.forEach((sym, i) => {
+            const r = analysisResults[i] as PromiseSettledResult<CryptoAnalysisPayload>;
+            if (r.status === "fulfilled") {
+              next[sym] = r.value;
+            } else if (!isRefresh) {
+              next[sym] = null;
+              parts.push(`Análisis ${sym}: ${errMsg(r)}`);
+            } else {
+              parts.push(`Análisis ${sym}: ${errMsg(r)}`);
+            }
+          });
+          return next;
+        });
+
+        setTickerError(parts.length > 0 ? parts.join(" · ") : null);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Error al cargar datos cripto";
+        if (isRefresh) {
+          setTickerError(msg);
+        } else {
           setFatalError(msg);
           setStatus(null);
-          setBtc(null);
-          setEth(null);
-          setOhlcv(null);
-          setAnalysisBtc(null);
-          setAnalysisEth(null);
-          return;
+          setTickerCache({});
+          setAnalysisCache({});
         }
-        parts.push(msg);
-      } else {
-        setStatus(st.value);
-        if (!isRefresh) {
-          setFatalError(null);
-        }
+      } finally {
+        setInitialLoading(false);
+        setRefreshing(false);
       }
-
-      const rBtc = results[1];
-      if (rBtc.status === "fulfilled") setBtc(rBtc.value);
-      else if (!isRefresh) {
-        setBtc(null);
-        parts.push(`BTC: ${rBtc.reason instanceof Error ? rBtc.reason.message : "error"}`);
-      } else {
-        parts.push(`BTC: ${rBtc.reason instanceof Error ? rBtc.reason.message : "error"}`);
-      }
-      const rEth = results[2];
-      if (rEth.status === "fulfilled") setEth(rEth.value);
-      else if (!isRefresh) {
-        setEth(null);
-        parts.push(`ETH: ${rEth.reason instanceof Error ? rEth.reason.message : "error"}`);
-      } else {
-        parts.push(`ETH: ${rEth.reason instanceof Error ? rEth.reason.message : "error"}`);
-      }
-      const rOh = results[3];
-      if (rOh.status === "fulfilled") setOhlcv(rOh.value);
-      else if (!isRefresh) {
-        setOhlcv(null);
-        parts.push(`OHLCV: ${rOh.reason instanceof Error ? rOh.reason.message : "error"}`);
-      } else {
-        parts.push(`OHLCV: ${rOh.reason instanceof Error ? rOh.reason.message : "error"}`);
-      }
-      const rAb = results[4];
-      if (rAb.status === "fulfilled") setAnalysisBtc(rAb.value);
-      else if (!isRefresh) {
-        setAnalysisBtc(null);
-        parts.push(`Análisis BTC: ${rAb.reason instanceof Error ? rAb.reason.message : "error"}`);
-      } else {
-        parts.push(`Análisis BTC: ${rAb.reason instanceof Error ? rAb.reason.message : "error"}`);
-      }
-      const rAe = results[5];
-      if (rAe.status === "fulfilled") setAnalysisEth(rAe.value);
-      else if (!isRefresh) {
-        setAnalysisEth(null);
-        parts.push(`Análisis ETH: ${rAe.reason instanceof Error ? rAe.reason.message : "error"}`);
-      } else {
-        parts.push(`Análisis ETH: ${rAe.reason instanceof Error ? rAe.reason.message : "error"}`);
-      }
-      setTickerError(parts.length > 0 ? parts.join(" · ") : null);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Error al cargar datos cripto";
-      if (isRefresh) {
-        setTickerError(msg);
-      } else {
-        setFatalError(msg);
-        setStatus(null);
-        setBtc(null);
-        setEth(null);
-        setOhlcv(null);
-        setAnalysisBtc(null);
-        setAnalysisEth(null);
-      }
-    } finally {
-      setInitialLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+    },
+    [favoriteSymbols],
+  );
 
   const handleRefreshAll = useCallback(() => {
     void load(true);
@@ -818,7 +799,10 @@ export function CryptoPage() {
     let cancelled = false;
     getCryptoWatchlist()
       .then((w) => {
-        if (!cancelled) setWatchlistCount(w.count);
+        if (!cancelled) {
+          setWatchlistCount(w.count);
+          setWatchlistSymbols(w.symbols);
+        }
       })
       .catch(() => {
         if (!cancelled) setWatchlistCount(null);
@@ -1219,6 +1203,49 @@ export function CryptoPage() {
     }
   }, []);
 
+  const btc = tickerCache[SYM_BTC] ?? null;
+  const eth = tickerCache[SYM_ETH] ?? null;
+  const arsTicker = tickerCache[SYM_ARS_BINANCE] ?? null;
+
+  const favoriteQuotes = useMemo((): PrincipalFavoriteQuote[] => {
+    const scanBySym = new Map((scanRows ?? []).map((r) => [r.symbol, r]));
+    return favoriteSymbols.map((symbol) => ({
+      symbol,
+      ticker: tickerCache[symbol] ?? null,
+      analysis: analysisCache[symbol] ?? null,
+      scanRow: scanBySym.get(symbol) ?? null,
+      primary: symbol === SYM_BTC || symbol === SYM_ETH,
+    }));
+  }, [favoriteSymbols, tickerCache, analysisCache, scanRows]);
+
+  const signalDisplaySymbols = useMemo(() => {
+    if (signalsUseFavorites) {
+      const uniq = [...new Set(favoriteSymbols)];
+      return uniq.length > 0 ? uniq : [SYM_BTC, SYM_ETH];
+    }
+    return [SYM_BTC, SYM_ETH];
+  }, [signalsUseFavorites, favoriteSymbols]);
+
+  const handleAddFavorite = useCallback(() => {
+    const sym = normalizeFavoriteSymbolInput(favoriteAddDraft);
+    if (!sym) {
+      setFavoriteAddError("Símbolo inválido (ej. BTC/USDT o BTCUSDT)");
+      return;
+    }
+    if (favoriteSymbols.includes(sym)) {
+      setFavoriteAddError("Ese símbolo ya está en favoritos");
+      return;
+    }
+    setFavoriteAddError(null);
+    setFavoriteSymbols((prev) => [...prev, sym]);
+    setFavoriteAddDraft("");
+    void fetchSymbolMarketData(sym);
+  }, [favoriteAddDraft, favoriteSymbols, fetchSymbolMarketData]);
+
+  const handleRemoveFavorite = useCallback((symbol: string) => {
+    setFavoriteSymbols((prev) => prev.filter((s) => s !== symbol));
+  }, []);
+
   const statusHeadline = fatalError !== null ? "Error" : status !== null ? "Conectado" : "—";
   const marketReady = fatalError === null && !initialLoading;
   const paperBusy = paperInitialLoading || paperRefreshing;
@@ -1318,53 +1345,30 @@ export function CryptoPage() {
       )}
 
       {marketReady && (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-            gap: "1rem",
-            marginBottom: "1rem",
-          }}
-        >
-          <div className="card">
-            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-              {SYM_BTC}
-            </h3>
-            <div className="stat dashboard-stat" style={{ marginBottom: "0.35rem" }}>
-              <div className="stat__label">Último</div>
-              <div className="stat__value">{fmtPrice(btc ? readTickerLast(btc) : null)}</div>
-            </div>
-            <div className="stat dashboard-stat" style={{ marginBottom: "0.35rem" }}>
-              <div className="stat__label">Variación (24h ref.)</div>
-              <div className="stat__value" style={pctStyle(btc ? readTickerPct(btc) : null)}>
-                {fmtPct(btc ? readTickerPct(btc) : null)}
-              </div>
-            </div>
-            <div className="stat dashboard-stat">
-              <div className="stat__label">Volumen (base)</div>
-              <div className="stat__value">{fmtVol(btc ? readTickerVol(btc) : null)}</div>
-            </div>
-          </div>
-          <div className="card">
-            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-              {SYM_ETH}
-            </h3>
-            <div className="stat dashboard-stat" style={{ marginBottom: "0.35rem" }}>
-              <div className="stat__label">Último</div>
-              <div className="stat__value">{fmtPrice(eth ? readTickerLast(eth) : null)}</div>
-            </div>
-            <div className="stat dashboard-stat" style={{ marginBottom: "0.35rem" }}>
-              <div className="stat__label">Variación (24h ref.)</div>
-              <div className="stat__value" style={pctStyle(eth ? readTickerPct(eth) : null)}>
-                {fmtPct(eth ? readTickerPct(eth) : null)}
-              </div>
-            </div>
-            <div className="stat dashboard-stat">
-              <div className="stat__label">Volumen (base)</div>
-              <div className="stat__value">{fmtVol(eth ? readTickerVol(eth) : null)}</div>
-            </div>
-          </div>
+        <div className="crypto-principal-markets">
+          <CryptoPrincipalTickerCard title={SYM_BTC} ticker={btc} featured />
+          <CryptoPrincipalTickerCard title={SYM_ETH} ticker={eth} featured />
+          <CryptoPrincipalTickerCard
+            title="ARS/USDT"
+            ticker={arsTicker}
+            featured
+            lastLabel="Último (ARS por USDT)"
+            footnote={`Fuente: GET /crypto/ticker · símbolo ${SYM_ARS_BINANCE} · campo last`}
+            showVolume={false}
+          />
         </div>
+      )}
+
+      {marketReady && (
+        <CryptoFavoritesSection
+          quotes={favoriteQuotes}
+          watchlistSymbols={watchlistSymbols}
+          addDraft={favoriteAddDraft}
+          addError={favoriteAddError}
+          onAddDraftChange={setFavoriteAddDraft}
+          onAdd={handleAddFavorite}
+          onRemove={handleRemoveFavorite}
+        />
       )}
 
       {marketReady && (
@@ -1372,6 +1376,23 @@ export function CryptoPage() {
           <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
             Señales técnicas
           </h2>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.45rem",
+              marginBottom: "0.75rem",
+              fontSize: "0.9rem",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={signalsUseFavorites}
+              onChange={(ev) => setSignalsUseFavorites(ev.target.checked)}
+            />
+            Usar favoritos para señales técnicas
+          </label>
           <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "48rem", fontSize: "0.9rem" }}>
             Indicadores calculados en backend (SMA, EMA, RSI, MACD) sobre OHLCV; clasificación orientativa, no
             recomendación de inversión.
@@ -1383,8 +1404,9 @@ export function CryptoPage() {
               gap: "1rem",
             }}
           >
-            <CryptoAnalysisCard title="BTC/USDT" payload={analysisBtc} />
-            <CryptoAnalysisCard title="ETH/USDT" payload={analysisEth} />
+            {signalDisplaySymbols.map((sym) => (
+              <CryptoAnalysisCard key={sym} title={sym} payload={analysisCache[sym] ?? null} />
+            ))}
           </div>
         </div>
       )}
@@ -1480,47 +1502,6 @@ export function CryptoPage() {
         </div>
       )}
 
-      {marketReady && ohlcv && ohlcv.candles.length > 0 && (
-        <div className="card" style={{ marginBottom: "1rem" }}>
-          <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
-            Velas {ohlcv.symbol} · {ohlcv.timeframe} · últimas {ohlcv.candles.length}
-          </h2>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Fecha</th>
-                  <th style={{ textAlign: "right" }}>Open</th>
-                  <th style={{ textAlign: "right" }}>High</th>
-                  <th style={{ textAlign: "right" }}>Low</th>
-                  <th style={{ textAlign: "right" }}>Close</th>
-                  <th style={{ textAlign: "right" }}>Volume</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ohlcv.candles.map((row: CryptoOhlcvCandle, i: number) => {
-                  const [ts, open, high, low, close, vol] = row;
-                  const d = new Date(ts);
-                  return (
-                    <tr key={`${ts}-${i}`}>
-                      <td className="table-cell--nowrap">{Number.isFinite(d.getTime()) ? dtFmt.format(d) : "—"}</td>
-                      <td style={{ textAlign: "right" }}>{fmtPrice(open)}</td>
-                      <td style={{ textAlign: "right" }}>{fmtPrice(high)}</td>
-                      <td style={{ textAlign: "right" }}>{fmtPrice(low)}</td>
-                      <td style={{ textAlign: "right" }}>{fmtPrice(close)}</td>
-                      <td style={{ textAlign: "right" }}>{fmtVol(vol)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {marketReady && ohlcv && ohlcv.candles.length === 0 && (
-        <p className="msg-muted">No hay velas en la respuesta de /crypto/ohlcv.</p>
-      )}
         </>
       )}
 
@@ -1876,6 +1857,28 @@ export function CryptoPage() {
               style={{ fontSize: "0.82rem", color: autoStatus?.last_error ? "var(--danger)" : undefined }}
             >
               {autoStatus?.last_error ?? "—"}
+            </div>
+          </div>
+          <div className="stat dashboard-stat" style={{ margin: 0 }}>
+            <div className="stat__label">Compras realizadas</div>
+            <div className="stat__value" style={{ fontSize: "0.95rem" }}>
+              {autoStatus?.enabled ? (autoStatus.auto_session_buys_count ?? 0) : 0}
+              {autoStatus?.enabled && autoStatus.auto_session_last_buy_symbol ? (
+                <span className="msg-muted" style={{ display: "block", fontSize: "0.78rem", fontWeight: 400 }}>
+                  Última: {autoStatus.auto_session_last_buy_symbol}
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <div className="stat dashboard-stat" style={{ margin: 0 }}>
+            <div className="stat__label">Ventas realizadas</div>
+            <div className="stat__value" style={{ fontSize: "0.95rem" }}>
+              {autoStatus?.enabled ? (autoStatus.auto_session_sells_count ?? 0) : 0}
+              {autoStatus?.enabled && autoStatus.auto_session_last_sell_symbol ? (
+                <span className="msg-muted" style={{ display: "block", fontSize: "0.78rem", fontWeight: 400 }}>
+                  Última: {autoStatus.auto_session_last_sell_symbol}
+                </span>
+              ) : null}
             </div>
           </div>
         </div>

@@ -882,6 +882,10 @@ export type CryptoPaperBotAutoStatus = {
   next_run_at: string | null;
   last_error: string | null;
   last_actions: CryptoPaperBotAutoAction[];
+  auto_session_buys_count: number;
+  auto_session_sells_count: number;
+  auto_session_last_buy_symbol: string | null;
+  auto_session_last_sell_symbol: string | null;
   strategy_interval_seconds: number;
   exits_interval_seconds: number;
 };
@@ -902,7 +906,15 @@ function isCryptoPaperBotAutoStatus(data: unknown): data is CryptoPaperBotAutoSt
     (o.last_error === null || typeof o.last_error === "string") &&
     Array.isArray(o.last_actions) &&
     typeof o.strategy_interval_seconds === "number" &&
-    typeof o.exits_interval_seconds === "number"
+    typeof o.exits_interval_seconds === "number" &&
+    (o.auto_session_buys_count === undefined || typeof o.auto_session_buys_count === "number") &&
+    (o.auto_session_sells_count === undefined || typeof o.auto_session_sells_count === "number") &&
+    (o.auto_session_last_buy_symbol === undefined ||
+      o.auto_session_last_buy_symbol === null ||
+      typeof o.auto_session_last_buy_symbol === "string") &&
+    (o.auto_session_last_sell_symbol === undefined ||
+      o.auto_session_last_sell_symbol === null ||
+      typeof o.auto_session_last_sell_symbol === "string")
   );
 }
 
@@ -915,7 +927,13 @@ export async function getCryptoPaperBotAutoStatus(): Promise<CryptoPaperBotAutoS
   if (!isCryptoPaperBotAutoStatus(data)) {
     throw new Error("Respuesta inesperada: /crypto/bot/auto-status");
   }
-  return data;
+  return {
+    ...data,
+    auto_session_buys_count: data.auto_session_buys_count ?? 0,
+    auto_session_sells_count: data.auto_session_sells_count ?? 0,
+    auto_session_last_buy_symbol: data.auto_session_last_buy_symbol ?? null,
+    auto_session_last_sell_symbol: data.auto_session_last_sell_symbol ?? null,
+  };
 }
 
 export async function startCryptoPaperBotAuto(

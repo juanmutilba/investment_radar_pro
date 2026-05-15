@@ -24,12 +24,44 @@ _state: dict[str, Any] = {
     "next_run_at": None,
     "last_error": None,
     "last_actions": [],
+    "auto_session_buys_count": 0,
+    "auto_session_sells_count": 0,
+    "auto_session_last_buy_symbol": None,
+    "auto_session_last_sell_symbol": None,
     "strategy_interval_seconds": DEFAULT_STRATEGY_INTERVAL_SECONDS,
     "exits_interval_seconds": DEFAULT_EXITS_INTERVAL_SECONDS,
     "strategy_params": None,
     "_last_exits_mono": None,
     "_last_strategy_mono": None,
 }
+
+
+def _reset_auto_session_counters() -> None:
+    _state["auto_session_buys_count"] = 0
+    _state["auto_session_sells_count"] = 0
+    _state["auto_session_last_buy_symbol"] = None
+    _state["auto_session_last_sell_symbol"] = None
+
+
+def _accumulate_auto_session_counts(actions: list[dict[str, Any]]) -> None:
+    """Cuenta entradas/salidas ejecutadas del ciclo (sin modificar lógica de trading)."""
+    for a in actions:
+        if a.get("phase") == "strategy_summary":
+            continue
+        action = a.get("action")
+        status = a.get("status")
+        sym = a.get("symbol")
+        if not sym or not isinstance(sym, str):
+            continue
+        sym = sym.strip()
+        if not sym:
+            continue
+        if action == "entry" and status == "executed":
+            _state["auto_session_buys_count"] = int(_state.get("auto_session_buys_count") or 0) + 1
+            _state["auto_session_last_buy_symbol"] = sym
+        elif action == "exit" and status == "executed":
+            _state["auto_session_sells_count"] = int(_state.get("auto_session_sells_count") or 0) + 1
+            _state["auto_session_last_sell_symbol"] = sym
 
 
 def _utc_iso() -> str:
@@ -119,6 +151,7 @@ def _run_cycle() -> None:
         with _state_lock:
             _state["last_run_at"] = _utc_iso()
             _state["last_actions"] = actions_accum[-_MAX_LAST_ACTIONS:]
+            _accumulate_auto_session_counts(actions_accum)
             _state["last_error"] = None
     except Exception as e:
         with _state_lock:
@@ -166,6 +199,7 @@ def start_paper_bot_scheduler(
         _state["last_run_at"] = None
         _state["last_error"] = None
         _state["last_actions"] = []
+        _reset_auto_session_counters()
         _state["exits_interval_seconds"] = exits_iv
         _state["strategy_interval_seconds"] = strat_iv
         _state["strategy_params"] = dict(strategy_params)
@@ -192,6 +226,7 @@ def stop_paper_bot_scheduler() -> dict[str, Any]:
     with _state_lock:
         _state["enabled"] = False
         _state["running"] = False
+        _reset_auto_session_counters()
     _stop_thread()
     with _state_lock:
         _state["next_run_at"] = None
@@ -207,6 +242,10 @@ def get_paper_bot_scheduler_status() -> dict[str, Any]:
             "next_run_at": _state["next_run_at"],
             "last_error": _state["last_error"],
             "last_actions": list(_state["last_actions"]),
+            "auto_session_buys_count": int(_state.get("auto_session_buys_count") or 0),
+            "auto_session_sells_count": int(_state.get("auto_session_sells_count") or 0),
+            "auto_session_last_buy_symbol": _state.get("auto_session_last_buy_symbol"),
+            "auto_session_last_sell_symbol": _state.get("auto_session_last_sell_symbol"),
             "strategy_interval_seconds": int(_state["strategy_interval_seconds"]),
             "exits_interval_seconds": int(_state["exits_interval_seconds"]),
         }
