@@ -582,6 +582,8 @@ class CryptoPaperOpenMarketBody(BaseModel):
     side: str = Field(default="long")
     quantity: float = Field(..., gt=0)
     reason: str = ""
+    break_even_trigger_pct: float = Field(default=0, ge=0)
+    break_even_plus_pct: float = Field(default=0, ge=0)
 
 
 class CryptoPaperOpenMarketAmountBody(BaseModel):
@@ -589,6 +591,8 @@ class CryptoPaperOpenMarketAmountBody(BaseModel):
     side: str = Field(default="long")
     amount_usdt: float = Field(..., gt=0)
     reason: str = ""
+    break_even_trigger_pct: float = Field(default=0, ge=0)
+    break_even_plus_pct: float = Field(default=0, ge=0)
 
 
 class CryptoPaperCloseBody(BaseModel):
@@ -643,6 +647,10 @@ def crypto_paper_open_market(body: CryptoPaperOpenMarketBody):
             side=body.side,
             quantity=body.quantity,
             reason=body.reason,
+            break_even_trigger_pct=body.break_even_trigger_pct
+            if body.break_even_trigger_pct > 0
+            else None,
+            break_even_plus_pct=body.break_even_plus_pct,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -661,6 +669,10 @@ def crypto_paper_open_market_amount(body: CryptoPaperOpenMarketAmountBody):
             side=body.side,
             amount_usdt=body.amount_usdt,
             reason=body.reason,
+            break_even_trigger_pct=body.break_even_trigger_pct
+            if body.break_even_trigger_pct > 0
+            else None,
+            break_even_plus_pct=body.break_even_plus_pct,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

@@ -112,6 +112,19 @@ function pnlStyle(v: number | null | undefined): CSSProperties {
   return { color: "var(--text-muted)" };
 }
 
+function parseBreakEvenPct(triggerStr: string, plusStr: string): { trigger: number; plus: number } | { error: string } {
+  const tRaw = triggerStr.trim();
+  const trigger = tRaw === "" ? 0 : parseFloat(tRaw.replace(",", "."));
+  const plus = plusStr.trim() === "" ? 0 : parseFloat(plusStr.replace(",", "."));
+  if (tRaw !== "" && (!Number.isFinite(trigger) || trigger < 0)) {
+    return { error: "Break even trigger % inválido" };
+  }
+  if (!Number.isFinite(plus) || plus < 0) {
+    return { error: "Break even plus % inválido" };
+  }
+  return { trigger, plus };
+}
+
 function strategyResultBannerStyle(
   cycle: CryptoPaperCycleResponse,
   lastMode: "search" | "execute",
@@ -432,12 +445,12 @@ export function CryptoPage() {
     const takeProfitPct = parseFloat(strategyTakeProfitPct.replace(",", "."));
     const trailingStopPct = parseFloat(strategyTrailingPct.replace(",", "."));
     const maxOpenPositions = parseInt(strategyMaxPositions, 10);
-    const beTrigRaw = strategyBreakEvenTriggerPct.trim();
-    const breakEvenTriggerPct = beTrigRaw === "" ? 0 : parseFloat(beTrigRaw.replace(",", "."));
-    const breakEvenPlusPct =
-      strategyBreakEvenPlusPct.trim() === ""
-        ? 0
-        : parseFloat(strategyBreakEvenPlusPct.replace(",", "."));
+    const beParsed = parseBreakEvenPct(strategyBreakEvenTriggerPct, strategyBreakEvenPlusPct);
+    if ("error" in beParsed) {
+      return { ok: false, message: beParsed.error };
+    }
+    const breakEvenTriggerPct = beParsed.trigger;
+    const breakEvenPlusPct = beParsed.plus;
     if (!Number.isFinite(amountUsdt) || amountUsdt <= 0) {
       return { ok: false, message: "Monto USDT inválido" };
     }
@@ -452,12 +465,6 @@ export function CryptoPage() {
     }
     if (!Number.isFinite(maxOpenPositions) || maxOpenPositions < 1) {
       return { ok: false, message: "Máx. posiciones inválido" };
-    }
-    if (beTrigRaw !== "" && (!Number.isFinite(breakEvenTriggerPct) || breakEvenTriggerPct < 0)) {
-      return { ok: false, message: "Break even trigger % inválido" };
-    }
-    if (!Number.isFinite(breakEvenPlusPct) || breakEvenPlusPct < 0) {
-      return { ok: false, message: "Break even plus % inválido" };
     }
     return {
       ok: true,
@@ -549,6 +556,11 @@ export function CryptoPage() {
       setPaperActionError("Monto USDT inválido");
       return;
     }
+    const beParsed = parseBreakEvenPct(strategyBreakEvenTriggerPct, strategyBreakEvenPlusPct);
+    if ("error" in beParsed) {
+      setPaperActionError(beParsed.error);
+      return;
+    }
     setPaperOpening(true);
     try {
       await openCryptoPaperPositionMarketAmount({
@@ -556,6 +568,8 @@ export function CryptoPage() {
         side: "long",
         amount_usdt,
         reason: paperReason.trim() || "entrada paper por monto",
+        break_even_trigger_pct: beParsed.trigger > 0 ? beParsed.trigger : undefined,
+        break_even_plus_pct: beParsed.plus,
       });
       setPaperAmountUsdt("");
       setPaperReason("");
@@ -565,7 +579,15 @@ export function CryptoPage() {
     } finally {
       setPaperOpening(false);
     }
-  }, [loadPaper, paperAmountUsdt, paperOpening, paperReason, paperSymbol]);
+  }, [
+    loadPaper,
+    paperAmountUsdt,
+    paperOpening,
+    paperReason,
+    paperSymbol,
+    strategyBreakEvenPlusPct,
+    strategyBreakEvenTriggerPct,
+  ]);
 
   const handleOpenPaperMarketQty = useCallback(async () => {
     if (paperOpening) return;
@@ -575,6 +597,11 @@ export function CryptoPage() {
       setPaperActionError("Cantidad inválida");
       return;
     }
+    const beParsed = parseBreakEvenPct(strategyBreakEvenTriggerPct, strategyBreakEvenPlusPct);
+    if ("error" in beParsed) {
+      setPaperActionError(beParsed.error);
+      return;
+    }
     setPaperOpening(true);
     try {
       await openCryptoPaperPositionMarket({
@@ -582,6 +609,8 @@ export function CryptoPage() {
         side: "long",
         quantity,
         reason: paperReason.trim() || "entrada manual paper a mercado",
+        break_even_trigger_pct: beParsed.trigger > 0 ? beParsed.trigger : undefined,
+        break_even_plus_pct: beParsed.plus,
       });
       setPaperQty("");
       await loadPaper();
@@ -590,7 +619,7 @@ export function CryptoPage() {
     } finally {
       setPaperOpening(false);
     }
-  }, [loadPaper, paperOpening, paperQty, paperSymbol]);
+  }, [loadPaper, paperOpening, paperQty, paperReason, paperSymbol, strategyBreakEvenPlusPct, strategyBreakEvenTriggerPct]);
 
   const handleClosePaper = useCallback(
     async (pos: CryptoPaperPosition) => {
@@ -1163,6 +1192,28 @@ export function CryptoPage() {
                   value={paperReason}
                   onChange={(ev) => setPaperReason(ev.target.value)}
                   placeholder="entrada paper por monto"
+                />
+              </label>
+              <label className="radar-toolbar__field">
+                <span className="radar-toolbar__label">Break even trigger %</span>
+                <input
+                  className="radar-toolbar__input"
+                  type="text"
+                  inputMode="decimal"
+                  value={strategyBreakEvenTriggerPct}
+                  onChange={(ev) => setStrategyBreakEvenTriggerPct(ev.target.value)}
+                  placeholder="opcional (compartido con estrategia)"
+                />
+              </label>
+              <label className="radar-toolbar__field">
+                <span className="radar-toolbar__label">Break even plus %</span>
+                <input
+                  className="radar-toolbar__input"
+                  type="text"
+                  inputMode="decimal"
+                  value={strategyBreakEvenPlusPct}
+                  onChange={(ev) => setStrategyBreakEvenPlusPct(ev.target.value)}
+                  placeholder="0"
                 />
               </label>
               <button
