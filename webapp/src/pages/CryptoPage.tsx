@@ -6,7 +6,6 @@ import {
   getCryptoOhlcv,
   executeCryptoPaperStrategy,
   getCryptoPaperBotAutoStatus,
-  getCryptoPaperCycle,
   reviewCryptoPaperExits,
   startCryptoPaperBotAuto,
   stopCryptoPaperBotAuto,
@@ -49,6 +48,8 @@ const STRATEGY_DEFAULT_REQUIRE_BTC_TREND_UP = true;
 const AUTO_DEFAULT_EXITS_INTERVAL_MIN = 5;
 const AUTO_DEFAULT_STRATEGY_INTERVAL_MIN = 30;
 const AUTO_STATUS_POLL_MS = 20_000;
+
+type CryptoPageTab = "principal" | "bot" | "historial";
 
 const dtFmt = new Intl.DateTimeFormat("es-AR", {
   dateStyle: "short",
@@ -443,6 +444,193 @@ function CryptoAnalysisCard({ title, payload }: { title: string; payload: Crypto
   );
 }
 
+function PaperMetricsPanel({
+  paperMetrics,
+  paperEquityCurve,
+}: {
+  paperMetrics: CryptoPaperMetrics | null;
+  paperEquityCurve: CryptoPaperEquityCurve | null;
+}) {
+  if (!paperMetrics || paperMetrics.closed_trades <= 0) {
+    return (
+      <p className="msg-muted" style={{ marginTop: 0, marginBottom: 0, fontSize: "0.875rem" }}>
+        Sin trades cerrados todavía.
+      </p>
+    );
+  }
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
+        gap: "0.65rem",
+        padding: "0.65rem 0.75rem",
+        borderRadius: "8px",
+        border: "1px solid var(--border)",
+        background: "color-mix(in srgb, var(--bg-panel) 92%, transparent)",
+      }}
+    >
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div className="stat__label">Trades cerrados</div>
+        <div className="stat__value">{paperMetrics.closed_trades}</div>
+      </div>
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div className="stat__label">Ganadoras / Perdedoras</div>
+        <div className="stat__value" style={{ fontSize: "0.95rem" }}>
+          {paperMetrics.winners} / {paperMetrics.losers}
+        </div>
+      </div>
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div className="stat__label">Win rate</div>
+        <div className="stat__value">
+          {paperMetrics.win_rate_pct !== null ? fmtPct(paperMetrics.win_rate_pct) : "—"}
+        </div>
+      </div>
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div className="stat__label">PnL total</div>
+        <div className="stat__value" style={pnlStyle(paperMetrics.total_pnl_usdt)}>
+          {fmtUsdt(paperMetrics.total_pnl_usdt)}
+        </div>
+      </div>
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div
+          className="stat__label"
+          title="Ganancias brutas / pérdidas brutas (solo trades con pérdidas en el denominador)."
+        >
+          Profit factor
+        </div>
+        <div className="stat__value">{fmtProfitFactor(paperMetrics.profit_factor)}</div>
+      </div>
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div className="stat__label" title="Ganancia esperada promedio por trade cerrado.">
+          Expectancy
+        </div>
+        <div className="stat__value" style={pnlStyle(paperMetrics.expectancy_usdt)}>
+          {paperMetrics.expectancy_usdt !== null ? fmtUsdt(paperMetrics.expectancy_usdt) : "—"}
+        </div>
+      </div>
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div className="stat__label">Total ganado</div>
+        <div className="stat__value" style={pnlStyle(paperMetrics.gross_profit_usdt)}>
+          {fmtUsdt(paperMetrics.gross_profit_usdt)}
+        </div>
+      </div>
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div className="stat__label">Total perdido</div>
+        <div className="stat__value" style={pnlStyle(-paperMetrics.gross_loss_usdt)}>
+          {fmtUsdt(-paperMetrics.gross_loss_usdt)}
+        </div>
+      </div>
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div className="stat__label">Ganancia prom.</div>
+        <div className="stat__value" style={pnlStyle(paperMetrics.avg_winner_usdt)}>
+          {paperMetrics.avg_winner_usdt !== null ? fmtUsdt(paperMetrics.avg_winner_usdt) : "—"}
+        </div>
+      </div>
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div className="stat__label">Pérdida prom.</div>
+        <div className="stat__value" style={pnlStyle(paperMetrics.avg_loser_usdt)}>
+          {paperMetrics.avg_loser_usdt !== null ? fmtUsdt(paperMetrics.avg_loser_usdt) : "—"}
+        </div>
+      </div>
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div className="stat__label">Mejor trade</div>
+        <div>
+          {fmtTradeHighlight(paperMetrics.best_trade)}
+        </div>
+      </div>
+      <div>
+        <div className="stat__label">Peor trade</div>
+        <div className="stat__value" style={{ ...pnlStyle(paperMetrics.worst_trade?.pnl_usdt), fontSize: "0.82rem" }}>
+          {fmtTradeHighlight(paperMetrics.worst_trade)}
+        </div>
+      </div>
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div className="stat__label">Racha ganadora</div>
+        <div className="stat__value" style={{ fontSize: "0.9rem" }}>
+          {paperMetrics.current_win_streak} (máx. {paperMetrics.max_win_streak})
+        </div>
+      </div>
+      <div className="stat dashboard-stat" style={{ margin: 0 }}>
+        <div className="stat__label">Racha perdedora</div>
+        <div className="stat__value" style={{ fontSize: "0.9rem" }}>
+          {paperMetrics.current_loss_streak} (máx. {paperMetrics.max_loss_streak})
+        </div>
+      </div>
+      {paperEquityCurve && paperEquityCurve.summary.trades_count > 0 ? (
+        <>
+          <div className="stat dashboard-stat" style={{ margin: 0 }}>
+            <div className="stat__label">Max drawdown</div>
+            <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.max_drawdown_usdt)}>
+              {fmtUsdt(paperEquityCurve.summary.max_drawdown_usdt)}
+            </div>
+          </div>
+          <div className="stat dashboard-stat" style={{ margin: 0 }}>
+            <div className="stat__label">Max drawdown %</div>
+            <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.max_drawdown_pct)}>
+              {paperEquityCurve.summary.max_drawdown_pct !== null
+                ? fmtPct(paperEquityCurve.summary.max_drawdown_pct)
+                : "—"}
+            </div>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function PaperClosedTradesPanel({ paper }: { paper: CryptoPaperPortfolio }) {
+  const summary =
+    paper.trades_total > paper.trades.length
+      ? ` (mostrando ${paper.trades.length} de ${paper.trades_total})`
+      : "";
+  return (
+    <details className="crypto-history-details" open>
+      <summary className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+        Últimos trades cerrados{summary}
+      </summary>
+      {paper.trades.length === 0 ? (
+        <p className="msg-muted">Sin trades cerrados todavía.</p>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Símbolo</th>
+                <th style={{ textAlign: "right" }}>Cantidad</th>
+                <th style={{ textAlign: "right" }}>Entrada</th>
+                <th style={{ textAlign: "right" }}>Salida</th>
+                <th style={{ textAlign: "right" }}>PnL USDT</th>
+                <th style={{ textAlign: "right" }}>PnL %</th>
+                <th>Motivo salida</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paper.trades.map((t) => (
+                <tr key={t.id}>
+                  <td>{t.symbol}</td>
+                  <td style={{ textAlign: "right" }}>{t.quantity}</td>
+                  <td style={{ textAlign: "right" }}>{fmtPrice(t.entry_price)}</td>
+                  <td style={{ textAlign: "right" }}>{fmtPrice(t.exit_price)}</td>
+                  <td style={{ textAlign: "right" }}>
+                    <span style={pnlStyle(t.pnl_usdt)}>{fmtUsdt(t.pnl_usdt)}</span>
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    <span style={pnlStyle(t.pnl_pct)}>{fmtPct(t.pnl_pct)}</span>
+                  </td>
+                  <td className="msg-muted" style={{ fontSize: "0.82rem" }}>
+                    {t.exit_reason || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </details>
+  );
+}
+
 export function CryptoPage() {
   const [initialLoading, setInitialLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -474,7 +662,7 @@ export function CryptoPage() {
   const [strategyTf, setStrategyTf] = useState("1h");
   const [strategyAmountUsdt, setStrategyAmountUsdt] = useState(String(STRATEGY_DEFAULT_AMOUNT));
   const [strategyCycle, setStrategyCycle] = useState<CryptoPaperCycleResponse | null>(null);
-  const [strategyLoading, setStrategyLoading] = useState(false);
+  const [activeCryptoTab, setActiveCryptoTab] = useState<CryptoPageTab>("principal");
   const [strategyExecuting, setStrategyExecuting] = useState(false);
   const [strategyError, setStrategyError] = useState<string | null>(null);
   const [strategyLastMode, setStrategyLastMode] = useState<"search" | "execute">("search");
@@ -667,21 +855,6 @@ export function CryptoPage() {
     void loadPaper(false);
   }, [loadPaper]);
 
-  const handleSearchOpportunities = useCallback(async () => {
-    if (strategyLoading || strategyExecuting || strategyReviewing) return;
-    setStrategyLoading(true);
-    setStrategyError(null);
-    try {
-      const data = await getCryptoPaperCycle(strategyTf.trim() || "1h", ANALYSIS_LIMIT);
-      setStrategyLastMode("search");
-      setStrategyCycle(data);
-    } catch (e: unknown) {
-      setStrategyError(e instanceof Error ? e.message : "Error al buscar oportunidades");
-    } finally {
-      setStrategyLoading(false);
-    }
-  }, [strategyExecuting, strategyLoading, strategyReviewing, strategyTf]);
-
   const parseStrategyRiskParams = useCallback(():
     | { ok: false; message: string }
     | {
@@ -758,7 +931,7 @@ export function CryptoPage() {
   ]);
 
   const handleReviewPaperExits = useCallback(async () => {
-    if (strategyLoading || strategyExecuting || strategyReviewing) return;
+    if (strategyExecuting || strategyReviewing) return;
     setStrategyReviewing(true);
     setStrategyError(null);
     try {
@@ -779,7 +952,7 @@ export function CryptoPage() {
     } finally {
       setStrategyReviewing(false);
     }
-  }, [loadPaper, strategyExecuting, strategyLoading, strategyReviewing, strategyTf]);
+  }, [loadPaper, strategyExecuting, strategyReviewing, strategyTf]);
 
   const refreshAutoStatus = useCallback(async (soft = false) => {
     if (!soft) setAutoStatusLoading(true);
@@ -881,7 +1054,7 @@ export function CryptoPage() {
   }, [autoStarting, autoStopping]);
 
   const handleExecutePaperStrategy = useCallback(async () => {
-    if (strategyLoading || strategyExecuting || strategyReviewing) return;
+    if (strategyExecuting || strategyReviewing) return;
     const risk = parseStrategyRiskParams();
     if (!risk.ok) {
       setStrategyError(risk.message);
@@ -916,7 +1089,6 @@ export function CryptoPage() {
     loadPaper,
     parseStrategyRiskParams,
     strategyExecuting,
-    strategyLoading,
     strategyReviewing,
     strategyTf,
   ]);
@@ -1074,13 +1246,13 @@ export function CryptoPage() {
   const marketReady = fatalError === null && !initialLoading;
   const paperBusy = paperInitialLoading || paperRefreshing;
   const pageBusy = initialLoading || refreshing || paperRefreshing;
+  const autoRunActive = Boolean(autoStatus?.enabled);
 
   return (
     <>
       <h1 className="page-title">Cripto</h1>
       <p className="page-desc" style={{ maxWidth: "48rem" }}>
-        Vista de solo lectura vía Binance (ccxt): estado, precios, señales, scanner y cartera paper simulada.
-        Sin órdenes reales en Binance.
+        Mercado en vivo, bot paper simulado e historial de trades cerrados. Sin órdenes reales en Binance.
       </p>
 
       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1rem" }}>
@@ -1089,8 +1261,9 @@ export function CryptoPage() {
           className="radar-refresh-btn"
           onClick={() => void handleRefreshAll()}
           disabled={initialLoading || pageBusy}
+          title="Actualiza estado, precios, señales y cartera paper"
         >
-          Actualizar
+          Actualizar datos
         </button>
         <CryptoRefreshBadge active={refreshing} label="Actualizando mercado…" />
         <CryptoRefreshBadge active={paperRefreshing} label="Actualizando cartera…" />
@@ -1104,6 +1277,38 @@ export function CryptoPage() {
       {initialLoading && <p className="msg-muted">Cargando datos iniciales…</p>}
       {fatalError && !initialLoading && <p className="msg-error">{fatalError}</p>}
 
+      <div className="crypto-page-tabs" role="tablist" aria-label="Secciones cripto">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeCryptoTab === "principal"}
+          className={`crypto-page-tab${activeCryptoTab === "principal" ? " crypto-page-tab-active" : ""}`}
+          onClick={() => setActiveCryptoTab("principal")}
+        >
+          Principal
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeCryptoTab === "bot"}
+          className={`crypto-page-tab${activeCryptoTab === "bot" ? " crypto-page-tab-active" : ""}`}
+          onClick={() => setActiveCryptoTab("bot")}
+        >
+          Bot (Simulador)
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeCryptoTab === "historial"}
+          className={`crypto-page-tab${activeCryptoTab === "historial" ? " crypto-page-tab-active" : ""}`}
+          onClick={() => setActiveCryptoTab("historial")}
+        >
+          Historial (Simulado)
+        </button>
+      </div>
+
+      {activeCryptoTab === "principal" && (
+        <>
       {marketReady && status && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
@@ -1219,7 +1424,7 @@ export function CryptoPage() {
             }}
           >
             <h2 className="dashboard-section-title" style={{ margin: 0, flex: "1 1 auto" }}>
-              Scanner cripto
+              Scanner mercado
             </h2>
             <button
               type="button"
@@ -1227,11 +1432,11 @@ export function CryptoPage() {
               onClick={() => void loadScanner()}
               disabled={scanLoading}
             >
-              {scanLoading ? "Escaneando…" : "Actualizar scanner"}
+              {scanLoading ? "Escaneando…" : "Actualizar oportunidades"}
             </button>
           </div>
           <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "48rem", fontSize: "0.9rem" }}>
-            Ranking por score sobre la watchlist
+            Oportunidades detectadas: ranking por score sobre la watchlist
             {watchlistCount !== null ? ` (${watchlistCount} pares)` : ""} · {ANALYSIS_TF} · {ANALYSIS_LIMIT} velas.
             Los errores por símbolo no detienen el resto.
           </p>
@@ -1242,7 +1447,7 @@ export function CryptoPage() {
           ) : null}
           {scanLoading && scanRows === null ? <p className="msg-muted">Ejecutando scanner…</p> : null}
           {!scanLoading && scanRows === null && !scanError ? (
-            <p className="msg-muted">Pulsá «Actualizar scanner» para analizar todos los pares de la watchlist.</p>
+            <p className="msg-muted">Pulsá «Actualizar oportunidades» para analizar todos los pares de la watchlist.</p>
           ) : null}
           {scanRows && scanRows.length > 0 ? (
             <div className="table-wrap">
@@ -1298,14 +1503,76 @@ export function CryptoPage() {
         </div>
       )}
 
+      {marketReady && ohlcv && ohlcv.candles.length > 0 && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
+            Velas {ohlcv.symbol} · {ohlcv.timeframe} · últimas {ohlcv.candles.length}
+          </h2>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th style={{ textAlign: "right" }}>Open</th>
+                  <th style={{ textAlign: "right" }}>High</th>
+                  <th style={{ textAlign: "right" }}>Low</th>
+                  <th style={{ textAlign: "right" }}>Close</th>
+                  <th style={{ textAlign: "right" }}>Volume</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ohlcv.candles.map((row: CryptoOhlcvCandle, i: number) => {
+                  const [ts, open, high, low, close, vol] = row;
+                  const d = new Date(ts);
+                  return (
+                    <tr key={`${ts}-${i}`}>
+                      <td className="table-cell--nowrap">{Number.isFinite(d.getTime()) ? dtFmt.format(d) : "—"}</td>
+                      <td style={{ textAlign: "right" }}>{fmtPrice(open)}</td>
+                      <td style={{ textAlign: "right" }}>{fmtPrice(high)}</td>
+                      <td style={{ textAlign: "right" }}>{fmtPrice(low)}</td>
+                      <td style={{ textAlign: "right" }}>{fmtPrice(close)}</td>
+                      <td style={{ textAlign: "right" }}>{fmtVol(vol)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {marketReady && ohlcv && ohlcv.candles.length === 0 && (
+        <p className="msg-muted">No hay velas en la respuesta de /crypto/ohlcv.</p>
+      )}
+        </>
+      )}
+
+      {activeCryptoTab === "bot" && (
+        <>
       <div className="card" style={{ marginBottom: "1rem" }}>
         <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
           Estrategia paper
         </h2>
         <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "48rem", fontSize: "0.9rem" }}>
-          Escanea señales compra_potencial en la watchlist. Buscar no abre posiciones; ejecutar abre paper
-          simulado por monto USDT (sin órdenes reales en Binance).
+          Configuración del simulador: ejecutar abre posiciones paper por monto USDT (sin órdenes reales en Binance).
+          Para explorar el mercado usá «Scanner mercado» en Principal.
         </p>
+        {autoRunActive ? (
+          <p
+            className="msg-muted"
+            style={{
+              marginTop: 0,
+              marginBottom: "0.75rem",
+              fontSize: "0.875rem",
+              padding: "0.5rem 0.65rem",
+              borderRadius: "6px",
+              border: "1px solid var(--border)",
+              background: "color-mix(in srgb, var(--accent) 8%, var(--bg))",
+            }}
+          >
+            Auto-run activo: detenelo para modificar la estrategia.
+          </p>
+        ) : null}
         <div className="radar-toolbar" style={{ marginBottom: "0.75rem" }}>
           <label className="radar-toolbar__field">
             <span className="radar-toolbar__label">Timeframe</span>
@@ -1314,6 +1581,7 @@ export function CryptoPage() {
               value={strategyTf}
               onChange={(ev) => setStrategyTf(ev.target.value)}
               placeholder="1h"
+              disabled={autoRunActive}
             />
           </label>
           <label className="radar-toolbar__field">
@@ -1325,6 +1593,7 @@ export function CryptoPage() {
               value={strategyAmountUsdt}
               onChange={(ev) => setStrategyAmountUsdt(ev.target.value)}
               placeholder="100"
+              disabled={autoRunActive}
             />
           </label>
           <label className="radar-toolbar__field">
@@ -1336,6 +1605,7 @@ export function CryptoPage() {
               value={strategyStopLossPct}
               onChange={(ev) => setStrategyStopLossPct(ev.target.value)}
               placeholder="2"
+              disabled={autoRunActive}
             />
           </label>
           <label className="radar-toolbar__field">
@@ -1347,6 +1617,7 @@ export function CryptoPage() {
               value={strategyTakeProfitPct}
               onChange={(ev) => setStrategyTakeProfitPct(ev.target.value)}
               placeholder="4"
+              disabled={autoRunActive}
             />
           </label>
           <label className="radar-toolbar__field">
@@ -1358,6 +1629,7 @@ export function CryptoPage() {
               value={strategyTrailingPct}
               onChange={(ev) => setStrategyTrailingPct(ev.target.value)}
               placeholder="1.5"
+              disabled={autoRunActive}
             />
           </label>
           <label className="radar-toolbar__field">
@@ -1369,6 +1641,7 @@ export function CryptoPage() {
               value={strategyMaxPositions}
               onChange={(ev) => setStrategyMaxPositions(ev.target.value)}
               placeholder="3"
+              disabled={autoRunActive}
             />
           </label>
           <label className="radar-toolbar__field">
@@ -1380,6 +1653,7 @@ export function CryptoPage() {
               value={strategyBreakEvenTriggerPct}
               onChange={(ev) => setStrategyBreakEvenTriggerPct(ev.target.value)}
               placeholder="opcional"
+              disabled={autoRunActive}
             />
           </label>
           <label className="radar-toolbar__field">
@@ -1391,6 +1665,7 @@ export function CryptoPage() {
               value={strategyBreakEvenPlusPct}
               onChange={(ev) => setStrategyBreakEvenPlusPct(ev.target.value)}
               placeholder="0"
+              disabled={autoRunActive}
             />
           </label>
           <label className="radar-toolbar__field">
@@ -1402,6 +1677,7 @@ export function CryptoPage() {
               value={strategyCooldownMinutes}
               onChange={(ev) => setStrategyCooldownMinutes(ev.target.value)}
               placeholder="0 = off"
+              disabled={autoRunActive}
             />
           </label>
           <label className="radar-toolbar__field">
@@ -1413,6 +1689,7 @@ export function CryptoPage() {
               value={strategyMinEntryScore}
               onChange={(ev) => setStrategyMinEntryScore(ev.target.value)}
               placeholder="0 = off"
+              disabled={autoRunActive}
             />
           </label>
           <label
@@ -1423,14 +1700,16 @@ export function CryptoPage() {
               flexDirection: "row",
               alignItems: "center",
               gap: "0.5rem",
-              cursor: "pointer",
+              cursor: autoRunActive ? "not-allowed" : "pointer",
               padding: "0.35rem 0",
+              opacity: autoRunActive ? 0.65 : 1,
             }}
           >
             <input
               type="checkbox"
               checked={strategyRequireBtcTrendUp}
               onChange={(ev) => setStrategyRequireBtcTrendUp(ev.target.checked)}
+              disabled={autoRunActive}
             />
             <span
               className="radar-toolbar__label"
@@ -1442,16 +1721,8 @@ export function CryptoPage() {
           <button
             type="button"
             className="radar-refresh-btn"
-            onClick={() => void handleSearchOpportunities()}
-            disabled={strategyLoading || strategyExecuting || strategyReviewing || pageBusy}
-          >
-            {strategyLoading ? "Buscando…" : "Buscar oportunidades"}
-          </button>
-          <button
-            type="button"
-            className="radar-refresh-btn"
             onClick={() => void handleReviewPaperExits()}
-            disabled={strategyLoading || strategyExecuting || strategyReviewing || pageBusy}
+            disabled={strategyExecuting || strategyReviewing || pageBusy}
           >
             {strategyReviewing ? "Revisando…" : "Revisar salidas paper"}
           </button>
@@ -1459,7 +1730,7 @@ export function CryptoPage() {
             type="button"
             className="radar-refresh-btn"
             onClick={() => void handleExecutePaperStrategy()}
-            disabled={strategyLoading || strategyExecuting || strategyReviewing || pageBusy}
+            disabled={strategyExecuting || strategyReviewing || pageBusy}
           >
             {strategyExecuting ? "Ejecutando…" : "Ejecutar estrategia paper"}
           </button>
@@ -1469,7 +1740,7 @@ export function CryptoPage() {
             {strategyError}
           </p>
         ) : null}
-        {strategyCycle && !strategyLoading && !strategyExecuting && !strategyReviewing ? (
+        {strategyCycle && !strategyExecuting && !strategyReviewing ? (
           <div style={strategyResultBannerStyle(strategyCycle, strategyLastMode)}>
             <p style={{ margin: 0, fontWeight: 600 }}>{strategyCycle.message ?? "—"}</p>
             <p style={{ margin: "0.4rem 0 0", fontSize: "0.85rem", opacity: 0.95 }}>
@@ -1578,15 +1849,21 @@ export function CryptoPage() {
             </div>
           </>
         ) : null}
-      </div>
 
-      <div className="card" style={{ marginBottom: "1rem" }}>
-        <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
+        <div
+          style={{
+            marginTop: "1.25rem",
+            paddingTop: "1rem",
+            borderTop: "1px solid var(--border)",
+          }}
+        >
+        <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
           Auto-run paper
-        </h2>
+        </h3>
         <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "48rem", fontSize: "0.9rem" }}>
-          Ejecuta en segundo plano la revisión de salidas y la estrategia paper según intervalos. Usa los
-          parámetros de riesgo de la sección anterior. Solo simulación; no inicia al abrir la app.
+          El auto-run usa la configuración de estrategia paper definida arriba (timeframe, monto, SL/TP,
+          trailing, break-even, filtros). Ejecuta revisión de salidas y entradas por intervalos. Solo
+          simulación; no inicia al abrir la app.
         </p>
         <div
           style={{
@@ -1685,6 +1962,143 @@ export function CryptoPage() {
             Último ciclo: {autoStatus.last_actions.length} acción(es) registrada(s).
           </p>
         ) : null}
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        {paperActionError ? (
+          <p className="msg-error" style={{ fontSize: "0.875rem", marginBottom: "0.65rem" }}>
+            {paperActionError}
+          </p>
+        ) : null}
+        <details className="crypto-history-details">
+          <summary className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+            Abrir posición manual
+          </summary>
+          <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.875rem" }}>
+            Usa precio actual de Binance, no ejecuta orden real.
+          </p>
+          <div className="radar-toolbar" style={{ marginBottom: "1rem" }}>
+            <label className="radar-toolbar__field">
+              <span className="radar-toolbar__label">Símbolo</span>
+              <input
+                className="radar-toolbar__input"
+                value={paperSymbol}
+                onChange={(ev) => setPaperSymbol(ev.target.value)}
+                placeholder="BTC/USDT"
+              />
+            </label>
+            <label className="radar-toolbar__field">
+              <span className="radar-toolbar__label">Monto USDT</span>
+              <input
+                className="radar-toolbar__input"
+                type="text"
+                inputMode="decimal"
+                value={paperAmountUsdt}
+                onChange={(ev) => setPaperAmountUsdt(ev.target.value)}
+                placeholder="100"
+              />
+            </label>
+            <label className="radar-toolbar__field" style={{ minWidth: "12rem" }}>
+              <span className="radar-toolbar__label">Motivo</span>
+              <input
+                className="radar-toolbar__input"
+                value={paperReason}
+                onChange={(ev) => setPaperReason(ev.target.value)}
+                placeholder="entrada paper por monto"
+              />
+            </label>
+            <label className="radar-toolbar__field">
+              <span className="radar-toolbar__label">Stop loss %</span>
+              <input
+                className="radar-toolbar__input"
+                type="text"
+                inputMode="decimal"
+                value={strategyStopLossPct}
+                onChange={(ev) => setStrategyStopLossPct(ev.target.value)}
+                placeholder="opcional (0 = off)"
+              />
+            </label>
+            <label className="radar-toolbar__field">
+              <span className="radar-toolbar__label">Take profit %</span>
+              <input
+                className="radar-toolbar__input"
+                type="text"
+                inputMode="decimal"
+                value={strategyTakeProfitPct}
+                onChange={(ev) => setStrategyTakeProfitPct(ev.target.value)}
+                placeholder="opcional (0 = off)"
+              />
+            </label>
+            <label className="radar-toolbar__field">
+              <span className="radar-toolbar__label">Trailing stop %</span>
+              <input
+                className="radar-toolbar__input"
+                type="text"
+                inputMode="decimal"
+                value={strategyTrailingPct}
+                onChange={(ev) => setStrategyTrailingPct(ev.target.value)}
+                placeholder="opcional (0 = off)"
+              />
+            </label>
+            <label className="radar-toolbar__field">
+              <span className="radar-toolbar__label">Break even trigger %</span>
+              <input
+                className="radar-toolbar__input"
+                type="text"
+                inputMode="decimal"
+                value={strategyBreakEvenTriggerPct}
+                onChange={(ev) => setStrategyBreakEvenTriggerPct(ev.target.value)}
+                placeholder="opcional (compartido con estrategia)"
+              />
+            </label>
+            <label className="radar-toolbar__field">
+              <span className="radar-toolbar__label">Break even plus %</span>
+              <input
+                className="radar-toolbar__input"
+                type="text"
+                inputMode="decimal"
+                value={strategyBreakEvenPlusPct}
+                onChange={(ev) => setStrategyBreakEvenPlusPct(ev.target.value)}
+                placeholder="0"
+              />
+            </label>
+            <button
+              type="button"
+              className="radar-refresh-btn"
+              onClick={() => void handleOpenPaperMarketAmount()}
+              disabled={paperOpening || paperBusy}
+            >
+              {paperOpening ? "Abriendo…" : "Abrir paper por USDT"}
+            </button>
+          </div>
+          <details style={{ marginBottom: 0 }}>
+            <summary className="msg-muted" style={{ cursor: "pointer", fontSize: "0.875rem", marginBottom: "0.5rem" }}>
+              Abrir por cantidad cripto (avanzado)
+            </summary>
+            <div className="radar-toolbar">
+              <label className="radar-toolbar__field">
+                <span className="radar-toolbar__label">Cantidad</span>
+                <input
+                  className="radar-toolbar__input"
+                  type="text"
+                  inputMode="decimal"
+                  value={paperQty}
+                  onChange={(ev) => setPaperQty(ev.target.value)}
+                  placeholder="0.01"
+                />
+              </label>
+              <button
+                type="button"
+                className="radar-refresh-btn"
+                onClick={() => void handleOpenPaperMarketQty()}
+                disabled={paperOpening}
+              >
+                {paperOpening ? "Abriendo…" : "Abrir paper a mercado (qty)"}
+              </button>
+            </div>
+          </details>
+        </details>
       </div>
 
       <div className="card" style={{ marginBottom: "1rem" }}>
@@ -1717,11 +2131,6 @@ export function CryptoPage() {
           Simulación local en USDT; no se envían órdenes a Binance. Precios de mercado vía ticker público.
         </p>
         {paperError ? <p className="msg-error">{paperError}</p> : null}
-        {paperActionError ? (
-          <p className="msg-error" style={{ fontSize: "0.875rem" }}>
-            {paperActionError}
-          </p>
-        ) : null}
         {paperInitialLoading && !paper ? <p className="msg-muted">Cargando cartera paper…</p> : null}
         {paper ? (
           <div style={{ opacity: paperRefreshing ? 0.88 : 1, transition: "opacity 0.15s ease" }}>
@@ -1748,263 +2157,13 @@ export function CryptoPage() {
                 </div>
               </div>
             </div>
+          </div>
+        ) : null}
+      </div>
 
-            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-              Métricas paper
-            </h3>
-            {paperMetrics && paperMetrics.closed_trades > 0 ? (
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
-                  gap: "0.65rem",
-                  marginBottom: "1rem",
-                  padding: "0.65rem 0.75rem",
-                  borderRadius: "8px",
-                  border: "1px solid var(--border)",
-                  background: "color-mix(in srgb, var(--bg-panel) 92%, transparent)",
-                }}
-              >
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">Trades cerrados</div>
-                  <div className="stat__value">{paperMetrics.closed_trades}</div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">Ganadoras / Perdedoras</div>
-                  <div className="stat__value" style={{ fontSize: "0.95rem" }}>
-                    {paperMetrics.winners} / {paperMetrics.losers}
-                  </div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">Win rate</div>
-                  <div className="stat__value">
-                    {paperMetrics.win_rate_pct !== null ? fmtPct(paperMetrics.win_rate_pct) : "—"}
-                  </div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">PnL total</div>
-                  <div className="stat__value" style={pnlStyle(paperMetrics.total_pnl_usdt)}>
-                    {fmtUsdt(paperMetrics.total_pnl_usdt)}
-                  </div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div
-                    className="stat__label"
-                    title="Ganancias brutas / pérdidas brutas (solo trades con pérdidas en el denominador)."
-                  >
-                    Profit factor
-                  </div>
-                  <div className="stat__value">{fmtProfitFactor(paperMetrics.profit_factor)}</div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label" title="Ganancia esperada promedio por trade cerrado.">
-                    Expectancy
-                  </div>
-                  <div className="stat__value" style={pnlStyle(paperMetrics.expectancy_usdt)}>
-                    {paperMetrics.expectancy_usdt !== null ? fmtUsdt(paperMetrics.expectancy_usdt) : "—"}
-                  </div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">Total ganado</div>
-                  <div className="stat__value" style={pnlStyle(paperMetrics.gross_profit_usdt)}>
-                    {fmtUsdt(paperMetrics.gross_profit_usdt)}
-                  </div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">Total perdido</div>
-                  <div className="stat__value" style={pnlStyle(-paperMetrics.gross_loss_usdt)}>
-                    {fmtUsdt(-paperMetrics.gross_loss_usdt)}
-                  </div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">Ganancia prom.</div>
-                  <div className="stat__value" style={pnlStyle(paperMetrics.avg_winner_usdt)}>
-                    {paperMetrics.avg_winner_usdt !== null ? fmtUsdt(paperMetrics.avg_winner_usdt) : "—"}
-                  </div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">Pérdida prom.</div>
-                  <div className="stat__value" style={pnlStyle(paperMetrics.avg_loser_usdt)}>
-                    {paperMetrics.avg_loser_usdt !== null ? fmtUsdt(paperMetrics.avg_loser_usdt) : "—"}
-                  </div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">Mejor trade</div>
-                  <div className="stat__value" style={{ ...pnlStyle(paperMetrics.best_trade?.pnl_usdt), fontSize: "0.82rem" }}>
-                    {fmtTradeHighlight(paperMetrics.best_trade)}
-                  </div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">Peor trade</div>
-                  <div className="stat__value" style={{ ...pnlStyle(paperMetrics.worst_trade?.pnl_usdt), fontSize: "0.82rem" }}>
-                    {fmtTradeHighlight(paperMetrics.worst_trade)}
-                  </div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">Racha ganadora</div>
-                  <div className="stat__value" style={{ fontSize: "0.9rem" }}>
-                    {paperMetrics.current_win_streak} (máx. {paperMetrics.max_win_streak})
-                  </div>
-                </div>
-                <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                  <div className="stat__label">Racha perdedora</div>
-                  <div className="stat__value" style={{ fontSize: "0.9rem" }}>
-                    {paperMetrics.current_loss_streak} (máx. {paperMetrics.max_loss_streak})
-                  </div>
-                </div>
-                {paperEquityCurve && paperEquityCurve.summary.trades_count > 0 ? (
-                  <>
-                    <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                      <div className="stat__label">Max drawdown</div>
-                      <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.max_drawdown_usdt)}>
-                        {fmtUsdt(paperEquityCurve.summary.max_drawdown_usdt)}
-                      </div>
-                    </div>
-                    <div className="stat dashboard-stat" style={{ margin: 0 }}>
-                      <div className="stat__label">Max drawdown %</div>
-                      <div className="stat__value" style={pnlStyle(paperEquityCurve.summary.max_drawdown_pct)}>
-                        {paperEquityCurve.summary.max_drawdown_pct !== null
-                          ? fmtPct(paperEquityCurve.summary.max_drawdown_pct)
-                          : "—"}
-                      </div>
-                    </div>
-                  </>
-                ) : null}
-              </div>
-            ) : (
-              <p className="msg-muted" style={{ marginTop: 0, marginBottom: "1rem", fontSize: "0.875rem" }}>
-                Sin trades cerrados todavía.
-              </p>
-            )}
-
-
-            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-              Abrir posición paper
-            </h3>
-            <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.875rem" }}>
-              Usa precio actual de Binance, no ejecuta orden real.
-            </p>
-            <div className="radar-toolbar" style={{ marginBottom: "1rem" }}>
-              <label className="radar-toolbar__field">
-                <span className="radar-toolbar__label">Símbolo</span>
-                <input
-                  className="radar-toolbar__input"
-                  value={paperSymbol}
-                  onChange={(ev) => setPaperSymbol(ev.target.value)}
-                  placeholder="BTC/USDT"
-                />
-              </label>
-              <label className="radar-toolbar__field">
-                <span className="radar-toolbar__label">Monto USDT</span>
-                <input
-                  className="radar-toolbar__input"
-                  type="text"
-                  inputMode="decimal"
-                  value={paperAmountUsdt}
-                  onChange={(ev) => setPaperAmountUsdt(ev.target.value)}
-                  placeholder="100"
-                />
-              </label>
-              <label className="radar-toolbar__field" style={{ minWidth: "12rem" }}>
-                <span className="radar-toolbar__label">Motivo</span>
-                <input
-                  className="radar-toolbar__input"
-                  value={paperReason}
-                  onChange={(ev) => setPaperReason(ev.target.value)}
-                  placeholder="entrada paper por monto"
-                />
-              </label>
-              <label className="radar-toolbar__field">
-                <span className="radar-toolbar__label">Stop loss %</span>
-                <input
-                  className="radar-toolbar__input"
-                  type="text"
-                  inputMode="decimal"
-                  value={strategyStopLossPct}
-                  onChange={(ev) => setStrategyStopLossPct(ev.target.value)}
-                  placeholder="opcional (0 = off)"
-                />
-              </label>
-              <label className="radar-toolbar__field">
-                <span className="radar-toolbar__label">Take profit %</span>
-                <input
-                  className="radar-toolbar__input"
-                  type="text"
-                  inputMode="decimal"
-                  value={strategyTakeProfitPct}
-                  onChange={(ev) => setStrategyTakeProfitPct(ev.target.value)}
-                  placeholder="opcional (0 = off)"
-                />
-              </label>
-              <label className="radar-toolbar__field">
-                <span className="radar-toolbar__label">Trailing stop %</span>
-                <input
-                  className="radar-toolbar__input"
-                  type="text"
-                  inputMode="decimal"
-                  value={strategyTrailingPct}
-                  onChange={(ev) => setStrategyTrailingPct(ev.target.value)}
-                  placeholder="opcional (0 = off)"
-                />
-              </label>
-              <label className="radar-toolbar__field">
-                <span className="radar-toolbar__label">Break even trigger %</span>
-                <input
-                  className="radar-toolbar__input"
-                  type="text"
-                  inputMode="decimal"
-                  value={strategyBreakEvenTriggerPct}
-                  onChange={(ev) => setStrategyBreakEvenTriggerPct(ev.target.value)}
-                  placeholder="opcional (compartido con estrategia)"
-                />
-              </label>
-              <label className="radar-toolbar__field">
-                <span className="radar-toolbar__label">Break even plus %</span>
-                <input
-                  className="radar-toolbar__input"
-                  type="text"
-                  inputMode="decimal"
-                  value={strategyBreakEvenPlusPct}
-                  onChange={(ev) => setStrategyBreakEvenPlusPct(ev.target.value)}
-                  placeholder="0"
-                />
-              </label>
-              <button
-                type="button"
-                className="radar-refresh-btn"
-                onClick={() => void handleOpenPaperMarketAmount()}
-                disabled={paperOpening || paperBusy}
-              >
-                {paperOpening ? "Abriendo…" : "Abrir paper por USDT"}
-              </button>
-            </div>
-            <details style={{ marginBottom: "1rem" }}>
-              <summary className="msg-muted" style={{ cursor: "pointer", fontSize: "0.875rem", marginBottom: "0.5rem" }}>
-                Abrir por cantidad cripto (avanzado)
-              </summary>
-              <div className="radar-toolbar">
-                <label className="radar-toolbar__field">
-                  <span className="radar-toolbar__label">Cantidad</span>
-                  <input
-                    className="radar-toolbar__input"
-                    type="text"
-                    inputMode="decimal"
-                    value={paperQty}
-                    onChange={(ev) => setPaperQty(ev.target.value)}
-                    placeholder="0.01"
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="radar-refresh-btn"
-                  onClick={() => void handleOpenPaperMarketQty()}
-                  disabled={paperOpening}
-                >
-                  {paperOpening ? "Abriendo…" : "Abrir paper a mercado (qty)"}
-                </button>
-              </div>
-            </details>
-
+      {paper ? (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <div style={{ opacity: paperRefreshing ? 0.88 : 1, transition: "opacity 0.15s ease" }}>
             <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
               Posiciones abiertas ({paper.positions.length})
             </h3>
@@ -2155,95 +2314,51 @@ export function CryptoPage() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      ) : null}
 
-            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-              Últimos trades cerrados
-              {paper.trades_total > paper.trades.length
-                ? ` (mostrando ${paper.trades.length} de ${paper.trades_total})`
-                : ""}
-            </h3>
-            {paper.trades.length === 0 ? (
-              <p className="msg-muted">Sin trades cerrados todavía.</p>
-            ) : (
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Símbolo</th>
-                      <th style={{ textAlign: "right" }}>Cantidad</th>
-                      <th style={{ textAlign: "right" }}>Entrada</th>
-                      <th style={{ textAlign: "right" }}>Salida</th>
-                      <th style={{ textAlign: "right" }}>PnL USDT</th>
-                      <th style={{ textAlign: "right" }}>PnL %</th>
-                      <th>Motivo salida</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {paper.trades.map((t) => (
-                      <tr key={t.id}>
-                        <td>{t.symbol}</td>
-                        <td style={{ textAlign: "right" }}>{t.quantity}</td>
-                        <td style={{ textAlign: "right" }}>{fmtPrice(t.entry_price)}</td>
-                        <td style={{ textAlign: "right" }}>{fmtPrice(t.exit_price)}</td>
-                        <td style={{ textAlign: "right" }}>
-                          <span style={pnlStyle(t.pnl_usdt)}>{fmtUsdt(t.pnl_usdt)}</span>
-                        </td>
-                        <td style={{ textAlign: "right" }}>
-                          <span style={pnlStyle(t.pnl_pct)}>{fmtPct(t.pnl_pct)}</span>
-                        </td>
-                        <td className="msg-muted" style={{ fontSize: "0.82rem" }}>
-                          {t.exit_reason || "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+        </>
+      )}
+
+      {activeCryptoTab === "historial" && (
+        <>
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: "0.75rem",
+            marginBottom: "0.75rem",
+          }}
+        >
+          <h2 className="dashboard-section-title" style={{ margin: 0, flex: "1 1 auto" }}>
+            Historial simulado
+          </h2>
+          <button
+            type="button"
+            className="radar-refresh-btn"
+            onClick={() => void loadPaper(true)}
+            disabled={paperBusy}
+          >
+            Actualizar historial
+          </button>
+          <CryptoRefreshBadge active={paperRefreshing} />
+        </div>
+        {paperError ? <p className="msg-error">{paperError}</p> : null}
+        {paperInitialLoading && !paper ? <p className="msg-muted">Cargando historial…</p> : null}
+        <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+          Métricas paper
+        </h3>
+        <PaperMetricsPanel paperMetrics={paperMetrics} paperEquityCurve={paperEquityCurve} />
+        {paper ? (
+          <div style={{ marginTop: "1.25rem", opacity: paperRefreshing ? 0.88 : 1, transition: "opacity 0.15s ease" }}>
+            <PaperClosedTradesPanel paper={paper} />
           </div>
         ) : null}
       </div>
-
-      {marketReady && ohlcv && ohlcv.candles.length > 0 && (
-        <div className="card">
-          <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
-            Velas {ohlcv.symbol} · {ohlcv.timeframe} · últimas {ohlcv.candles.length}
-          </h2>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Fecha</th>
-                  <th style={{ textAlign: "right" }}>Open</th>
-                  <th style={{ textAlign: "right" }}>High</th>
-                  <th style={{ textAlign: "right" }}>Low</th>
-                  <th style={{ textAlign: "right" }}>Close</th>
-                  <th style={{ textAlign: "right" }}>Volume</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ohlcv.candles.map((row: CryptoOhlcvCandle, i: number) => {
-                  const [ts, open, high, low, close, vol] = row;
-                  const d = new Date(ts);
-                  return (
-                    <tr key={`${ts}-${i}`}>
-                      <td className="table-cell--nowrap">{Number.isFinite(d.getTime()) ? dtFmt.format(d) : "—"}</td>
-                      <td style={{ textAlign: "right" }}>{fmtPrice(open)}</td>
-                      <td style={{ textAlign: "right" }}>{fmtPrice(high)}</td>
-                      <td style={{ textAlign: "right" }}>{fmtPrice(low)}</td>
-                      <td style={{ textAlign: "right" }}>{fmtPrice(close)}</td>
-                      <td style={{ textAlign: "right" }}>{fmtVol(vol)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {marketReady && ohlcv && ohlcv.candles.length === 0 && (
-        <p className="msg-muted">No hay velas en la respuesta de /crypto/ohlcv.</p>
+        </>
       )}
     </>
   );
