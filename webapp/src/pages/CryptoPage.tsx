@@ -125,6 +125,108 @@ function parseBreakEvenPct(triggerStr: string, plusStr: string): { trigger: numb
   return { trigger, plus };
 }
 
+const TOOLTIP_BE_PENDING =
+  "Break-even pendiente: el precio todavía no alcanzó el trigger configurado.";
+const TOOLTIP_BE_ACTIVE =
+  "Break-even activo: el stop ya fue elevado al piso protegido (entrada + plus %).";
+const TOOLTIP_TRAIL_PCT =
+  "Trail %: stop dinámico calculado desde el precio máximo alcanzado (máx. × (1 − trail%)).";
+const TOOLTIP_TRAIL_ACTIVE = "Trailing activo: el máximo superó la entrada; el piso dinámico puede cerrar la posición.";
+
+function paperTrailingStopPrice(pos: CryptoPaperPosition): number | null {
+  const pct = pos.trailing_stop_pct;
+  const high = pos.highest_price ?? pos.entry_price;
+  if (pct === null || pct === undefined || !Number.isFinite(pct) || pct <= 0) return null;
+  if (high === null || high === undefined || !Number.isFinite(high) || high <= 0) return null;
+  return high * (1 - pct / 100);
+}
+
+function paperTrailingActive(pos: CryptoPaperPosition): boolean {
+  const pct = pos.trailing_stop_pct;
+  if (pct === null || pct === undefined || !Number.isFinite(pct) || pct <= 0) return false;
+  const entry = pos.entry_price;
+  const high = pos.highest_price;
+  if (!Number.isFinite(entry) || entry <= 0) return false;
+  if (high === null || high === undefined || !Number.isFinite(high)) return false;
+  return high > entry;
+}
+
+function formatPaperExitPolicy(policy: string | null | undefined): string {
+  if (!policy?.trim()) return "—";
+  const labels: Record<string, string> = {
+    stop_loss: "Stop loss",
+    take_profit: "Take profit",
+    trailing_stop: "Trailing",
+    break_even: "Break-even",
+  };
+  return policy
+    .split("+")
+    .map((p) => labels[p.trim()] ?? p.trim())
+    .join(" · ");
+}
+
+function paperProbableExit(pos: CryptoPaperPosition): { label: string; title: string } {
+  const cp = pos.current_price;
+  if (cp === null || cp === undefined || !Number.isFinite(cp)) {
+    return { label: "—", title: "Sin precio de mercado para estimar salida." };
+  }
+
+  const sl = pos.stop_loss;
+  const tp = pos.take_profit;
+  const trailPx = paperTrailingStopPrice(pos);
+
+  if (sl !== null && sl !== undefined && Number.isFinite(sl) && cp <= sl) {
+    return {
+      label: pos.break_even_active ? "Stop BE (tocado)" : "Stop loss (tocado)",
+      title: "El precio actual está en o por debajo del stop loss.",
+    };
+  }
+  if (tp !== null && tp !== undefined && Number.isFinite(tp) && cp >= tp) {
+    return { label: "Take profit (tocado)", title: "El precio actual alcanzó o superó el take profit." };
+  }
+  if (trailPx !== null && Number.isFinite(trailPx) && cp <= trailPx) {
+    return {
+      label: "Trailing (tocado)",
+      title: `Precio actual ≤ trailing (${fmtPrice(trailPx)} desde máx. ${fmtPrice(pos.highest_price)}).`,
+    };
+  }
+
+  type Candidate = { label: string; distPct: number; title: string };
+  const down: Candidate[] = [];
+  if (sl !== null && sl !== undefined && Number.isFinite(sl) && sl < cp) {
+    down.push({
+      label: pos.break_even_active ? "Stop BE" : "Stop loss",
+      distPct: ((cp - sl) / cp) * 100,
+      title: `Stop en ${fmtPrice(sl)} (${numFmt2.format(((cp - sl) / cp) * 100)}% abajo).`,
+    });
+  }
+  if (trailPx !== null && Number.isFinite(trailPx) && trailPx < cp) {
+    down.push({
+      label: "Trailing",
+      distPct: ((cp - trailPx) / cp) * 100,
+      title: `Trailing en ${fmtPrice(trailPx)} (${numFmt2.format(((cp - trailPx) / cp) * 100)}% abajo).`,
+    });
+  }
+  if (tp !== null && tp !== undefined && Number.isFinite(tp) && tp > cp) {
+    const distPct = ((tp - cp) / cp) * 100;
+    return {
+      label: `Take profit (${numFmt2.format(distPct)}%)`,
+      title: `Objetivo en ${fmtPrice(tp)} (${numFmt2.format(distPct)}% arriba). Prioridad de revisión: SL → TP → trailing.`,
+    };
+  }
+
+  if (down.length === 0) {
+    return { label: "Sin reglas", title: "No hay stop, trailing ni take profit configurados." };
+  }
+
+  const nearest = down.reduce((a, b) => (a.distPct < b.distPct ? a : b));
+  const urgency = nearest.distPct < 0.75 ? "muy cerca" : `${numFmt2.format(nearest.distPct)}% abajo`;
+  return {
+    label: `${nearest.label} (${urgency})`,
+    title: `${nearest.title} La revisión automática evalúa stop loss antes que trailing.`,
+  };
+}
+
 function strategyResultBannerStyle(
   cycle: CryptoPaperCycleResponse,
   lastMode: "search" | "execute",
@@ -1260,86 +1362,147 @@ export function CryptoPage() {
                 Sin posiciones abiertas.
               </p>
             ) : (
-              <div className="table-wrap" style={{ marginBottom: "1rem" }}>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Símbolo</th>
-                      <th style={{ textAlign: "right" }}>Monto USDT</th>
-                      <th style={{ textAlign: "right" }}>Cantidad</th>
-                      <th style={{ textAlign: "right" }}>Entrada</th>
-                      <th style={{ textAlign: "right" }}>Stop loss</th>
-                      <th style={{ textAlign: "right" }}>Take profit</th>
-                      <th style={{ textAlign: "right" }}>Trail %</th>
-                      <th style={{ textAlign: "right" }}>Máx precio</th>
-                      <th>Break-even</th>
-                      <th>Política</th>
-                      <th style={{ textAlign: "right" }}>Precio actual</th>
-                      <th style={{ textAlign: "right" }}>PnL USDT</th>
-                      <th style={{ textAlign: "right" }}>PnL %</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {paper.positions.map((pos) => (
-                      <tr key={pos.id} title={pos.price_error ?? undefined}>
-                        <td>
-                          <strong>{pos.symbol}</strong>
-                        </td>
-                        <td style={{ textAlign: "right" }}>{fmtUsdt(pos.amount_usdt)}</td>
-                        <td style={{ textAlign: "right" }}>{pos.quantity}</td>
-                        <td style={{ textAlign: "right" }}>{fmtPrice(pos.entry_price)}</td>
-                        <td style={{ textAlign: "right" }}>{fmtPrice(pos.stop_loss)}</td>
-                        <td style={{ textAlign: "right" }}>{fmtPrice(pos.take_profit)}</td>
-                        <td style={{ textAlign: "right" }}>
-                          {pos.trailing_stop_pct !== null && pos.trailing_stop_pct !== undefined
-                            ? `${numFmt2.format(pos.trailing_stop_pct)}%`
-                            : "—"}
-                        </td>
-                        <td style={{ textAlign: "right" }}>{fmtPrice(pos.highest_price)}</td>
-                        <td>
-                          {pos.break_even_active ? (
-                            <span className="radar-badge radar-badge--conv-alta">Activo</span>
-                          ) : pos.break_even_trigger_pct !== null &&
-                              pos.break_even_trigger_pct !== undefined &&
-                              pos.break_even_trigger_pct > 0 ? (
-                            <span className="msg-muted" style={{ fontSize: "0.78rem" }}>
-                              Pendiente
-                            </span>
-                          ) : (
-                            "—"
-                          )}
-                        </td>
-                        <td className="msg-muted" style={{ fontSize: "0.78rem" }}>
-                          {pos.exit_policy || "—"}
-                        </td>
-                        <td style={{ textAlign: "right" }}>
-                          {pos.current_price !== null && pos.current_price !== undefined
-                            ? fmtPrice(pos.current_price)
-                            : "—"}
-                        </td>
-                        <td style={{ textAlign: "right" }}>
-                          <span style={pnlStyle(pos.unrealized_pnl_usdt)}>{fmtUsdt(pos.unrealized_pnl_usdt)}</span>
-                        </td>
-                        <td style={{ textAlign: "right" }}>
-                          <span style={pnlStyle(pos.unrealized_pnl_pct)}>{fmtPct(pos.unrealized_pnl_pct)}</span>
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="radar-refresh-btn"
-                            style={{ padding: "0.25rem 0.55rem", fontSize: "0.78rem" }}
-                            onClick={() => void handleClosePaper(pos)}
-                            disabled={paperClosingId !== null}
-                          >
-                            {paperClosingId === pos.id ? "Cerrando…" : "Cerrar paper"}
-                          </button>
-                        </td>
+              <>
+                <p className="msg-muted" style={{ marginBottom: "0.5rem", fontSize: "0.78rem", lineHeight: 1.45 }}>
+                  <strong>Break-even pendiente:</strong> aún no alcanzó el trigger.{" "}
+                  <strong>Activo:</strong> el stop subió al piso protegido.{" "}
+                  <strong>Trail %:</strong> stop dinámico desde el máximo alcanzado.
+                </p>
+                <div className="table-wrap" style={{ marginBottom: "1rem" }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Símbolo</th>
+                        <th style={{ textAlign: "right" }}>Monto</th>
+                        <th style={{ textAlign: "right" }} title="Precio de entrada de la posición">
+                          Entrada
+                        </th>
+                        <th style={{ textAlign: "right" }} title="Último precio de mercado (ticker)">
+                          Actual
+                        </th>
+                        <th style={{ textAlign: "right" }} title="Ganancia/pérdida no realizada">
+                          PnL %
+                        </th>
+                        <th style={{ textAlign: "right" }} title="Stop loss vigente (puede subir con break-even)">
+                          SL actual
+                        </th>
+                        <th style={{ textAlign: "right" }} title="Precio objetivo de take profit">
+                          TP
+                        </th>
+                        <th style={{ textAlign: "right" }} title={TOOLTIP_TRAIL_PCT}>
+                          Trail %
+                        </th>
+                        <th style={{ textAlign: "right" }} title="Precio máximo registrado desde la apertura">
+                          Máx. precio
+                        </th>
+                        <th title="Estado del break-even configurado al abrir">Break-even</th>
+                        <th title="Reglas de salida configuradas en la posición">Política salida</th>
+                        <th title="Salida más próxima según precio actual (heurística visual)">Salida probable</th>
+                        <th />
                       </tr>
-                    ))}
+                    </thead>
+                  <tbody>
+                    {paper.positions.map((pos) => {
+                      const exitHint = paperProbableExit(pos);
+                      const trailPx = paperTrailingStopPrice(pos);
+                      const trailActive = paperTrailingActive(pos);
+                      const rowTitle = [pos.price_error, exitHint.title].filter(Boolean).join(" · ");
+                      return (
+                        <tr key={pos.id} title={rowTitle || undefined}>
+                          <td>
+                            <strong>{pos.symbol}</strong>
+                            <div className="msg-muted" style={{ fontSize: "0.72rem" }}>
+                              {pos.quantity} · {fmtUsdt(pos.unrealized_pnl_usdt)}
+                            </div>
+                          </td>
+                          <td style={{ textAlign: "right" }}>{fmtUsdt(pos.amount_usdt)}</td>
+                          <td style={{ textAlign: "right" }}>{fmtPrice(pos.entry_price)}</td>
+                          <td style={{ textAlign: "right" }}>
+                            {pos.current_price !== null && pos.current_price !== undefined
+                              ? fmtPrice(pos.current_price)
+                              : "—"}
+                          </td>
+                          <td style={{ textAlign: "right" }}>
+                            <span style={pnlStyle(pos.unrealized_pnl_pct)}>{fmtPct(pos.unrealized_pnl_pct)}</span>
+                          </td>
+                          <td style={{ textAlign: "right" }} title={fmtPrice(pos.stop_loss)}>
+                            {fmtPrice(pos.stop_loss)}
+                          </td>
+                          <td style={{ textAlign: "right" }}>{fmtPrice(pos.take_profit)}</td>
+                          <td style={{ textAlign: "right" }}>
+                            {pos.trailing_stop_pct !== null && pos.trailing_stop_pct !== undefined ? (
+                              <span
+                                title={
+                                  trailActive
+                                    ? `${TOOLTIP_TRAIL_PCT} ${TOOLTIP_TRAIL_ACTIVE} Nivel ≈ ${fmtPrice(trailPx)}.`
+                                    : TOOLTIP_TRAIL_PCT
+                                }
+                              >
+                                {numFmt2.format(pos.trailing_stop_pct)}%
+                                {trailActive ? (
+                                  <span
+                                    className="radar-badge radar-badge--conv-media"
+                                    style={{ marginLeft: "0.25rem", fontSize: "0.65rem", verticalAlign: "middle" }}
+                                  >
+                                    activo
+                                  </span>
+                                ) : null}
+                              </span>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td style={{ textAlign: "right" }}>{fmtPrice(pos.highest_price)}</td>
+                          <td>
+                            {pos.break_even_active ? (
+                              <span className="radar-badge radar-badge--conv-alta" title={TOOLTIP_BE_ACTIVE}>
+                                Activo
+                              </span>
+                            ) : pos.break_even_trigger_pct !== null &&
+                                pos.break_even_trigger_pct !== undefined &&
+                                pos.break_even_trigger_pct > 0 ? (
+                              <span
+                                className="msg-muted"
+                                style={{ fontSize: "0.78rem", cursor: "help", textDecoration: "underline dotted" }}
+                                title={TOOLTIP_BE_PENDING}
+                              >
+                                Pendiente
+                                <div style={{ fontSize: "0.68rem" }}>
+                                  trig. {numFmt2.format(pos.break_even_trigger_pct)}%
+                                </div>
+                              </span>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td
+                            className="msg-muted"
+                            style={{ fontSize: "0.78rem", maxWidth: "7.5rem" }}
+                            title={pos.exit_policy ?? undefined}
+                          >
+                            {formatPaperExitPolicy(pos.exit_policy)}
+                          </td>
+                          <td style={{ fontSize: "0.78rem", maxWidth: "9rem" }} title={exitHint.title}>
+                            {exitHint.label}
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="radar-refresh-btn"
+                              style={{ padding: "0.25rem 0.55rem", fontSize: "0.78rem" }}
+                              onClick={() => void handleClosePaper(pos)}
+                              disabled={paperClosingId !== null}
+                            >
+                              {paperClosingId === pos.id ? "Cerrando…" : "Cerrar"}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
-              </div>
+                </div>
+              </>
             )}
 
             <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
