@@ -8,6 +8,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from api.portfolio import router as portfolio_router
 from persistence.sqlite import init_database
@@ -566,6 +567,71 @@ def crypto_scan(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Scanner cripto: {e}") from e
     return {"timeframe": tf, "limit": limit, "results": results}
+
+
+class CryptoPaperOpenBody(BaseModel):
+    symbol: str = Field(..., min_length=3)
+    side: str = Field(default="long")
+    price: float = Field(..., gt=0)
+    quantity: float = Field(..., gt=0)
+    reason: str = ""
+
+
+class CryptoPaperCloseBody(BaseModel):
+    position_id: str = Field(..., min_length=1)
+    price: float = Field(..., gt=0)
+    reason: str = ""
+
+
+@app.get("/crypto/paper/portfolio")
+def crypto_paper_portfolio_get():
+    """Cartera paper cripto (simulación local; sin órdenes Binance)."""
+    from services.crypto.paper_portfolio import get_paper_portfolio
+
+    return get_paper_portfolio()
+
+
+@app.post("/crypto/paper/reset")
+def crypto_paper_portfolio_reset(initial_cash: float = Query(10000, ge=0)):
+    from services.crypto.paper_portfolio import get_paper_portfolio, reset_paper_portfolio
+
+    try:
+        reset_paper_portfolio(initial_cash=initial_cash)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return get_paper_portfolio()
+
+
+@app.post("/crypto/paper/open")
+def crypto_paper_open(body: CryptoPaperOpenBody):
+    from services.crypto.paper_portfolio import get_paper_portfolio, open_paper_position
+
+    try:
+        open_paper_position(
+            symbol=body.symbol,
+            side=body.side,
+            price=body.price,
+            quantity=body.quantity,
+            reason=body.reason,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return get_paper_portfolio()
+
+
+@app.post("/crypto/paper/close")
+def crypto_paper_close(body: CryptoPaperCloseBody):
+    from services.crypto.paper_portfolio import close_paper_position, get_paper_portfolio
+
+    try:
+        close_paper_position(
+            position_id=body.position_id,
+            price=body.price,
+            reason=body.reason,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return get_paper_portfolio()
 
 
 @app.get("/iol/status")

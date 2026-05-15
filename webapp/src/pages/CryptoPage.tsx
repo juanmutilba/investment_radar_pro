@@ -1,16 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import {
+  closeCryptoPaperPosition,
   getCryptoAnalysis,
   getCryptoOhlcv,
+  getCryptoPaperPortfolio,
   getCryptoScan,
   getCryptoStatus,
   getCryptoTicker,
   getCryptoWatchlist,
+  openCryptoPaperPosition,
+  resetCryptoPaperPortfolio,
   type CryptoAnalysisPayload,
   type CryptoAnalysisSignalKind,
   type CryptoOhlcvCandle,
   type CryptoOhlcvResponse,
+  type CryptoPaperPortfolio,
+  type CryptoPaperPosition,
   type CryptoScanRow,
   type CryptoStatusPayload,
   type CryptoTicker,
@@ -82,6 +88,18 @@ function signalLabelEs(s: CryptoAnalysisSignalKind): string {
   if (s === "compra_potencial") return "Compra potencial";
   if (s === "cuidado") return "Cuidado";
   return "Neutral";
+}
+
+function fmtUsdt(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "—";
+  return `USDT ${numFmt2.format(v)}`;
+}
+
+function pnlStyle(v: number | null | undefined): CSSProperties {
+  if (v === null || v === undefined || !Number.isFinite(v)) return { color: "var(--text-muted)" };
+  if (v > 0) return { color: "rgba(21, 128, 61, 0.96)", fontWeight: 700 };
+  if (v < 0) return { color: "rgba(185, 28, 28, 0.96)", fontWeight: 700 };
+  return { color: "var(--text-muted)" };
 }
 
 function CryptoAnalysisCard({ title, payload }: { title: string; payload: CryptoAnalysisPayload | null }) {
@@ -164,6 +182,27 @@ export function CryptoPage() {
   const [scanRows, setScanRows] = useState<CryptoScanRow[] | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [paper, setPaper] = useState<CryptoPaperPortfolio | null>(null);
+  const [paperLoading, setPaperLoading] = useState(false);
+  const [paperError, setPaperError] = useState<string | null>(null);
+  const [paperActionError, setPaperActionError] = useState<string | null>(null);
+  const [paperSymbol, setPaperSymbol] = useState("BTC/USDT");
+  const [paperPrice, setPaperPrice] = useState("");
+  const [paperQty, setPaperQty] = useState("");
+  const [paperReason, setPaperReason] = useState("");
+
+  const loadPaper = useCallback(async () => {
+    setPaperLoading(true);
+    setPaperError(null);
+    try {
+      const p = await getCryptoPaperPortfolio();
+      setPaper(p);
+    } catch (e: unknown) {
+      setPaperError(e instanceof Error ? e.message : "Error al cargar cartera paper");
+    } finally {
+      setPaperLoading(false);
+    }
+  }, []);
 
   const loadScanner = useCallback(async () => {
     setScanLoading(true);
@@ -284,14 +323,90 @@ export function CryptoPage() {
     };
   }, []);
 
+  useEffect(() => {
+    void loadPaper();
+  }, [loadPaper]);
+
+  const handleOpenPaper = useCallback(async () => {
+    setPaperActionError(null);
+    const price = parseFloat(paperPrice.replace(",", "."));
+    const quantity = parseFloat(paperQty.replace(",", "."));
+    if (!Number.isFinite(price) || price <= 0) {
+      setPaperActionError("Precio inválido");
+      return;
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setPaperActionError("Cantidad inválida");
+      return;
+    }
+    try {
+      const p = await openCryptoPaperPosition({
+        symbol: paperSymbol.trim(),
+        side: "long",
+        price,
+        quantity,
+        reason: paperReason.trim() || "apertura_manual_paper",
+      });
+      setPaper(p);
+      setPaperPrice("");
+      setPaperQty("");
+      setPaperReason("");
+    } catch (e: unknown) {
+      setPaperActionError(e instanceof Error ? e.message : "Error al abrir posición paper");
+    }
+  }, [paperPrice, paperQty, paperReason, paperSymbol]);
+
+  const handleClosePaper = useCallback(
+    async (pos: CryptoPaperPosition) => {
+      setPaperActionError(null);
+      let price = pos.current_price ?? null;
+      if (price === null || !Number.isFinite(price)) {
+        const raw = window.prompt(
+          `Precio de cierre USDT para ${pos.symbol}:`,
+          String(pos.entry_price),
+        );
+        if (raw === null) return;
+        price = parseFloat(raw.replace(",", "."));
+        if (!Number.isFinite(price) || price <= 0) {
+          setPaperActionError("Precio de cierre inválido");
+          return;
+        }
+      }
+      try {
+        const p = await closeCryptoPaperPosition({
+          position_id: pos.id,
+          price,
+          reason: "cierre_manual_paper",
+        });
+        setPaper(p);
+      } catch (e: unknown) {
+        setPaperActionError(e instanceof Error ? e.message : "Error al cerrar posición paper");
+      }
+    },
+    [],
+  );
+
+  const handleResetPaper = useCallback(async () => {
+    if (!window.confirm("¿Resetear la cartera paper? Se borran posiciones y trades simulados.")) {
+      return;
+    }
+    setPaperActionError(null);
+    try {
+      const p = await resetCryptoPaperPortfolio(10000);
+      setPaper(p);
+    } catch (e: unknown) {
+      setPaperActionError(e instanceof Error ? e.message : "Error al resetear cartera paper");
+    }
+  }, []);
+
   const statusHeadline = fatalError !== null ? "Error" : status !== null ? "Conectado" : "—";
 
   return (
     <>
       <h1 className="page-title">Cripto</h1>
       <p className="page-desc" style={{ maxWidth: "48rem" }}>
-        Vista de solo lectura vía Binance (ccxt): estado de credenciales, precios de referencia BTC/ETH, señales
-        técnicas heurísticas y velas recientes. Sin trading ni órdenes.
+        Vista de solo lectura vía Binance (ccxt): estado, precios, señales, scanner y cartera paper simulada.
+        Sin órdenes reales en Binance.
       </p>
 
       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1rem" }}>
@@ -501,6 +616,228 @@ export function CryptoPage() {
           ) : null}
         </div>
       )}
+
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: "0.75rem",
+            marginBottom: "0.75rem",
+          }}
+        >
+          <h2 className="dashboard-section-title" style={{ margin: 0, flex: "1 1 auto" }}>
+            Cartera paper cripto
+          </h2>
+          <button type="button" className="radar-refresh-btn" onClick={() => void loadPaper()} disabled={paperLoading}>
+            {paperLoading ? "Cargando…" : "Actualizar cartera"}
+          </button>
+          <button type="button" className="radar-refresh-btn" onClick={() => void handleResetPaper()}>
+            Reset paper
+          </button>
+        </div>
+        <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", maxWidth: "48rem", fontSize: "0.9rem" }}>
+          Simulación local en USDT; no se envían órdenes a Binance. Precios de mercado vía ticker público.
+        </p>
+        {paperError ? <p className="msg-error">{paperError}</p> : null}
+        {paperActionError ? (
+          <p className="msg-error" style={{ fontSize: "0.875rem" }}>
+            {paperActionError}
+          </p>
+        ) : null}
+        {paperLoading && !paper ? <p className="msg-muted">Cargando cartera paper…</p> : null}
+        {paper ? (
+          <>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+                gap: "0.75rem",
+                marginBottom: "1rem",
+              }}
+            >
+              <div className="stat dashboard-stat">
+                <div className="stat__label">Cash USDT</div>
+                <div className="stat__value">{fmtUsdt(paper.cash_usdt)}</div>
+              </div>
+              <div className="stat dashboard-stat">
+                <div className="stat__label">Equity estimada</div>
+                <div className="stat__value">{fmtUsdt(paper.equity_usdt)}</div>
+              </div>
+              <div className="stat dashboard-stat">
+                <div className="stat__label">PnL no realizado</div>
+                <div className="stat__value" style={pnlStyle(paper.unrealized_pnl_usdt)}>
+                  {fmtUsdt(paper.unrealized_pnl_usdt)}
+                </div>
+              </div>
+            </div>
+
+            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+              Abrir posición manual
+            </h3>
+            <div className="radar-toolbar" style={{ marginBottom: "1rem" }}>
+              <label className="radar-toolbar__field">
+                <span className="radar-toolbar__label">Símbolo</span>
+                <input
+                  className="radar-toolbar__input"
+                  value={paperSymbol}
+                  onChange={(ev) => setPaperSymbol(ev.target.value)}
+                  placeholder="BTC/USDT"
+                />
+              </label>
+              <label className="radar-toolbar__field">
+                <span className="radar-toolbar__label">Precio</span>
+                <input
+                  className="radar-toolbar__input"
+                  type="text"
+                  inputMode="decimal"
+                  value={paperPrice}
+                  onChange={(ev) => setPaperPrice(ev.target.value)}
+                  placeholder="65000"
+                />
+              </label>
+              <label className="radar-toolbar__field">
+                <span className="radar-toolbar__label">Cantidad</span>
+                <input
+                  className="radar-toolbar__input"
+                  type="text"
+                  inputMode="decimal"
+                  value={paperQty}
+                  onChange={(ev) => setPaperQty(ev.target.value)}
+                  placeholder="0.01"
+                />
+              </label>
+              <label className="radar-toolbar__field" style={{ minWidth: "12rem" }}>
+                <span className="radar-toolbar__label">Motivo</span>
+                <input
+                  className="radar-toolbar__input"
+                  value={paperReason}
+                  onChange={(ev) => setPaperReason(ev.target.value)}
+                  placeholder="compra_potencial score 78"
+                />
+              </label>
+              <button type="button" className="radar-refresh-btn" onClick={() => void handleOpenPaper()}>
+                Abrir paper
+              </button>
+            </div>
+
+            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+              Posiciones abiertas ({paper.positions.length})
+            </h3>
+            {paper.positions.length === 0 ? (
+              <p className="msg-muted" style={{ marginBottom: "1rem" }}>
+                Sin posiciones abiertas.
+              </p>
+            ) : (
+              <div className="table-wrap" style={{ marginBottom: "1rem" }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Símbolo</th>
+                      <th style={{ textAlign: "right" }}>Cantidad</th>
+                      <th style={{ textAlign: "right" }}>Entrada</th>
+                      <th style={{ textAlign: "right" }}>Precio actual</th>
+                      <th style={{ textAlign: "right" }}>Valor mercado</th>
+                      <th style={{ textAlign: "right" }}>PnL USDT</th>
+                      <th style={{ textAlign: "right" }}>PnL %</th>
+                      <th>Motivo entrada</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paper.positions.map((pos) => (
+                      <tr key={pos.id} title={pos.price_error ?? undefined}>
+                        <td>
+                          <strong>{pos.symbol}</strong>
+                        </td>
+                        <td style={{ textAlign: "right" }}>{pos.quantity}</td>
+                        <td style={{ textAlign: "right" }}>{fmtPrice(pos.entry_price)}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {pos.current_price !== null && pos.current_price !== undefined
+                            ? fmtPrice(pos.current_price)
+                            : "—"}
+                        </td>
+                        <td style={{ textAlign: "right" }}>{fmtUsdt(pos.market_value_usdt)}</td>
+                        <td style={{ textAlign: "right" }}>
+                          <span style={pnlStyle(pos.unrealized_pnl_usdt)}>{fmtUsdt(pos.unrealized_pnl_usdt)}</span>
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          <span style={pnlStyle(pos.unrealized_pnl_pct)}>{fmtPct(pos.unrealized_pnl_pct)}</span>
+                        </td>
+                        <td className="msg-muted" style={{ fontSize: "0.82rem", maxWidth: "10rem" }}>
+                          {pos.entry_reason || "—"}
+                          {pos.price_error ? (
+                            <>
+                              <br />
+                              <span className="msg-error">{pos.price_error}</span>
+                            </>
+                          ) : null}
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="radar-refresh-btn"
+                            style={{ padding: "0.25rem 0.55rem", fontSize: "0.78rem" }}
+                            onClick={() => void handleClosePaper(pos)}
+                          >
+                            Cerrar paper
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+              Trades cerrados recientes
+              {paper.trades_total > paper.trades.length
+                ? ` (mostrando ${paper.trades.length} de ${paper.trades_total})`
+                : ""}
+            </h3>
+            {paper.trades.length === 0 ? (
+              <p className="msg-muted">Sin trades cerrados todavía.</p>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Símbolo</th>
+                      <th style={{ textAlign: "right" }}>Cantidad</th>
+                      <th style={{ textAlign: "right" }}>Entrada</th>
+                      <th style={{ textAlign: "right" }}>Salida</th>
+                      <th style={{ textAlign: "right" }}>PnL USDT</th>
+                      <th style={{ textAlign: "right" }}>PnL %</th>
+                      <th>Motivo salida</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paper.trades.map((t) => (
+                      <tr key={t.id}>
+                        <td>{t.symbol}</td>
+                        <td style={{ textAlign: "right" }}>{t.quantity}</td>
+                        <td style={{ textAlign: "right" }}>{fmtPrice(t.entry_price)}</td>
+                        <td style={{ textAlign: "right" }}>{fmtPrice(t.exit_price)}</td>
+                        <td style={{ textAlign: "right" }}>
+                          <span style={pnlStyle(t.pnl_usdt)}>{fmtUsdt(t.pnl_usdt)}</span>
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          <span style={pnlStyle(t.pnl_pct)}>{fmtPct(t.pnl_pct)}</span>
+                        </td>
+                        <td className="msg-muted" style={{ fontSize: "0.82rem" }}>
+                          {t.exit_reason || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        ) : null}
+      </div>
 
       {!loading && fatalError === null && ohlcv && ohlcv.candles.length > 0 && (
         <div className="card">

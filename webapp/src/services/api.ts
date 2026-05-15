@@ -386,6 +386,132 @@ export async function getCryptoScan(timeframe: string, limit: number): Promise<C
   return data;
 }
 
+export type CryptoPaperPosition = {
+  id: string;
+  symbol: string;
+  side: string;
+  quantity: number;
+  entry_price: number;
+  entry_time: string;
+  entry_reason: string;
+  status: string;
+  stop_loss: number | null;
+  take_profit: number | null;
+  current_price?: number | null;
+  market_value_usdt?: number | null;
+  unrealized_pnl_usdt?: number | null;
+  unrealized_pnl_pct?: number | null;
+  price_error?: string | null;
+};
+
+export type CryptoPaperTrade = {
+  id: string;
+  symbol: string;
+  side: string;
+  quantity: number;
+  entry_price: number;
+  exit_price: number;
+  entry_time: string;
+  exit_time: string;
+  entry_reason: string;
+  exit_reason: string;
+  pnl_usdt: number;
+  pnl_pct: number;
+};
+
+export type CryptoPaperPortfolio = {
+  cash_usdt: number;
+  equity_usdt: number;
+  unrealized_pnl_usdt: number;
+  positions: CryptoPaperPosition[];
+  trades: CryptoPaperTrade[];
+  trades_total: number;
+};
+
+export type CryptoPaperOpenPayload = {
+  symbol: string;
+  side?: string;
+  price: number;
+  quantity: number;
+  reason?: string;
+};
+
+export type CryptoPaperClosePayload = {
+  position_id: string;
+  price: number;
+  reason?: string;
+};
+
+function isCryptoPaperPortfolio(data: unknown): data is CryptoPaperPortfolio {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.cash_usdt === "number" &&
+    typeof o.equity_usdt === "number" &&
+    typeof o.unrealized_pnl_usdt === "number" &&
+    Array.isArray(o.positions) &&
+    Array.isArray(o.trades) &&
+    typeof o.trades_total === "number"
+  );
+}
+
+export async function getCryptoPaperPortfolio(): Promise<CryptoPaperPortfolio> {
+  const res = await fetch(`${BASE}/crypto/paper/portfolio`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoPaperPortfolio(data)) {
+    throw new Error("Respuesta inesperada: /crypto/paper/portfolio");
+  }
+  return data;
+}
+
+export async function resetCryptoPaperPortfolio(initialCash = 10000): Promise<CryptoPaperPortfolio> {
+  const q = new URLSearchParams({ initial_cash: String(initialCash) });
+  const res = await fetch(`${BASE}/crypto/paper/reset?${q.toString()}`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoPaperPortfolio(data)) {
+    throw new Error("Respuesta inesperada: /crypto/paper/reset");
+  }
+  return data;
+}
+
+export async function openCryptoPaperPosition(payload: CryptoPaperOpenPayload): Promise<CryptoPaperPortfolio> {
+  const res = await fetch(`${BASE}/crypto/paper/open`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoPaperPortfolio(data)) {
+    throw new Error("Respuesta inesperada: /crypto/paper/open");
+  }
+  return data;
+}
+
+export async function closeCryptoPaperPosition(payload: CryptoPaperClosePayload): Promise<CryptoPaperPortfolio> {
+  const res = await fetch(`${BASE}/crypto/paper/close`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoPaperPortfolio(data)) {
+    throw new Error("Respuesta inesperada: /crypto/paper/close");
+  }
+  return data;
+}
+
 /** Fila tal como viene del Excel (claves pueden variar en casing); usar helpers al renderizar. */
 export type RadarRow = Record<string, unknown>;
 
