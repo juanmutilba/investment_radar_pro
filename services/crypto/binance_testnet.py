@@ -6,6 +6,7 @@ No usa BINANCE_API_KEY / BINANCE_API_SECRET (cuenta real).
 from __future__ import annotations
 
 import os
+import time as time_mod
 from pathlib import Path
 from typing import Any, Literal
 
@@ -120,23 +121,123 @@ def _exchange_diagnostics(ex: Any | None) -> dict[str, Any]:
     }
 
 
-def _build_sandbox_exchange(*, with_credentials: bool) -> Any:
+def _urls_private_route_hint(ex: Any) -> dict[str, Any]:
+    """Clasifica rutas esperadas sin exponer URLs completas (solo host + patrón de path)."""
+    urls = getattr(ex, "urls", None)
+    api = urls.get("api") if isinstance(urls, dict) else None
+    if not isinstance(api, dict):
+        return {
+            "private_host_hint": None,
+            "private_path_pattern": None,
+            "sapi_urls_present_after_sandbox": False,
+            "notes": "urls.api inválidas",
+        }
+    priv_raw = api.get("private")
+    pub_raw = api.get("public")
+
+    priv = ""
+    if isinstance(priv_raw, str):
+        priv = priv_raw.strip().lower()
+    pub = pub_raw.strip().lower() if isinstance(pub_raw, str) else ""
+
+    host_hint = None
+    path_pattern = None
+    if isinstance(priv_raw, str):
+        lu = priv_raw.strip().lower()
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(lu if "://" in lu else f"https://{lu}")
+            host_hint = (parsed.hostname or "").lower().split(":")[0] if parsed.hostname else None
+            p = parsed.path or ""
+            path_pattern = p.rstrip("/") or None
+        except Exception:
+            host_hint = "parse_error"
+        priv = lu
+
+    sapi_any = False
+    for key, val in api.items():
+        if not isinstance(val, str):
+            continue
+        low = val.lower()
+        if "/sapi/" in low or low.rstrip("/").endswith("/sapi/v1"):
+            sapi_any = True
+            break
+
+    if "/api/v3" in priv:
+        routing = "spot_private_api_v3"
+    elif "/sapi/" in priv or "/sapi" in priv[-20:]:
+        routing = "sapi_like"
+    else:
+        routing = "other_or_unknown"
+
+    return {
+        "private_host_hint": host_hint,
+        "private_path_pattern": path_pattern,
+        "balance_expected_routing_binance": routing,
+        "spot_public_host_hint_matches_private": (
+            bool(host_hint and pub and host_hint in pub) if host_hint else None
+        ),
+        "sapi_urls_present_after_sandbox": sapi_any,
+        "notes": "fetch_balance usa private (spot/account). No se registran URLs con query/sign.",
+    }
+
+
+def _build_sandbox_exchange(
+    *,
+    with_credentials: bool,
+    adjust_for_time_difference: bool = False,
+) -> Any:
     """
     ccxt.binance + set_sandbox_mode(True) inmediatamente después de crear.
     with_credentials=False: solo endpoints públicos (ticker).
     """
     import ccxt  # type: ignore[import-untyped]
 
-    config: dict[str, Any] = {
-        "enableRateLimit": True,
-        "options": {"defaultType": "spot"},
-    }
+    options: dict[str, Any] = {"defaultType": "spot"}
+    if adjust_for_time_difference:
+        options["adjustForTimeDifference"] = True
+
+    config: dict[str, Any] = {"enableRateLimit": True, "options": options}
     if with_credentials:
         config["apiKey"] = _api_key()
         config["secret"] = _api_secret()
     ex = ccxt.binance(config)
     ex.set_sandbox_mode(True)
     return ex
+
+
+def _recv_window_option(ex: Any) -> int | None:
+    o = getattr(ex, "options", None)
+    if isinstance(o, dict):
+        rv = o.get("recvWindow")
+        if isinstance(rv, (int, float)) and rv == int(rv):
+            return int(rv)
+    return None
+
+
+def _exchange_signed_request_trace(ex: Any) -> dict[str, Any]:
+    """Rastro no sensible tras requests (ccxt opcional por versión)."""
+    out: dict[str, Any] = {"last_request_path_hint": None, "last_http_status": None}
+    url = getattr(ex, "last_request_url", None) or getattr(ex, "lastRequestUrl", None)
+    if isinstance(url, str) and url:
+        try:
+            from urllib.parse import urlparse
+
+            p = urlparse(url)
+            out["last_request_path_hint"] = (p.path or "").rstrip("/") or None
+        except Exception:
+            out["last_request_path_hint"] = "unparsable_url"
+    # ccxt algunas versiones guardan código HTTP fuera del exception
+    for attr in ("last_http_response", "last_http_status", "lastResponseStatus"):
+        raw = getattr(ex, attr, None)
+        if raw is None:
+            continue
+        num = getattr(raw, "status", None)
+        if isinstance(raw, dict) and "status" in raw:
+            num = raw.get("status")
+        out["last_http_status"] = num if isinstance(num, int) else out["last_http_status"]
+    return out
 
 
 def _diagnostics_exchange(*, with_credentials: bool = False) -> Any | None:
@@ -360,6 +461,149 @@ def get_testnet_status() -> dict[str, Any]:
         ticker_error=ticker_err,
         balance_error=balance_err,
     )
+
+
+_CLOCK_DRIFT_AUTO_RETRY_MS = 5000
+_FETCH_BALANCE_ERR_MSG_CAP = 800
+
+
+def get_testnet_auth_debug() -> dict[str, Any]:
+    """
+    Temporal: diagnóstico tiempo/recvWindow/ruta esperada sin exponer secrets.
+    Ejecuta fetch_time y fetch_balance (sin órdenes).
+    """
+    _ensure_dotenv()
+
+    out: dict[str, Any] = {
+        "temporary": True,
+        "note": "Endpoint temporal sólo diagnóstico.",
+        "exchange_id": None,
+        "sandbox_mode": False,
+        "urls_api_safe": "unknown",
+        "has_api_key": False,
+        "has_secret": False,
+        "api_key_prefix": None,
+        "recv_window": None,
+        "timestamp_ms": None,
+        "server_time_ms": None,
+        "fetch_time_error_type": None,
+        "fetch_time_error_message": None,
+        "time_diff_ms": None,
+        "clock_adjust_auto_attempted": False,
+        "clock_adjust_auto_reason": None,
+        "fetch_balance_final_ok": False,
+        "fetch_balance_error_type": None,
+        "fetch_balance_error_message": None,
+        "fetch_balance_after_adjust_ok": None,
+        "fetch_balance_after_adjust_error_type": None,
+        "fetch_balance_after_adjust_error_message": None,
+        "route_hints": {},
+        "signed_request_trace": {},
+    }
+
+    out["has_api_key"] = bool(_api_key())
+    out["has_secret"] = bool(_api_secret())
+    ak = _api_key()
+    if ak:
+        out["api_key_prefix"] = ak[:6] if len(ak) >= 6 else ak
+
+    if not _ccxt_available():
+        out["fetch_balance_error_type"] = "ccxt_missing"
+        out["fetch_balance_error_message"] = "ccxt no instalado"
+        return out
+
+    if not is_testnet_enabled():
+        out["fetch_balance_error_type"] = "disabled"
+        out["fetch_balance_error_message"] = "BINANCE_TESTNET_ENABLED=false"
+        return out
+
+    if not is_testnet_configured():
+        out["fetch_balance_error_type"] = "not_configured"
+        out["fetch_balance_error_message"] = (
+            "faltan BINANCE_TESTNET_API_KEY/BINANCE_TESTNET_API_SECRET"
+        )
+        return out
+
+    ex_auth = _build_sandbox_exchange(with_credentials=True)
+    out["sandbox_mode"] = _detect_sandbox_mode(ex_auth)
+    out["exchange_id"] = getattr(ex_auth, "id", None)
+    out["urls_api_safe"] = _classify_urls_api_safe(ex_auth)
+    out["recv_window"] = _recv_window_option(ex_auth)
+    out["route_hints"] = _urls_private_route_hint(ex_auth)
+
+    millis = getattr(ex_auth, "milliseconds", None)
+    out["timestamp_ms"] = int(millis()) if callable(millis) else int(time_mod.time() * 1000)
+
+    try:
+        out["server_time_ms"] = int(ex_auth.fetch_time())
+    except Exception as e:
+        out["fetch_time_error_type"] = type(e).__name__
+        ft_err = _safe_error(e)
+        out["fetch_time_error_message"] = ft_err[:_FETCH_BALANCE_ERR_MSG_CAP]
+
+    if out["server_time_ms"] is not None:
+        out["time_diff_ms"] = out["server_time_ms"] - out["timestamp_ms"]
+
+    td = out["time_diff_ms"]
+    clock_large = td is not None and abs(td) >= _CLOCK_DRIFT_AUTO_RETRY_MS
+
+    def _try_balance(exc: Any) -> tuple[bool, str | None, str | None]:
+        try:
+            exc.fetch_balance()
+            return True, None, None
+        except Exception as e:
+            msg = _safe_error(e)
+            if len(msg) > _FETCH_BALANCE_ERR_MSG_CAP:
+                msg = msg[:_FETCH_BALANCE_ERR_MSG_CAP]
+            return False, type(e).__name__, msg
+
+    ok, et, em = _try_balance(ex_auth)
+    out["fetch_balance_final_ok"] = ok
+    out["signed_request_trace"] = _exchange_signed_request_trace(ex_auth)
+    if not ok:
+        out["fetch_balance_error_type"] = et
+        out["fetch_balance_error_message"] = em
+
+    err_txt = em or ""
+    clock_err_codes = "-1021" in err_txt or "-1022" in err_txt
+    should_retry_clock = (not ok) and (clock_large or clock_err_codes)
+
+    if should_retry_clock:
+        out["clock_adjust_auto_attempted"] = True
+        if clock_large and clock_err_codes:
+            out["clock_adjust_auto_reason"] = "large_delta_and_timestamp_error_symbols"
+        elif clock_large:
+            out["clock_adjust_auto_reason"] = f"large_time_diff_ms(abs>={_CLOCK_DRIFT_AUTO_RETRY_MS})"
+        else:
+            out["clock_adjust_auto_reason"] = (
+                "error_message_suggests_timestamp_or_recv_window"
+            )
+
+        ex_adj = _build_sandbox_exchange(
+            with_credentials=True, adjust_for_time_difference=True
+        )
+        ltd = getattr(ex_adj, "load_time_difference", None)
+        if callable(ltd):
+            try:
+                ltd()
+            except Exception as le:
+                prev = out["clock_adjust_auto_reason"]
+                out["clock_adjust_auto_reason"] = (
+                    f"{prev};load_time_difference={type(le).__name__}"
+                )
+
+        ok2, et2, em2 = _try_balance(ex_adj)
+        out["fetch_balance_after_adjust_ok"] = ok2
+        if not ok2:
+            out["fetch_balance_after_adjust_error_type"] = et2
+            out["fetch_balance_after_adjust_error_message"] = em2
+        else:
+            out["fetch_balance_after_adjust_error_type"] = None
+            out["fetch_balance_after_adjust_error_message"] = None
+        out["fetch_balance_final_ok"] = ok or ok2
+        out["signed_request_trace"] = _exchange_signed_request_trace(ex_adj)
+
+    return out
 
 
 def _balances_from_ccxt(bal: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, float]]:

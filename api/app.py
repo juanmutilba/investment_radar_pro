@@ -481,6 +481,14 @@ def crypto_testnet_status():
     return tn.get_testnet_status()
 
 
+@app.get("/crypto/testnet/auth-debug")
+def crypto_testnet_auth_debug():
+    """Temporal: diagnóstico firma/tiempo en testnet sin órdenes (quitar antes de prod)."""
+    from services.crypto import binance_testnet as tn
+
+    return tn.get_testnet_auth_debug()
+
+
 @app.get("/crypto/testnet/balances")
 def crypto_testnet_balances():
     """Balances spot testnet (solo lectura)."""
