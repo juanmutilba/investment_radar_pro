@@ -459,6 +459,87 @@ export async function postCryptoTestnetProposeEntry(
   return data;
 }
 
+/** POST /crypto/testnet/strategy/propose-exits — propuestas de venta por SL/TP (sin ejecutar). */
+export type CryptoTestnetExitProposal = {
+  asset: string;
+  symbol: string;
+  side: "sell";
+  reason: "stop_loss" | "take_profit";
+  amount_base: number;
+  sell_quote_amount_usdt: number;
+  avg_entry_usdt: number;
+  current_price_usdt: number;
+  pnl_pct: number;
+  value_usdt: number;
+  source: string;
+};
+
+export type CryptoTestnetExitEvaluatedRow = {
+  asset?: string | null;
+  symbol?: string | null;
+  status?: string;
+  reason?: string;
+  proposal?: CryptoTestnetExitProposal | null;
+  avg_entry_usdt?: number | null;
+  current_price_usdt?: number | null;
+  pnl_pct?: number | null;
+  value_usdt?: number | null;
+  local_inventory_base?: number | null;
+  position_total_base?: number | null;
+  free_base?: number | null;
+};
+
+export type CryptoTestnetProposeExitsPayload = {
+  ok: boolean;
+  error?: string | null;
+  proposals: CryptoTestnetExitProposal[];
+  evaluated: CryptoTestnetExitEvaluatedRow[];
+  trailing_stop_status?: string;
+  stop_loss_pct?: number;
+  take_profit_pct?: number;
+  min_value_usdt?: number;
+};
+
+export type CryptoTestnetProposeExitsParams = {
+  stop_loss_pct?: number;
+  take_profit_pct?: number;
+  trailing_stop_pct?: number | null;
+  min_value_usdt?: number;
+};
+
+function isCryptoTestnetProposeExitsPayload(data: unknown): data is CryptoTestnetProposeExitsPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  if (typeof o.ok !== "boolean") return false;
+  if (!Array.isArray(o.proposals)) return false;
+  if (!Array.isArray(o.evaluated)) return false;
+  return true;
+}
+
+export async function postCryptoTestnetProposeExits(
+  params: CryptoTestnetProposeExitsParams,
+): Promise<CryptoTestnetProposeExitsPayload> {
+  const q = new URLSearchParams();
+  if (params.stop_loss_pct != null) q.set("stop_loss_pct", String(params.stop_loss_pct));
+  if (params.take_profit_pct != null) q.set("take_profit_pct", String(params.take_profit_pct));
+  if (params.min_value_usdt != null) q.set("min_value_usdt", String(params.min_value_usdt));
+  if (params.trailing_stop_pct != null && Number.isFinite(params.trailing_stop_pct)) {
+    q.set("trailing_stop_pct", String(params.trailing_stop_pct));
+  }
+  const res = await fetch(`${BASE}/crypto/testnet/strategy/propose-exits?${q.toString()}`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetProposeExitsPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/testnet/strategy/propose-exits");
+  }
+  return data;
+}
+
 export async function getCryptoTestnetTicker(symbol: string): Promise<CryptoTestnetTickerPayload> {
   const q = new URLSearchParams({ symbol: symbol.trim() });
   const res = await fetch(`${BASE}/crypto/testnet/ticker?${q.toString()}`);

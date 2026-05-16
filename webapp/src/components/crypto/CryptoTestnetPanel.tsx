@@ -8,12 +8,15 @@ import {
   getCryptoTestnetTicker,
   postCryptoTestnetMarketOrder,
   postCryptoTestnetProposeEntry,
+  postCryptoTestnetProposeExits,
   type CryptoTestnetBalancesPayload,
   type CryptoTestnetEvaluatedRow,
+  type CryptoTestnetExitProposal,
   type CryptoTestnetMarketOrderRow,
   type CryptoTestnetOpenOrdersPayload,
   type CryptoTestnetPositionsPayload,
   type CryptoTestnetProposeEntryPayload,
+  type CryptoTestnetProposeExitsPayload,
   type CryptoTestnetStoredOrder,
   type CryptoTestnetStatusPayload,
 } from "@/services/api";
@@ -103,6 +106,22 @@ function assistedPrimaryReasonLabel(code: string | null | undefined): string {
   return labels[code] ?? `Motivo: ${code}`;
 }
 
+function exitProposalReasonLabel(reason: string | null | undefined): string {
+  if (!reason) return "—";
+  const labels: Record<string, string> = {
+    stop_loss: "Stop loss",
+    take_profit: "Take profit",
+    missing_local_entry:
+      "Sin base de compras local clara: operaste fuera de esta app, faltan datos de costo en el historial o el saldo no coincide con BUY/SELL guardados.",
+    no_free_base: "Sin saldo libre para vender.",
+    no_price: "Precio USDT no disponible.",
+    below_min_value: "Valor posición por debajo del mínimo USDT configurado.",
+    inside_sl_tp_band: "Precio dentro de la banda SL/TP; no se propone venta.",
+    no_symbol: "Par no disponible.",
+  };
+  return labels[reason] ?? reason;
+}
+
 function CryptoRefreshBadge({ active, label = "Actualizando…" }: { active: boolean; label?: string }) {
   if (!active) return null;
   return (
@@ -157,6 +176,14 @@ export function CryptoTestnetPanel() {
   const [assistCooldown, setAssistCooldown] = useState("0");
   const [assistBtcTrend, setAssistBtcTrend] = useState(false);
   const [assistMinScore, setAssistMinScore] = useState("0");
+  const [exitAssistPayload, setExitAssistPayload] = useState<CryptoTestnetProposeExitsPayload | null>(null);
+  const [exitAssistLoading, setExitAssistLoading] = useState(false);
+  const [exitAssistError, setExitAssistError] = useState<string | null>(null);
+  const [exitSlPct, setExitSlPct] = useState("2");
+  const [exitTpPct, setExitTpPct] = useState("4");
+  const [exitMinValueUsdt, setExitMinValueUsdt] = useState("5");
+  const [exitTrailingPct, setExitTrailingPct] = useState("");
+  const [exitConfirmAsset, setExitConfirmAsset] = useState<string | null>(null);
 
   const prefillQuickSell = useCallback((pair: string | null | undefined) => {
     const p = (pair ?? "").trim();
@@ -497,6 +524,62 @@ export function CryptoTestnetPanel() {
     }
   }, [assistedPayload, connected, loadBalances, loadOrders]);
 
+  const handleExitAssistSearch = useCallback(async () => {
+    setExitAssistLoading(true);
+    setExitAssistError(null);
+    setExitAssistPayload(null);
+    try {
+      const sl = Number.parseFloat(exitSlPct.replace(",", "."));
+      const tp = Number.parseFloat(exitTpPct.replace(",", "."));
+      const mv = Number.parseFloat(exitMinValueUsdt.replace(",", "."));
+      const trRaw = exitTrailingPct.trim().replace(",", ".");
+      const tr = trRaw === "" ? null : Number.parseFloat(trRaw);
+      const payload = await postCryptoTestnetProposeExits({
+        stop_loss_pct: Number.isFinite(sl) && sl >= 0 ? sl : 2,
+        take_profit_pct: Number.isFinite(tp) && tp >= 0 ? tp : 4,
+        min_value_usdt: Number.isFinite(mv) && mv >= 0 ? mv : 5,
+        trailing_stop_pct:
+          trRaw !== "" && tr !== null && Number.isFinite(tr) && tr >= 0 ? tr : null,
+      });
+      if (!payload.ok) {
+        setExitAssistError(payload.error ?? "No se pudieron evaluar salidas testnet");
+        setExitAssistPayload(null);
+        return;
+      }
+      setExitAssistPayload(payload);
+    } catch (e: unknown) {
+      setExitAssistError(e instanceof Error ? e.message : "Error al buscar salidas");
+      setExitAssistPayload(null);
+    } finally {
+      setExitAssistLoading(false);
+    }
+  }, [exitSlPct, exitTpPct, exitMinValueUsdt, exitTrailingPct]);
+
+  const handleExitAssistConfirmSell = useCallback(
+    async (prop: CryptoTestnetExitProposal) => {
+      if (!connected) return;
+      setExitConfirmAsset(prop.asset);
+      setOrderFormError(null);
+      try {
+        await postCryptoTestnetMarketOrder({
+          symbol: prop.symbol.trim(),
+          side: "sell",
+          amount_base: prop.amount_base,
+        });
+        setManualSymbol(prop.symbol.trim());
+        setManualSide("sell");
+        await Promise.all([loadBalances(), loadOrders()]);
+        setError(null);
+        setExitConfirmAsset(null);
+        await handleExitAssistSearch();
+      } catch (e: unknown) {
+        setOrderFormError(humanizeTestnetOrderError(e instanceof Error ? e.message : "Error al enviar venta testnet"));
+        setExitConfirmAsset(null);
+      }
+    },
+    [connected, loadBalances, loadOrders, handleExitAssistSearch],
+  );
+
   const refreshTestnetDatos = useCallback(() => {
     void loadBalances();
     if (connected) void loadOrders();
@@ -797,6 +880,173 @@ export function CryptoTestnetPanel() {
               </details>
             ) : null}
           </div>
+        ) : null}
+      </section>
+
+      {/* Salidas asistidas Testnet */}
+      <section className="card crypto-testnet-section">
+        <h3 className="dashboard-section-title crypto-testnet-section-title">Salidas asistidas Testnet</h3>
+        <div className="crypto-testnet-note crypto-testnet-note--blue crypto-testnet-block-start">
+          La estrategia <strong>solo propone ventas</strong>. La orden testnet se envía únicamente si pulsás{" "}
+          <strong>Confirmar SELL Testnet</strong> en una fila. No hay liquidación automática.
+        </div>
+        <p className="msg-muted" style={{ marginTop: "0.65rem", marginBottom: "0.65rem", fontSize: "0.85rem" }}>
+          El precio de entrada y el PnL % son <strong>aproximados</strong>: se reconstruyen sólo con el historial local{" "}
+          <code style={{ fontSize: "0.8rem" }}>crypto_testnet_orders.json</code> (órdenes que esta app registró). Si compraste
+          fuera de la app o falta datos de coste en una compra, verás{" "}
+          <span className="msg-muted">missing_local_entry</span> en el detalle evaluado.
+        </p>
+        <div className="crypto-testnet-mini-grid crypto-testnet-mini-grid--dense" style={{ marginBottom: "0.75rem" }}>
+          <label className="crypto-testnet-field">
+            <span className="msg-muted">Stop loss %</span>
+            <input
+              type="number"
+              className="radar-input"
+              min={0}
+              max={100}
+              step="0.1"
+              value={exitSlPct}
+              onChange={(ev) => setExitSlPct(ev.target.value)}
+              disabled={exitAssistLoading}
+            />
+          </label>
+          <label className="crypto-testnet-field">
+            <span className="msg-muted">Take profit %</span>
+            <input
+              type="number"
+              className="radar-input"
+              min={0}
+              max={500}
+              step="0.1"
+              value={exitTpPct}
+              onChange={(ev) => setExitTpPct(ev.target.value)}
+              disabled={exitAssistLoading}
+            />
+          </label>
+          <label className="crypto-testnet-field">
+            <span className="msg-muted">Mín. valor USDT</span>
+            <input
+              type="number"
+              className="radar-input"
+              min={0}
+              max={1000}
+              step="0.5"
+              value={exitMinValueUsdt}
+              onChange={(ev) => setExitMinValueUsdt(ev.target.value)}
+              disabled={exitAssistLoading}
+            />
+          </label>
+          <label className="crypto-testnet-field">
+            <span className="msg-muted">Trailing % (opcional)</span>
+            <input
+              type="number"
+              className="radar-input"
+              min={0}
+              max={100}
+              step="0.1"
+              placeholder="—"
+              value={exitTrailingPct}
+              onChange={(ev) => setExitTrailingPct(ev.target.value)}
+              disabled={exitAssistLoading}
+            />
+          </label>
+        </div>
+        <div className="crypto-testnet-toolbar" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+          <button
+            type="button"
+            className="radar-refresh-btn"
+            onClick={() => void handleExitAssistSearch()}
+            disabled={
+              exitAssistLoading ||
+              statusLoading ||
+              !status?.configured ||
+              !status?.enabled
+            }
+          >
+            {exitAssistLoading ? "Buscando…" : "Buscar salidas"}
+          </button>
+          <CryptoRefreshBadge active={exitAssistLoading} label="Evaluando…" />
+        </div>
+        {!status?.configured || !status?.enabled ? (
+          <p className="msg-muted crypto-testnet-block-start" style={{ fontSize: "0.82rem" }}>
+            Habilitá testnet en <code>.env</code> para leer posiciones y precios antes de buscar salidas.
+          </p>
+        ) : null}
+        {exitAssistError ? (
+          <p className="msg-error crypto-testnet-block-start" style={{ fontSize: "0.875rem" }}>
+            {exitAssistError}
+          </p>
+        ) : null}
+        {exitAssistPayload?.ok && exitTrailingPct.trim() !== "" ? (
+          <p className="msg-muted crypto-testnet-block-start" style={{ fontSize: "0.82rem" }}>
+            Trailing stop enviado en la query pero <strong>aún no está implementado</strong>: sólo se aplican SL y TP en esta
+            búsqueda.
+          </p>
+        ) : null}
+        {exitAssistPayload?.ok && exitAssistPayload.proposals.length > 0 ? (
+          <div className="crypto-testnet-block-start table-wrap" style={{ marginTop: "0.85rem" }}>
+            <table className="crypto-testnet-table">
+              <thead>
+                <tr>
+                  <th>Activo</th>
+                  <th>Motivo</th>
+                  <th className="crypto-testnet-num">PnL %</th>
+                  <th className="crypto-testnet-num">Valor USDT</th>
+                  <th className="crypto-testnet-num">Entrada ~</th>
+                  <th className="crypto-testnet-num">Precio</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {exitAssistPayload.proposals.map((row) => (
+                  <tr key={row.asset}>
+                    <td>{row.asset}</td>
+                    <td>{exitProposalReasonLabel(row.reason)}</td>
+                    <td className="crypto-testnet-num">{numFmt4.format(row.pnl_pct)}</td>
+                    <td className="crypto-testnet-num">{fmtNum(row.value_usdt)}</td>
+                    <td className="crypto-testnet-num">{fmtNum(row.avg_entry_usdt)}</td>
+                    <td className="crypto-testnet-num">{fmtNum(row.current_price_usdt)}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="radar-refresh-btn crypto-testnet-btn-compact"
+                        onClick={() => void handleExitAssistConfirmSell(row)}
+                        disabled={!connected || exitConfirmAsset !== null || orderBusy}
+                      >
+                        {exitConfirmAsset === row.asset ? "Enviando…" : "Confirmar SELL Testnet"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : exitAssistPayload?.ok && exitAssistPayload.proposals.length === 0 ? (
+          <p className="msg-muted crypto-testnet-block-start" style={{ marginTop: "0.75rem", fontSize: "0.88rem" }}>
+            No hay salidas propuestas con los umbrales actuales (o ninguna posición supera el valor mínimo). Revisá el detalle
+            evaluado si esperabas una venta por SL/TP.
+          </p>
+        ) : null}
+        {exitAssistPayload?.ok &&
+        exitAssistPayload.evaluated.some((r) => r.reason === "missing_local_entry") ? (
+          <p className="msg-muted crypto-testnet-block-start" style={{ marginTop: "0.65rem", fontSize: "0.82rem" }}>
+            <strong>Aviso:</strong> en al menos un activo no pudimos cuadrar la entrada con el historial local de esta app.
+            Operá manualmente o mantené las compras/registros sólo desde acá si querés salidas asistidas.
+          </p>
+        ) : null}
+        {exitAssistPayload?.ok && exitAssistPayload.evaluated.length > 0 ? (
+          <details style={{ marginTop: "0.85rem", fontSize: "0.82rem" }}>
+            <summary className="msg-muted" style={{ cursor: "pointer" }}>
+              Evaluados ({exitAssistPayload.evaluated.length})
+            </summary>
+            <ul className="msg-muted" style={{ margin: "0.5rem 0 0", paddingLeft: "1.1rem", maxHeight: "200px", overflow: "auto" }}>
+              {exitAssistPayload.evaluated.map((ev, idx) => (
+                <li key={`${ev.asset ?? "a"}-${ev.symbol ?? "s"}-${idx}`}>
+                  {ev.asset ?? "—"} ({ev.symbol ?? "—"}) · {ev.status ?? "—"} — {exitProposalReasonLabel(ev.reason)}
+                </li>
+              ))}
+            </ul>
+          </details>
         ) : null}
       </section>
 

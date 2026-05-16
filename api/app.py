@@ -562,6 +562,32 @@ def crypto_testnet_strategy_propose_entry(
         raise HTTPException(status_code=502, detail=f"Propuesta testnet: {e}") from e
 
 
+@app.post("/crypto/testnet/strategy/propose-exits")
+def crypto_testnet_strategy_propose_exits(
+    stop_loss_pct: float = Query(2, ge=0),
+    take_profit_pct: float = Query(4, ge=0),
+    trailing_stop_pct: float | None = Query(default=None),
+    min_value_usdt: float = Query(5, ge=0),
+):
+    """
+    SL/TP simples sobre posiciones testnet reales; sólo propone SELL (sin ejecutar).
+    Entrada media aproximada desde historial local de órdenes enviadas por esta app.
+    """
+    from services.crypto import binance_testnet as tn
+
+    try:
+        return tn.propose_testnet_exits(
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+            trailing_stop_pct=trailing_stop_pct,
+            min_value_usdt=min_value_usdt,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Propuesta salidas testnet: {e}") from e
+
+
 @app.get("/crypto/testnet/ticker")
 def crypto_testnet_ticker(
     symbol: str = Query("BTC/USDT", min_length=3, description="Par spot CCXT, ej. BTC/USDT"),

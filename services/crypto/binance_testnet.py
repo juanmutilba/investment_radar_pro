@@ -1090,6 +1090,267 @@ def _load_testnet_orders_json() -> list[dict[str, Any]]:
     return []
 
 
+def _fifo_base_cost_after_orders(rows_chrono: list[dict[str, Any]]) -> tuple[float, float, bool]:
+    """
+    Recorre órdenes locales en orden cronológico (FIFO de costo promedio en cartera).
+    Devuelve (base_restante, coste_restante_usdt, ok_pricing).
+    ok_pricing=False si alguna compra no tiene cost ni average para estimar USDT gastado.
+    """
+    base_inv = 0.0
+    cost_inv = 0.0
+    ok_pricing = True
+    for row in rows_chrono:
+        side = str(row.get("side") or "").lower().strip()
+        filled = _safe_ccxt_float(row.get("filled"))
+        if filled is None or filled <= 0:
+            continue
+        cost_raw = _safe_ccxt_float(row.get("cost"))
+        avg = _safe_ccxt_float(row.get("average"))
+
+        if side == "buy":
+            c_usdt: float | None
+            if cost_raw is not None and cost_raw > 0:
+                c_usdt = cost_raw
+            elif avg is not None and avg > 0:
+                c_usdt = avg * filled
+            else:
+                ok_pricing = False
+                continue
+            base_inv += filled
+            cost_inv += c_usdt
+        elif side == "sell":
+            if base_inv <= 1e-18:
+                continue
+            sell_qty = min(filled, base_inv)
+            unit_cost = cost_inv / base_inv
+            cost_inv -= sell_qty * unit_cost
+            base_inv -= sell_qty
+            if cost_inv < 0:
+                cost_inv = 0.0
+            if base_inv <= 1e-18:
+                base_inv = 0.0
+                cost_inv = 0.0
+    return base_inv, cost_inv, ok_pricing
+
+
+def _parse_local_order_sort_key(row: dict[str, Any]) -> tuple[float, str]:
+    """Clave para ordenar historial local de más viejo a más nuevo."""
+    raw = str(row.get("created_at") or "").strip()
+    if raw:
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                from datetime import timezone
+
+                dt = dt.replace(tzinfo=timezone.utc)
+            return (dt.timestamp(), raw)
+        except ValueError:
+            pass
+    ts_ex = row.get("timestamp_exchange")
+    if isinstance(ts_ex, (int, float)) and math.isfinite(float(ts_ex)):
+        v = float(ts_ex)
+        if v < 1e11:
+            v *= 1000.0
+        return (v / 1000.0, str(ts_ex))
+    return (0.0, raw or "")
+
+
+def _local_orders_for_symbol(all_rows: list[dict[str, Any]], symbol: str) -> list[dict[str, Any]]:
+    want = (symbol or "").strip().upper().replace(" ", "")
+    out: list[dict[str, Any]] = []
+    for row in all_rows:
+        rs = str(row.get("symbol") or "").strip().upper().replace(" ", "")
+        if rs == want:
+            out.append(row)
+    out.sort(key=_parse_local_order_sort_key)
+    return out
+
+
+def propose_testnet_exits(
+    *,
+    stop_loss_pct: float = 2.0,
+    take_profit_pct: float = 4.0,
+    trailing_stop_pct: float | None = None,
+    min_value_usdt: float = 5.0,
+) -> dict[str, Any]:
+    """
+    Propone ventas testnet según SL/TP simples sobre PnL %, sin ejecutar órdenes.
+    Precio de entrada aproximado: sólo desde data/crypto_testnet_orders.json (compras/ventas
+    registradas por esta app). Si el saldo en Binance no cuadra con ese historial → missing_local_entry.
+    Trailing: no implementado (se informa como not_supported_yet).
+    """
+    if not math.isfinite(stop_loss_pct) or stop_loss_pct < 0:
+        raise ValueError("stop_loss_pct inválido")
+    if not math.isfinite(take_profit_pct) or take_profit_pct < 0:
+        raise ValueError("take_profit_pct inválido")
+    if trailing_stop_pct is not None and (
+        not math.isfinite(trailing_stop_pct) or trailing_stop_pct < 0
+    ):
+        raise ValueError("trailing_stop_pct inválido")
+    if not math.isfinite(min_value_usdt) or min_value_usdt < 0:
+        raise ValueError("min_value_usdt inválido")
+
+    trailing_note = "not_supported_yet"
+    if trailing_stop_pct is not None and trailing_stop_pct > 0:
+        _log(f"propose_testnet_exits: trailing_stop_pct={trailing_stop_pct} ignorado ({trailing_note})")
+
+    pos_payload = get_testnet_positions()
+    if not pos_payload.get("ok"):
+        return {
+            "ok": False,
+            "error": str(pos_payload.get("error") or "positions_unavailable"),
+            "proposals": [],
+            "evaluated": [],
+            "trailing_stop_status": trailing_note,
+        }
+
+    all_local = _load_testnet_orders_json()
+    proposals: list[dict[str, Any]] = []
+    evaluated: list[dict[str, Any]] = []
+
+    for p in pos_payload.get("positions") or []:
+        if not isinstance(p, dict):
+            continue
+        asset = str(p.get("asset") or "").strip().upper()
+        sym = p.get("symbol")
+        sym_s = str(sym).strip() if sym else ""
+        if not asset or not sym_s:
+            evaluated.append(
+                {
+                    "asset": asset or None,
+                    "symbol": sym_s or None,
+                    "status": "skipped",
+                    "reason": "no_symbol",
+                    "proposal": None,
+                }
+            )
+            continue
+
+        total = _safe_ccxt_float(p.get("total"))
+        free = _safe_ccxt_float(p.get("free"))
+        if total is None:
+            total = 0.0
+        if free is None:
+            free = 0.0
+
+        px = _safe_ccxt_float(p.get("last_price_usdt"))
+
+        rows = _local_orders_for_symbol(all_local, sym_s)
+        base_inv, cost_inv, pricing_ok = _fifo_base_cost_after_orders(rows)
+
+        tol = max(1e-9, 1e-6 * max(abs(total), abs(base_inv), 1.0))
+        local_covers = abs(total - base_inv) <= tol
+
+        eval_row: dict[str, Any] = {
+            "asset": asset,
+            "symbol": sym_s,
+            "status": "evaluated",
+            "reason": "",
+            "proposal": None,
+            "avg_entry_usdt": None,
+            "current_price_usdt": px,
+            "pnl_pct": None,
+            "value_usdt": None,
+            "local_inventory_base": round(base_inv, 12),
+            "position_total_base": total,
+            "free_base": free,
+        }
+
+        if free <= 1e-12:
+            eval_row["status"] = "skipped"
+            eval_row["reason"] = "no_free_base"
+            evaluated.append(eval_row)
+            continue
+
+        if px is None or px <= 0:
+            eval_row["status"] = "skipped"
+            eval_row["reason"] = "no_price"
+            evaluated.append(eval_row)
+            continue
+
+        value_free = free * px
+        if math.isnan(value_free) or math.isinf(value_free):
+            eval_row["status"] = "skipped"
+            eval_row["reason"] = "no_price"
+            evaluated.append(eval_row)
+            continue
+
+        eval_row["value_usdt"] = round(value_free, 8)
+
+        if not pricing_ok or not local_covers:
+            eval_row["status"] = "rejected"
+            eval_row["reason"] = "missing_local_entry"
+            evaluated.append(eval_row)
+            continue
+
+        if base_inv <= 1e-18:
+            eval_row["status"] = "rejected"
+            eval_row["reason"] = "missing_local_entry"
+            evaluated.append(eval_row)
+            continue
+
+        avg_entry = cost_inv / base_inv
+        if avg_entry <= 0 or not math.isfinite(avg_entry):
+            eval_row["status"] = "rejected"
+            eval_row["reason"] = "missing_local_entry"
+            evaluated.append(eval_row)
+            continue
+
+        pnl_pct = (px - avg_entry) / avg_entry * 100.0
+        eval_row["avg_entry_usdt"] = round(avg_entry, 8)
+        eval_row["pnl_pct"] = round(pnl_pct, 6)
+
+        if value_free + 1e-9 < min_value_usdt:
+            eval_row["status"] = "skipped"
+            eval_row["reason"] = "below_min_value"
+            evaluated.append(eval_row)
+            continue
+
+        exit_reason: str | None = None
+        if stop_loss_pct > 0 and pnl_pct <= -stop_loss_pct:
+            exit_reason = "stop_loss"
+        elif take_profit_pct > 0 and pnl_pct >= take_profit_pct:
+            exit_reason = "take_profit"
+
+        if exit_reason is None:
+            eval_row["status"] = "hold"
+            eval_reason = "inside_sl_tp_band"
+            eval_row["reason"] = eval_reason
+            evaluated.append(eval_row)
+            continue
+
+        sell_quote = free * px
+        proposal_obj = {
+            "asset": asset,
+            "symbol": sym_s,
+            "side": "sell",
+            "reason": exit_reason,
+            "amount_base": free,
+            "sell_quote_amount_usdt": round(sell_quote, 8),
+            "avg_entry_usdt": round(avg_entry, 8),
+            "current_price_usdt": round(px, 8),
+            "pnl_pct": round(pnl_pct, 6),
+            "value_usdt": round(value_free, 8),
+            "source": "assisted_testnet",
+        }
+        proposals.append(proposal_obj)
+        eval_row["status"] = "proposed"
+        eval_row["reason"] = exit_reason
+        eval_row["proposal"] = proposal_obj
+        evaluated.append(eval_row)
+
+    _log(f"propose_testnet_exits: proposals={len(proposals)} evaluated={len(evaluated)}")
+    return {
+        "ok": True,
+        "proposals": proposals,
+        "evaluated": evaluated,
+        "trailing_stop_status": trailing_note,
+        "stop_loss_pct": float(stop_loss_pct),
+        "take_profit_pct": float(take_profit_pct),
+        "min_value_usdt": float(min_value_usdt),
+    }
+
+
 def testnet_symbol_in_local_order_cooldown(symbol: str, cooldown_minutes: int) -> bool:
     """
     True si en el historial local de órdenes testnet hay una orden reciente para el mismo par.
