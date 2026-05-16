@@ -37,10 +37,15 @@ _state: dict[str, Any] = {
     "last_cycle_finished_at": None,
     "last_cycle_duration_ms": None,
     "last_cycle_phases": [],
+    "last_cycle_phase": None,
     "last_primary_reason": None,
     "last_entry_candidate": None,
     "last_cycle_summary": None,
     "best_rejected_candidate": None,
+    "last_exits_review_at": None,
+    "last_strategy_run_at": None,
+    "next_strategy_run_at": None,
+    "next_exits_review_at": None,
 }
 
 
@@ -76,29 +81,48 @@ def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _refresh_next_run_at() -> None:
+def _delay_to_utc_iso(delay_sec: float) -> str:
+    return datetime.fromtimestamp(time.time() + max(0.0, delay_sec), tz=timezone.utc).isoformat()
+
+
+def _phase_from_ran(phases_ran: list[str]) -> str | None:
+    has_exits = "exits" in phases_ran
+    has_strategy = "strategy" in phases_ran
+    if has_exits and has_strategy:
+        return "both"
+    if has_exits:
+        return "exits_only"
+    if has_strategy:
+        return "strategy"
+    return None
+
+
+def _refresh_schedule_times() -> None:
     now_mono = time.monotonic()
     with _state_lock:
         if not _state["enabled"]:
             _state["next_run_at"] = None
+            _state["next_exits_review_at"] = None
+            _state["next_strategy_run_at"] = None
             return
         exits_iv = int(_state["exits_interval_seconds"])
         strat_iv = int(_state["strategy_interval_seconds"])
         last_exits = _state.get("_last_exits_mono")
         last_strat = _state.get("_last_strategy_mono")
-        candidates: list[float] = []
+
         if last_exits is None:
-            candidates.append(now_mono)
+            exits_delay = 0.0
         else:
-            candidates.append(last_exits + exits_iv)
+            exits_delay = max(0.0, float(last_exits) + exits_iv - now_mono)
+
         if last_strat is None:
-            candidates.append(now_mono)
+            strat_delay = 0.0
         else:
-            candidates.append(last_strat + strat_iv)
-        delay = max(0.0, min(candidates) - now_mono)
-        _state["next_run_at"] = datetime.fromtimestamp(
-            time.time() + delay, tz=timezone.utc
-        ).isoformat()
+            strat_delay = max(0.0, float(last_strat) + strat_iv - now_mono)
+
+        _state["next_exits_review_at"] = _delay_to_utc_iso(exits_delay)
+        _state["next_strategy_run_at"] = _delay_to_utc_iso(strat_delay)
+        _state["next_run_at"] = _delay_to_utc_iso(min(exits_delay, strat_delay))
 
 
 def _apply_strategy_diagnostics(result: dict[str, Any]) -> None:
@@ -162,8 +186,10 @@ def _run_cycle() -> None:
                 row = dict(a) if isinstance(a, dict) else {"detail": a}
                 row["phase"] = "exit_review"
                 actions_accum.append(row)
+            exits_finished_iso = _utc_iso()
             with _state_lock:
                 _state["_last_exits_mono"] = now
+                _state["last_exits_review_at"] = exits_finished_iso
 
         if do_strategy:
             phases_ran.append("strategy")
@@ -185,16 +211,20 @@ def _run_cycle() -> None:
                     "candidates_count": result.get("candidates_count"),
                 }
             )
+            strategy_finished_iso = _utc_iso()
             with _state_lock:
                 _state["_last_strategy_mono"] = now
+                _state["last_strategy_run_at"] = strategy_finished_iso
                 _apply_strategy_diagnostics(result)
 
         duration_ms = int((time.monotonic() - cycle_started_mono) * 1000)
+        cycle_phase = _phase_from_ran(phases_ran)
         with _state_lock:
             _state["last_run_at"] = _utc_iso()
             _state["last_cycle_finished_at"] = _utc_iso()
             _state["last_cycle_duration_ms"] = duration_ms
             _state["last_cycle_phases"] = list(phases_ran)
+            _state["last_cycle_phase"] = cycle_phase
             _state["last_actions"] = actions_accum[-_MAX_LAST_ACTIONS:]
             _accumulate_auto_session_counts(actions_accum)
             _state["last_error"] = None
@@ -205,10 +235,11 @@ def _run_cycle() -> None:
             _state["last_cycle_finished_at"] = _utc_iso()
             _state["last_cycle_duration_ms"] = duration_ms
             _state["last_cycle_phases"] = list(phases_ran)
+            _state["last_cycle_phase"] = _phase_from_ran(phases_ran)
     finally:
         with _state_lock:
             _state["running"] = False
-        _refresh_next_run_at()
+        _refresh_schedule_times()
         _cycle_lock.release()
 
 
@@ -255,7 +286,7 @@ def start_paper_bot_scheduler(
         _state["_last_exits_mono"] = None
         _state["_last_strategy_mono"] = None
 
-    _refresh_next_run_at()
+    _refresh_schedule_times()
 
     stop = threading.Event()
     t = threading.Thread(target=_scheduler_loop, args=(stop,), daemon=True, name="paper-bot-scheduler")
@@ -279,6 +310,8 @@ def stop_paper_bot_scheduler() -> dict[str, Any]:
     _stop_thread()
     with _state_lock:
         _state["next_run_at"] = None
+        _state["next_exits_review_at"] = None
+        _state["next_strategy_run_at"] = None
     return get_paper_bot_scheduler_status()
 
 
@@ -301,8 +334,13 @@ def get_paper_bot_scheduler_status() -> dict[str, Any]:
             "last_cycle_finished_at": _state.get("last_cycle_finished_at"),
             "last_cycle_duration_ms": _state.get("last_cycle_duration_ms"),
             "last_cycle_phases": list(_state.get("last_cycle_phases") or []),
+            "last_cycle_phase": _state.get("last_cycle_phase"),
             "last_primary_reason": _state.get("last_primary_reason"),
             "last_entry_candidate": _state.get("last_entry_candidate"),
             "last_cycle_summary": _state.get("last_cycle_summary"),
             "best_rejected_candidate": _state.get("best_rejected_candidate"),
+            "last_exits_review_at": _state.get("last_exits_review_at"),
+            "last_strategy_run_at": _state.get("last_strategy_run_at"),
+            "next_strategy_run_at": _state.get("next_strategy_run_at"),
+            "next_exits_review_at": _state.get("next_exits_review_at"),
         }

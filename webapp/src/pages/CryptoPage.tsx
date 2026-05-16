@@ -1975,6 +1975,19 @@ export function CryptoPage() {
           phases={autoStatus?.last_cycle_phases}
           primaryReasonLabel={strategyPrimaryReasonLabel}
           emptyHint="Sin datos de ciclo todavía. Iniciá el auto-run y esperá la primera revisión (entradas o salidas)."
+          paperSchedule={
+            autoStatus?.enabled
+              ? {
+                  cyclePhase: autoStatus.last_cycle_phase ?? null,
+                  lastExitsReviewAt: autoStatus.last_exits_review_at ?? null,
+                  lastStrategyRunAt: autoStatus.last_strategy_run_at ?? null,
+                  nextStrategyRunAt: autoStatus.next_strategy_run_at ?? null,
+                  nextExitsReviewAt: autoStatus.next_exits_review_at ?? null,
+                  strategyIntervalSeconds: autoStatus.strategy_interval_seconds,
+                  exitsIntervalSeconds: autoStatus.exits_interval_seconds,
+                }
+              : null
+          }
         />
         </div>
       </div>

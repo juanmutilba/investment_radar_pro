@@ -1494,6 +1494,11 @@ export type CryptoPaperBotAutoStatus = {
   last_cycle_finished_at?: string | null;
   last_cycle_duration_ms?: number | null;
   last_cycle_phases?: string[];
+  last_cycle_phase?: "exits_only" | "strategy" | "both" | null;
+  last_exits_review_at?: string | null;
+  last_strategy_run_at?: string | null;
+  next_strategy_run_at?: string | null;
+  next_exits_review_at?: string | null;
   last_primary_reason?: string | null;
   last_entry_candidate?: CryptoCycleCandidate | null;
   last_cycle_summary?: CryptoCycleSummary | null;
