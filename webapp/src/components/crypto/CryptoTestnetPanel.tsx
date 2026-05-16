@@ -57,6 +57,9 @@ const SMALL_USDT_WARN = 5;
 const PROPOSAL_PREFILL_MESSAGE =
   "Propuesta cargada en el formulario. Revisá y confirmá manualmente.";
 
+const STRATEGY_COOLDOWN_FIELD_HINT =
+  "Tiempo mínimo antes de volver a proponer una entrada en el mismo activo.";
+
 const TESTNET_PANEL_SECTIONS = [
   { id: "crypto-testnet-section-status", label: "Estado" },
   { id: "crypto-testnet-section-operate", label: "Operar" },
@@ -77,6 +80,22 @@ function defaultTestnetCollapsedGroups(monitorRunning: boolean): TestnetCollapse
     monitor: !monitorRunning,
     orders: false,
   };
+}
+
+function CryptoTestnetStrategyCooldownLabel() {
+  return (
+    <span className="crypto-testnet-field-label">
+      <span className="msg-muted">Cooldown estrategia (min)</span>
+      <button
+        type="button"
+        className="crypto-testnet-field-hint-btn"
+        title={STRATEGY_COOLDOWN_FIELD_HINT}
+        aria-label={STRATEGY_COOLDOWN_FIELD_HINT}
+      >
+        ?
+      </button>
+    </span>
+  );
 }
 
 function TestnetPanelGroup({
@@ -1415,7 +1434,7 @@ export function CryptoTestnetPanel() {
             />
           </label>
           <label className="crypto-testnet-field">
-            <span className="msg-muted">Cooldown (min)</span>
+            <CryptoTestnetStrategyCooldownLabel />
             <input
               type="number"
               className="radar-input"
@@ -1952,7 +1971,7 @@ export function CryptoTestnetPanel() {
             />
           </label>
           <label className="crypto-testnet-field">
-            <span className="msg-muted">Cooldown (min)</span>
+            <CryptoTestnetStrategyCooldownLabel />
             <input
               type="number"
               className="radar-input"
