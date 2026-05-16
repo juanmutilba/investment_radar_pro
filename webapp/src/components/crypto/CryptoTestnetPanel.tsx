@@ -1,15 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   getCryptoTestnetBalances,
   getCryptoTestnetStatus,
   getCryptoTestnetTicker,
+  postCryptoTestnetMarketOrder,
   type CryptoTestnetBalancesPayload,
+  type CryptoTestnetMarketOrderRow,
   type CryptoTestnetStatusPayload,
   type CryptoTestnetTickerPayload,
 } from "@/services/api";
 
-const HIGHLIGHT_ASSETS = ["USDT", "BTC", "ETH", "BNB"] as const;
+const HIGHLIGHT_ASSETS = ["USDT", "BTC", "ETH", "BNB", "SOL"] as const;
 const DEMO_SYMBOL = "BTC/USDT";
+const TESTNET_WHITELIST_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"] as const;
+const MAX_TESTNET_ORDER_USDT = 25;
 
 const numFmt2 = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 8, minimumFractionDigits: 2 });
 
@@ -40,6 +44,11 @@ export function CryptoTestnetPanel() {
   const [statusLoading, setStatusLoading] = useState(true);
   const [balancesLoading, setBalancesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [manualSymbol, setManualSymbol] = useState<string>(TESTNET_WHITELIST_SYMBOLS[0]);
+  const [manualQuoteUsdt, setManualQuoteUsdt] = useState<string>("10");
+  const [orderBusy, setOrderBusy] = useState(false);
+  const [orderFormError, setOrderFormError] = useState<string | null>(null);
+  const [lastOrder, setLastOrder] = useState<CryptoTestnetMarketOrderRow | null>(null);
 
   const loadStatus = useCallback(async (soft = false) => {
     if (!soft) setStatusLoading(true);
@@ -78,6 +87,40 @@ export function CryptoTestnetPanel() {
   const connected =
     Boolean(status?.configured && status?.enabled && status?.can_read_balance);
   const showEnvHelp = status && !status.configured;
+
+  const submitTestnetMarketBuy = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      setOrderFormError(null);
+      setLastOrder(null);
+      const q = Number.parseFloat(manualQuoteUsdt.replace(",", "."));
+      if (!Number.isFinite(q) || q < 0.01) {
+        setOrderFormError("Ingresá un monto USDT válido (mín. 0.01).");
+        return;
+      }
+      if (q > MAX_TESTNET_ORDER_USDT + 1e-9) {
+        setOrderFormError(`El monto no puede superar ${MAX_TESTNET_ORDER_USDT} USDT.`);
+        return;
+      }
+      if (!connected || !manualSymbol.trim()) return;
+      setOrderBusy(true);
+      try {
+        const res = await postCryptoTestnetMarketOrder({
+          symbol: manualSymbol.trim(),
+          side: "buy",
+          quote_amount_usdt: q,
+        });
+        if (res.order) setLastOrder(res.order);
+        await loadBalances();
+        setError(null);
+      } catch (err: unknown) {
+        setOrderFormError(err instanceof Error ? err.message : "Error al enviar orden testnet");
+      } finally {
+        setOrderBusy(false);
+      }
+    },
+    [connected, manualQuoteUsdt, manualSymbol, loadBalances],
+  );
 
   return (
     <>
@@ -215,6 +258,119 @@ export function CryptoTestnetPanel() {
             </details>
           ) : balances.ok ? (
             <p className="msg-muted" style={{ margin: 0 }}>Sin saldos en la cuenta testnet.</p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {connected ? (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <h3 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
+            Orden manual Testnet
+          </h3>
+          <div
+            role="note"
+            style={{
+              marginBottom: "0.85rem",
+              padding: "0.65rem 0.85rem",
+              borderRadius: "var(--radius, 8px)",
+              border: "1px solid rgba(59, 130, 246, 0.4)",
+              background: "rgba(59, 130, 246, 0.08)",
+              fontSize: "0.88rem",
+            }}
+          >
+            <strong>Dinero ficticio.</strong> La orden se envía a <strong>Binance Spot Testnet</strong>. No cuenta real,
+            no paper trading, sin auto-run. Sólo compras (BUY) con monto en USDT; máximo {MAX_TESTNET_ORDER_USDT}{" "}
+            USDT por orden.
+          </div>
+          <form
+            onSubmit={(ev) => {
+              void submitTestnetMarketBuy(ev);
+            }}
+            style={{ display: "flex", flexDirection: "column", gap: "0.75rem", maxWidth: "420px" }}
+          >
+            <label className="msg-muted" style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+              Par (whitelist)
+              <select
+                className="radar-input"
+                value={manualSymbol}
+                onChange={(ev) => setManualSymbol(ev.target.value)}
+                disabled={orderBusy}
+              >
+                {TESTNET_WHITELIST_SYMBOLS.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="msg-muted" style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+              Monto en USDT
+              <input
+                type="number"
+                className="radar-input"
+                min={0.01}
+                max={MAX_TESTNET_ORDER_USDT}
+                step="0.01"
+                value={manualQuoteUsdt}
+                onChange={(ev) => setManualQuoteUsdt(ev.target.value)}
+                disabled={orderBusy}
+                required
+              />
+            </label>
+            <div>
+              <button type="submit" className="radar-refresh-btn" disabled={orderBusy}>
+                {orderBusy ? "Enviando…" : "Enviar orden Testnet"}
+              </button>
+            </div>
+          </form>
+          {orderFormError ? <p className="msg-error" style={{ marginTop: "0.75rem", fontSize: "0.875rem" }}>{orderFormError}</p> : null}
+          {lastOrder ? (
+            <div style={{ marginTop: "1rem" }}>
+              <p className="msg-muted" style={{ marginBottom: "0.5rem", fontSize: "0.85rem" }}>
+                Última respuesta (orden)
+              </p>
+              <div
+                className="table-wrap"
+                style={{ fontSize: "0.85rem", border: "1px solid var(--border-subtle, rgba(255,255,255,0.12))", borderRadius: 8, padding: "0.65rem" }}
+              >
+                <table>
+                  <tbody>
+                    <tr>
+                      <td className="msg-muted">Símbolo</td>
+                      <td style={{ textAlign: "right" }}>{lastOrder.symbol}</td>
+                    </tr>
+                    <tr>
+                      <td className="msg-muted">Lado</td>
+                      <td style={{ textAlign: "right" }}>{lastOrder.side}</td>
+                    </tr>
+                    <tr>
+                      <td className="msg-muted">order_id</td>
+                      <td style={{ textAlign: "right" }}>{String(lastOrder.order_id ?? "—")}</td>
+                    </tr>
+                    <tr>
+                      <td className="msg-muted">status</td>
+                      <td style={{ textAlign: "right" }}>{lastOrder.status ?? "—"}</td>
+                    </tr>
+                    <tr>
+                      <td className="msg-muted">filled</td>
+                      <td style={{ textAlign: "right" }}>{fmtNum(lastOrder.filled)}</td>
+                    </tr>
+                    <tr>
+                      <td className="msg-muted">cost</td>
+                      <td style={{ textAlign: "right" }}>{fmtNum(lastOrder.cost)}</td>
+                    </tr>
+                    <tr>
+                      <td className="msg-muted">average</td>
+                      <td style={{ textAlign: "right" }}>{fmtNum(lastOrder.average)}</td>
+                    </tr>
+                    <tr>
+                      <td className="msg-muted">timestamp</td>
+                      <td style={{ textAlign: "right" }}>{lastOrder.timestamp != null ? String(lastOrder.timestamp) : "—"}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           ) : null}
         </div>
       ) : null}

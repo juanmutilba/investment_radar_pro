@@ -277,6 +277,43 @@ export async function getCryptoTestnetTicker(symbol: string): Promise<CryptoTest
   return (await res.json()) as CryptoTestnetTickerPayload;
 }
 
+/** POST /crypto/testnet/order/market — BUY testnet sólo whitelist, máx. 25 USDT. */
+export type CryptoTestnetMarketOrderRow = {
+  symbol: string;
+  side: string;
+  order_id: string | number | null;
+  status: string | null;
+  filled: number | null;
+  cost: number | null;
+  average: number | null;
+  timestamp: number | null;
+};
+
+export type CryptoTestnetMarketOrderPayload = {
+  ok: boolean;
+  order?: CryptoTestnetMarketOrderRow;
+};
+
+export async function postCryptoTestnetMarketOrder(body: {
+  symbol: string;
+  side: "buy";
+  quote_amount_usdt: number;
+}): Promise<CryptoTestnetMarketOrderPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/order/market`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object") throw new Error("Respuesta vacía tras orden testnet");
+  const o = data as Record<string, unknown>;
+  if (typeof o.ok !== "boolean" || !o.ok) throw new Error("Respuesta inesperada: orden testnet");
+  return data as CryptoTestnetMarketOrderPayload;
+}
+
 export async function getCryptoTicker(symbol: string): Promise<CryptoTicker> {
   const q = new URLSearchParams({ symbol: symbol.trim() });
   const res = await fetch(`${BASE}/crypto/ticker?${q.toString()}`);

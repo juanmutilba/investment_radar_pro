@@ -483,9 +483,11 @@ def crypto_testnet_status():
 
 @app.get("/crypto/testnet/auth-debug")
 def crypto_testnet_auth_debug():
-    """Temporal: diagnóstico firma/tiempo en testnet sin órdenes (quitar antes de prod)."""
+    """Diagnóstico firma/tiempo sólo si CRYPTO_TESTNET_DEBUG=true (default off)."""
     from services.crypto import binance_testnet as tn
 
+    if not tn.is_testnet_auth_debug_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
     return tn.get_testnet_auth_debug()
 
 
@@ -512,6 +514,32 @@ def crypto_testnet_ticker(
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Binance testnet: {e}") from e
+
+
+class CryptoTestnetMarketOrderBody(BaseModel):
+    """Orden spot market en testnet (BUY por quote USDT). No paper, no cuenta real."""
+
+    symbol: str = Field(..., min_length=3, max_length=24)
+    side: str = Field(..., min_length=3, max_length=4, description="buy (único soportado)")
+    quote_amount_usdt: float = Field(..., ge=0.01, le=25.0)
+
+
+@app.post("/crypto/testnet/order/market")
+def crypto_testnet_market_order(body: CryptoTestnetMarketOrderBody):
+    """Spot market testnet: sólo BUY whitelist, máx. 25 USDT por orden."""
+    from services.crypto import binance_testnet as tn
+
+    r = tn.place_testnet_market_order(
+        body.symbol.strip(),
+        body.side.strip(),
+        body.quote_amount_usdt,
+    )
+    if not r.get("ok"):
+        raise HTTPException(
+            status_code=int(r.get("http_status") or 502),
+            detail=str(r.get("error") or "Error testnet"),
+        )
+    return {"ok": True, "order": r.get("order")}
 
 
 @app.get("/crypto/ticker")

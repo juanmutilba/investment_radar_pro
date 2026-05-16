@@ -1,5 +1,5 @@
 """
-Binance Spot Testnet (capa separada): solo lectura en fase 1.
+Binance Spot Testnet (capa separada): lectura + orden market BUY acotada (testnet).
 Credenciales dedicadas: BINANCE_TESTNET_API_KEY, BINANCE_TESTNET_API_SECRET, BINANCE_TESTNET_ENABLED.
 No usa BINANCE_API_KEY / BINANCE_API_SECRET (cuenta real).
 """
@@ -28,7 +28,13 @@ def _ensure_dotenv() -> None:
         load_dotenv(_ENV_FILE, override=True)
 
 
-_HIGHLIGHT_ASSETS = ("USDT", "BTC", "ETH", "BNB")
+_HIGHLIGHT_ASSETS = ("USDT", "BTC", "ETH", "BNB", "SOL")
+
+MARKET_ORDER_SYMBOL_WHITELIST: frozenset[str] = frozenset(
+    {"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"}
+)
+MAX_MARKET_ORDER_QUOTE_USDT: float = 25.0
+MIN_MARKET_ORDER_QUOTE_USDT: float = 0.01
 
 
 def _log(msg: str) -> None:
@@ -64,6 +70,11 @@ def is_testnet_configured() -> bool:
 
 def is_testnet_enabled() -> bool:
     return _env_bool("BINANCE_TESTNET_ENABLED", default=False)
+
+
+def is_testnet_auth_debug_enabled() -> bool:
+    """GET /crypto/testnet/auth-debug solo si CRYPTO_TESTNET_DEBUG=true (default off)."""
+    return _env_bool("CRYPTO_TESTNET_DEBUG", default=False)
 
 
 def _ccxt_available() -> bool:
@@ -679,6 +690,166 @@ def get_testnet_account_info() -> dict[str, Any]:
         "asset_count": len(balances),
         "highlights": bal.get("highlights") or {},
         "balances": balances,
+    }
+
+
+def _normalize_whitelisted_symbol(raw: str) -> str | None:
+    s = (raw or "").strip().upper().replace(" ", "")
+    if "/" not in s:
+        return None
+    base, quote = s.split("/", 1)
+    if not base or not quote:
+        return None
+    norm = f"{base}/{quote}"
+    return norm if norm in MARKET_ORDER_SYMBOL_WHITELIST else None
+
+
+def _assert_exchange_is_sandbox(ex: Any, context: str) -> None:
+    if _classify_urls_api_safe(ex) == "real":
+        _log(f"{context}: rechazado — cliente apunta a producción")
+        raise RuntimeError("sandbox_guard: exchange apunta a Binance real")
+
+
+def _free_usdt_from_balances_payload(bal: dict[str, Any]) -> float | None:
+    if not bal.get("ok"):
+        return None
+    for row in bal.get("balances") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("asset", "")).upper() == "USDT":
+            try:
+                return float(row.get("free") or 0)
+            except (TypeError, ValueError):
+                return None
+    return 0.0
+
+
+def _summarize_ccxt_order(sym: str, side: str, raw: dict[str, Any]) -> dict[str, Any]:
+    oid = raw.get("id")
+    status = raw.get("status")
+    if isinstance(status, str):
+        status_s = status
+    else:
+        status_s = str(status) if status is not None else None
+    return {
+        "symbol": sym,
+        "side": side,
+        "order_id": oid,
+        "status": status_s,
+        "filled": raw.get("filled"),
+        "cost": raw.get("cost"),
+        "average": raw.get("average"),
+        "timestamp": raw.get("timestamp"),
+    }
+
+
+def place_testnet_market_order(
+    symbol: str,
+    side: str,
+    quote_amount_usdt: float | None,
+    *,
+    max_quote_usdt: float = MAX_MARKET_ORDER_QUOTE_USDT,
+) -> dict[str, Any]:
+    """
+    Orden market sólo testnet. Fase actual: BUY por monto en USDT (quoteOrderQty vía ccxt).
+    SELL no implementado (rechazado).
+    """
+    _ensure_dotenv()
+    out_err = (
+        lambda e, code: {
+            "ok": False,
+            "error": e,
+            "http_status": code,
+            "order": None,
+        }
+    )
+
+    side_l = (side or "").strip().lower()
+    if side_l != "buy":
+        return out_err("Sólo BUY en testnet en esta fase; SELL no disponible.", 400)
+
+    if not _ccxt_available():
+        return out_err("ccxt no instalado", 503)
+
+    if not is_testnet_enabled():
+        return out_err("BINANCE_TESTNET_ENABLED=false", 503)
+
+    if not is_testnet_configured():
+        return out_err("Testnet no configurado (API key/secret)", 503)
+
+    sym = _normalize_whitelisted_symbol(symbol)
+    if sym is None:
+        return out_err(
+            f"Símbolo no permitido; whitelist: {sorted(MARKET_ORDER_SYMBOL_WHITELIST)}",
+            400,
+        )
+
+    if quote_amount_usdt is None:
+        return out_err("quote_amount_usdt es obligatorio para BUY", 400)
+
+    try:
+        q_amt = float(quote_amount_usdt)
+    except (TypeError, ValueError):
+        return out_err("quote_amount_usdt inválido", 400)
+
+    if not (q_amt == q_amt) or q_amt <= 0:
+        return out_err("quote_amount_usdt debe ser > 0", 400)
+
+    if q_amt < MIN_MARKET_ORDER_QUOTE_USDT:
+        return out_err(f"Monto mínimo {MIN_MARKET_ORDER_QUOTE_USDT} USDT", 400)
+
+    if q_amt > max_quote_usdt:
+        return out_err(f"Monto máximo por orden {max_quote_usdt} USDT", 400)
+
+    bal = get_testnet_balances()
+    if not bal.get("ok"):
+        return out_err(
+            f"Lectura de balance requerida antes de operar: {bal.get('error')}",
+            503,
+        )
+
+    usdt_free = _free_usdt_from_balances_payload(bal)
+    if usdt_free is None:
+        return out_err("No se pudo determinar USDT libre", 503)
+    if usdt_free + 1e-9 < q_amt:
+        return out_err(f"USDT libre insuficiente (libre≈{usdt_free:.8f}, pedido={q_amt})", 400)
+
+    ex = get_testnet_exchange()
+    if ex is None:
+        return out_err("Exchange testnet no disponible", 503)
+
+    try:
+        _assert_exchange_is_sandbox(ex, "market_order")
+    except RuntimeError as e:
+        return out_err(str(e), 503)
+
+    cost = q_amt
+    ctp = getattr(ex, "cost_to_precision", None)
+    if callable(ctp):
+        try:
+            cost = float(ctp(sym, cost))
+        except Exception:
+            cost = q_amt
+
+    if cost <= 0 or cost > max_quote_usdt + 1e-9:
+        return out_err("Monto tras precisión inválido", 400)
+
+    _log(f"market_buy: symbol={sym} quote_usdt={cost}")
+    try:
+        raw = ex.create_market_buy_order_with_cost(sym, cost)
+    except Exception as e:
+        err = _safe_error(e)
+        _log(f"market_buy falló {err}")
+        return out_err(err, 502)
+
+    if not isinstance(raw, dict):
+        return out_err("Respuesta de orden inválida", 502)
+
+    return {
+        "ok": True,
+        "error": None,
+        "http_status": 200,
+        "order": _summarize_ccxt_order(sym, "buy", raw),
     }
 
 
