@@ -2379,6 +2379,41 @@ table.radar-table thead .radar-table__sticky-col {
   gap: 1rem;
 }
 
+.crypto-testnet-page-banner {
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  border: 1px solid rgba(194, 65, 12, 0.42);
+  background: rgba(194, 65, 12, 0.07);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.crypto-testnet-manual-footer {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.crypto-testnet-subheading {
+  margin: 0 0 0.65rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.crypto-testnet-empty-panel {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 1.35rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.crypto-testnet-manual-card .crypto-testnet-note--blue {
+  margin-bottom: 1rem;
+}
+
 .crypto-testnet-section {
   margin: 0;
 }

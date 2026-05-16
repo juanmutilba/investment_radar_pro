@@ -414,59 +414,46 @@ export function CryptoTestnetPanel() {
     sellQuoteNum > 0 &&
     sellQuoteNum < SMALL_USDT_WARN;
 
-  const refreshAll = () => {
-    void loadStatus(false);
+  const refreshTestnetDatos = useCallback(() => {
     void loadBalances();
     if (connected) void loadOrders();
-  };
+  }, [loadBalances, loadOrders, connected]);
 
   return (
     <div className="crypto-testnet-dashboard">
-      <div
-        className="crypto-testnet-banner"
-        role="note"
-        style={{
-          padding: "0.75rem 1rem",
-          borderRadius: "var(--radius, 8px)",
-          border: "1px solid rgba(194, 65, 12, 0.45)",
-          background: "rgba(194, 65, 12, 0.08)",
-          fontSize: "0.9rem",
-        }}
-      >
-        <strong>Dinero ficticio. Opera sobre Binance Spot Testnet.</strong> No es cuenta real. El historial de órdenes
-        abajo es local a esta app (no es el libro completo de Binance).
+      <div className="crypto-testnet-page-banner" role="note">
+        <strong>Spot Testnet Binance:</strong> saldo ficticio en la red oficial de pruebas; las órdenes son reales sólo
+        contra ese sandbox (no contra tu cuenta spot real). Distinto del tab <strong>Bot (Simulador)</strong>, que es
+        paper interno de la app.
       </div>
 
-      {/* A — Estado conexión */}
+      {/* 1 — Estado Testnet */}
       <section className="card crypto-testnet-section">
         <div className="crypto-testnet-section-head">
-          <h2 className="dashboard-section-title crypto-testnet-section-title">Estado Testnet Binance</h2>
+          <h2 className="dashboard-section-title crypto-testnet-section-title">Estado Testnet</h2>
           <div className="crypto-testnet-toolbar">
-            <button type="button" className="radar-refresh-btn" onClick={() => void refreshAll()} disabled={statusLoading}>
-              {statusLoading ? "Refrescando…" : "Refrescar todo"}
-            </button>
             <button type="button" className="radar-refresh-btn" onClick={() => void loadStatus(false)} disabled={statusLoading}>
-              Estado
+              {statusLoading ? "Refrescando…" : "Refrescar estado"}
             </button>
             <button
               type="button"
               className="radar-refresh-btn"
-              onClick={() => void loadBalances()}
+              onClick={() => void refreshTestnetDatos()}
               disabled={balancesLoading || !status?.enabled || !status?.configured}
             >
-              Cartera
+              {balancesLoading ? "Actualizando…" : "Refrescar datos"}
             </button>
             <CryptoRefreshBadge active={statusLoading} label="Estado…" />
-            <CryptoRefreshBadge active={balancesLoading} label="Cartera…" />
+            <CryptoRefreshBadge active={balancesLoading} label="Datos…" />
           </div>
         </div>
 
         {error ? <p className="msg-error crypto-testnet-block-start">{error}</p> : null}
 
         {showEnvHelp ? (
-          <p className="msg-muted crypto-testnet-block-start" style={{ fontSize: "0.9rem" }}>
-            Faltan <code>BINANCE_TESTNET_API_KEY</code> / <code>BINANCE_TESTNET_API_SECRET</code> en{" "}
-            <code>.env</code>. Opcional: <code>BINANCE_TESTNET_ENABLED=true</code>.
+          <p className="msg-muted crypto-testnet-block-start" style={{ fontSize: "0.88rem" }}>
+            Configurá credenciales de testnet en <code>.env</code> y activá{" "}
+            <code>BINANCE_TESTNET_ENABLED=true</code>; reiniciá la API tras cambios.
           </p>
         ) : null}
 
@@ -477,19 +464,19 @@ export function CryptoTestnetPanel() {
             <div className="crypto-testnet-kpi">
               <span className="crypto-testnet-kpi-label">Conexión</span>
               <span className={`crypto-testnet-kpi-value ${connected ? "crypto-testnet-kpi-value--ok" : ""}`}>
-                {connected ? "Operativa" : "No disponible"}
+                {connected ? "Lista" : "No disponible"}
               </span>
             </div>
             <div className="crypto-testnet-kpi">
-              <span className="crypto-testnet-kpi-label">Credenciales</span>
-              <span className="crypto-testnet-kpi-value">{status.configured ? "Configurado" : "Faltan"}</span>
+              <span className="crypto-testnet-kpi-label">Configurado</span>
+              <span className="crypto-testnet-kpi-value">{status.configured ? "Sí" : "No"}</span>
             </div>
             <div className="crypto-testnet-kpi">
-              <span className="crypto-testnet-kpi-label">Modo testnet</span>
-              <span className="crypto-testnet-kpi-value">{status.enabled ? "Activado" : "OFF"}</span>
+              <span className="crypto-testnet-kpi-label">Habilitado</span>
+              <span className="crypto-testnet-kpi-value">{status.enabled ? "Sí" : "No"}</span>
             </div>
             <div className="crypto-testnet-kpi">
-              <span className="crypto-testnet-kpi-label">Sandbox ccxt</span>
+              <span className="crypto-testnet-kpi-label">Sandbox</span>
               <span className="crypto-testnet-kpi-value">{status.testnet ? "Sí" : "—"}</span>
             </div>
           </div>
@@ -501,238 +488,76 @@ export function CryptoTestnetPanel() {
         ) : null}
       </section>
 
-      {/* B — Resumen cartera */}
+      {/* 2 — Cartera Testnet */}
       {balances ? (
         <section className="card crypto-testnet-section">
-          <h3 className="dashboard-section-title crypto-testnet-section-title">Resumen de cartera</h3>
+          <h3 className="dashboard-section-title crypto-testnet-section-title">Cartera Testnet</h3>
+          <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.85rem" }}>
+            Resumen orientativo (balances + últimos precios testnet para armar órdenes). El detalle en vivo está en{" "}
+            <strong>Posiciones reales</strong>.
+          </p>
           {!balances.ok ? (
             <p className="msg-error" style={{ fontSize: "0.875rem" }}>
               {balances.error ?? "No se pudieron leer balances"}
             </p>
           ) : portfolio ? (
-            <>
-              <div className="crypto-testnet-mini-grid">
-                <div className="crypto-testnet-kpi crypto-testnet-kpi--accent">
-                  <span className="crypto-testnet-kpi-label">Total aprox.</span>
-                  <span className="crypto-testnet-kpi-value">{fmtNum(portfolio.totalApprox)} USDT</span>
-                </div>
-                <div className="crypto-testnet-kpi">
-                  <span className="crypto-testnet-kpi-label">USDT libre</span>
-                  <span className="crypto-testnet-kpi-value">{fmtNum(portfolio.usdtFree)}</span>
-                </div>
-                <div className="crypto-testnet-kpi">
-                  <span className="crypto-testnet-kpi-label">Activos con saldo</span>
-                  <span className="crypto-testnet-kpi-value">{portfolio.assetWithBalanceCount}</span>
-                </div>
-                <div className="crypto-testnet-kpi">
-                  <span className="crypto-testnet-kpi-label">Última actualización</span>
-                  <span className="crypto-testnet-kpi-value" style={{ fontSize: "0.85rem", fontWeight: 500 }}>
-                    {balancesUpdatedAt ? fmtIsoLocalShort(balancesUpdatedAt) : "—"}
-                  </span>
-                </div>
+            <div className="crypto-testnet-mini-grid">
+              <div className="crypto-testnet-kpi crypto-testnet-kpi--accent">
+                <span className="crypto-testnet-kpi-label">Total aproximado USDT</span>
+                <span className="crypto-testnet-kpi-value">{fmtNum(portfolio.totalApprox)} USDT</span>
               </div>
-              <p className="msg-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.8rem" }}>
-                Vista rápida desde la API de balances testnet + precios locales para el formulario. Ubicación detallada
-                libre/en orden y valorización directa desde Binance: sección{" "}
-                <strong>Posiciones reales Testnet</strong> más abajo.
-              </p>
-            </>
-          ) : null}
-        </section>
-      ) : null}
-
-      {/* Posiciones en vivo Binance Testnet */}
-      {balances ? (
-        <section className="card crypto-testnet-section crypto-testnet-real-positions">
-          <h3 className="dashboard-section-title crypto-testnet-section-title">Posiciones reales Testnet</h3>
-          <div className="crypto-testnet-note crypto-testnet-note--neutral">
-            <strong>Lectura en vivo desde Binance Spot Testnet</strong> (balances + últimos precios de mercado testnet).
-            No se mezcla con paper trading ni con el historial local de órdenes guardadas en esta app.
-          </div>
-          {positionsError ? <p className="msg-error crypto-testnet-block-start">{positionsError}</p> : null}
-          {!positionsPayload && balances.ok && !positionsError ? (
-            <p className="msg-muted" style={{ margin: "0.5rem 0 0", fontSize: "0.88rem" }}>
-              Refrescá la cartera para cargar posiciones desde testnet.
-            </p>
-          ) : null}
-          {positionsPayload?.ok ? (
-            <>
-              <div className="crypto-testnet-mini-grid" style={{ marginBottom: "0.85rem" }}>
-                <div className="crypto-testnet-kpi">
-                  <span className="crypto-testnet-kpi-label">USDT (efectivo)</span>
-                  <span className="crypto-testnet-kpi-value">{fmtNum(positionsPayload.cash_usdt)}</span>
-                </div>
-                <div className="crypto-testnet-kpi crypto-testnet-kpi--accent">
-                  <span className="crypto-testnet-kpi-label">Valor total aprox.</span>
-                  <span className="crypto-testnet-kpi-value">{fmtNum(positionsPayload.total_value_usdt)} USDT</span>
-                </div>
-                <div className="crypto-testnet-kpi">
-                  <span className="crypto-testnet-kpi-label">Sincronizado</span>
-                  <span className="crypto-testnet-kpi-value" style={{ fontSize: "0.85rem", fontWeight: 500 }}>
-                    {fmtIsoLocalShort(positionsPayload.updated_at)}
-                  </span>
-                </div>
+              <div className="crypto-testnet-kpi">
+                <span className="crypto-testnet-kpi-label">USDT libre</span>
+                <span className="crypto-testnet-kpi-value">{fmtNum(portfolio.usdtFree)}</span>
               </div>
-              {positionsPayload.positions.length === 0 ? (
-                <p className="msg-muted" style={{ margin: 0 }}>
-                  Sin posiciones crypto (sólo efectivo USDT o cuenta vacía).
-                </p>
-              ) : (
-                <div className="table-wrap">
-                  <table className="crypto-testnet-table">
-                    <thead>
-                      <tr>
-                        <th>Activo</th>
-                        <th className="crypto-testnet-num">Libre</th>
-                        <th className="crypto-testnet-num">En orden</th>
-                        <th className="crypto-testnet-num">Total</th>
-                        <th className="crypto-testnet-num">Precio USDT</th>
-                        <th className="crypto-testnet-num">Valor USDT</th>
-                        <th>Acción</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {positionsPayload.positions.map((r) => {
-                        const canSell = Boolean(r.symbol);
-                        return (
-                          <tr key={r.asset} className={PAIR_FOR_BASE[r.asset] ? "crypto-testnet-row--hl" : undefined}>
-                            <td className={PAIR_FOR_BASE[r.asset] ? "crypto-testnet-asset-hl" : undefined}>{r.asset}</td>
-                            <td className="crypto-testnet-num">{numFmt4.format(r.free)}</td>
-                            <td className="crypto-testnet-num">{numFmt4.format(r.used)}</td>
-                            <td className="crypto-testnet-num">{numFmt4.format(r.total)}</td>
-                            <td className="crypto-testnet-num">{fmtNum(r.last_price_usdt)}</td>
-                            <td className="crypto-testnet-num">{r.value_usdt !== null ? fmtNum(r.value_usdt) : "—"}</td>
-                            <td>
-                              {canSell ? (
-                                <button
-                                  type="button"
-                                  className="radar-refresh-btn crypto-testnet-btn-compact"
-                                  onClick={() => prefillQuickSell(r.symbol)}
-                                  disabled={orderBusy}
-                                >
-                                  Vender
-                                </button>
-                              ) : (
-                                <span className="msg-muted" style={{ fontSize: "0.8rem" }}>
-                                  —
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </>
-          ) : positionsPayload && !positionsPayload.ok ? (
-            <p className="msg-error" style={{ margin: "0.5rem 0 0", fontSize: "0.875rem" }}>
-              {positionsPayload.error ?? "No se pudieron leer posiciones testnet"}
-            </p>
-          ) : null}
-        </section>
-      ) : null}
-
-      {/* Órdenes abiertas en vivo (exchange) */}
-      {balances ? (
-        <section className="card crypto-testnet-section">
-          <div className="crypto-testnet-section-head">
-            <div>
-              <h3 className="dashboard-section-title crypto-testnet-section-title" style={{ margin: 0 }}>
-                Órdenes abiertas Testnet
-              </h3>
-              <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
-                Órdenes abiertas leídas directamente desde Binance Spot Testnet. No es historial local.
-              </p>
+              <div className="crypto-testnet-kpi">
+                <span className="crypto-testnet-kpi-label">Activos con saldo</span>
+                <span className="crypto-testnet-kpi-value">{portfolio.assetWithBalanceCount}</span>
+              </div>
+              <div className="crypto-testnet-kpi">
+                <span className="crypto-testnet-kpi-label">Última actualización</span>
+                <span className="crypto-testnet-kpi-value" style={{ fontSize: "0.85rem", fontWeight: 500 }}>
+                  {balancesUpdatedAt ? fmtIsoLocalShort(balancesUpdatedAt) : "—"}
+                </span>
+              </div>
             </div>
-            <div className="crypto-testnet-toolbar">
-              <button type="button" className="radar-refresh-btn" onClick={() => void loadOpenOrders()} disabled={openOrdersLoading}>
-                {openOrdersLoading ? "Refrescando…" : "Refrescar órdenes abiertas"}
-              </button>
-              <CryptoRefreshBadge active={openOrdersLoading} label="Órdenes abiertas…" />
-            </div>
-          </div>
-          {openOrdersError ? <p className="msg-error">{openOrdersError}</p> : null}
-          {openOrdersPayload?.ok ? (
-            openOrdersPayload.orders.length === 0 ? (
-              <p className="msg-muted" style={{ margin: "0.5rem 0 0" }}>
-                Sin órdenes abiertas.
-              </p>
-            ) : (
-              <div className="table-wrap">
-                <table className="crypto-testnet-table">
-                  <thead>
-                    <tr>
-                      <th>Fecha</th>
-                      <th>Símbolo</th>
-                      <th>Lado</th>
-                      <th>Tipo</th>
-                      <th className="crypto-testnet-num">Precio</th>
-                      <th className="crypto-testnet-num">Cantidad</th>
-                      <th className="crypto-testnet-num">Ejecutado</th>
-                      <th className="crypto-testnet-num">Pendiente</th>
-                      <th>Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {openOrdersPayload.orders.map((r, idx) => (
-                      <tr key={`${String(r.order_id)}-${r.symbol}-${idx}`}>
-                        <td style={{ whiteSpace: "nowrap", fontSize: "0.82rem" }}>{fmtExchangeMs(r.timestamp)}</td>
-                        <td>{r.symbol}</td>
-                        <td>{sideHistoryLabel(r.side)}</td>
-                        <td>{r.type ?? "—"}</td>
-                        <td className="crypto-testnet-num">{fmtNum(r.price)}</td>
-                        <td className="crypto-testnet-num">{fmtNum(r.amount)}</td>
-                        <td className="crypto-testnet-num">{fmtNum(r.filled)}</td>
-                        <td className="crypto-testnet-num">{fmtNum(r.remaining)}</td>
-                        <td>{r.status}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
-          ) : openOrdersPayload && !openOrdersPayload.ok ? (
-            <p className="msg-error" style={{ margin: "0.5rem 0 0", fontSize: "0.875rem" }}>
-              {openOrdersPayload.error ?? "No se pudieron leer órdenes abiertas"}
-            </p>
-          ) : balances.ok && !openOrdersError ? (
-            <p className="msg-muted" style={{ margin: "0.5rem 0 0", fontSize: "0.88rem" }}>
-              Refrescá la cartera o usá el botón para cargar órdenes abiertas desde testnet.
-            </p>
           ) : null}
         </section>
       ) : null}
 
       {connected ? (
         <>
-          {/* D — Orden manual */}
-          <section className="card crypto-testnet-section">
-            <h3 className="dashboard-section-title crypto-testnet-section-title">Orden manual spot</h3>
+          {/* 3 — Abrir orden manual (Spot Testnet) */}
+          <section className="card crypto-testnet-section crypto-testnet-manual-card">
+            <h3 className="dashboard-section-title crypto-testnet-section-title">Abrir orden manual</h3>
+            <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.875rem" }}>
+              <strong>Dinero ficticio de Binance</strong>, ejecución real sólo contra <strong>Spot Testnet</strong> (no el
+              simulador paper de esta app).
+            </p>
             <div className="crypto-testnet-note crypto-testnet-note--blue">
-              <strong>Límite de seguridad:</strong> hasta {MAX_TESTNET_ORDER_USDT} USDT por orden (compra o venta por
-              monto). Whitelist de pares activa.
+              Límite por orden: hasta {MAX_TESTNET_ORDER_USDT} USDT · pares en whitelist · mercado spot testnet.
             </div>
             <form className="crypto-testnet-order-form" onSubmit={(ev) => void submitTestnetMarketOrder(ev)}>
-              <label className="crypto-testnet-field">
-                <span className="msg-muted">Par</span>
-                <select
-                  className="radar-input"
-                  value={manualSymbol}
-                  onChange={(ev) => setManualSymbol(ev.target.value)}
-                  disabled={orderBusy}
-                >
-                  {TESTNET_WHITELIST_SYMBOLS.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="radar-toolbar" style={{ marginBottom: "0.85rem" }}>
+                <label className="radar-toolbar__field">
+                  <span className="radar-toolbar__label">Par</span>
+                  <select
+                    className="radar-toolbar__select"
+                    value={manualSymbol}
+                    onChange={(ev) => setManualSymbol(ev.target.value)}
+                    disabled={orderBusy}
+                  >
+                    {TESTNET_WHITELIST_SYMBOLS.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
 
               <fieldset className="crypto-testnet-fieldset">
-                <legend className="msg-muted crypto-testnet-legend">Modo</legend>
+                <legend className="msg-muted crypto-testnet-legend">Lado</legend>
                 <div className="crypto-testnet-radio-row">
                   <label className="crypto-testnet-radio">
                     <input
@@ -742,7 +567,7 @@ export function CryptoTestnetPanel() {
                       onChange={() => setManualSide("buy")}
                       disabled={orderBusy}
                     />
-                    Comprar
+                    BUY
                   </label>
                   <label className="crypto-testnet-radio">
                     <input
@@ -752,7 +577,7 @@ export function CryptoTestnetPanel() {
                       onChange={() => setManualSide("sell")}
                       disabled={orderBusy}
                     />
-                    Vender
+                    SELL
                   </label>
                 </div>
               </fieldset>
@@ -869,114 +694,279 @@ export function CryptoTestnetPanel() {
               </div>
             </form>
             {orderFormError ? <p className="msg-error crypto-testnet-block-start">{orderFormError}</p> : null}
-          </section>
 
-          {/* E — Última orden */}
-          <section className="card crypto-testnet-section">
-            <h3 className="dashboard-section-title crypto-testnet-section-title">Última orden</h3>
-            {lastOrder ? (
-              <div className="crypto-testnet-last-order">
-                <span
-                  className={`crypto-side-badge ${
-                    String(lastOrder.side).toLowerCase() === "sell" ? "crypto-side-badge--sell" : "crypto-side-badge--buy"
-                  }`}
-                >
-                  {String(lastOrder.side).toUpperCase()}
-                </span>
-                <div className="crypto-testnet-last-grid">
-                  <div>
-                    <span className="crypto-testnet-lo-label">Par</span>
-                    <span className="crypto-testnet-lo-value">{lastOrder.symbol}</span>
-                  </div>
-                  <div>
-                    <span className="crypto-testnet-lo-label">Cantidad</span>
-                    <span className="crypto-testnet-lo-value">{fmtNum(lastOrder.filled)}</span>
-                  </div>
-                  <div>
-                    <span className="crypto-testnet-lo-label">Cost / notional</span>
-                    <span className="crypto-testnet-lo-value">{fmtNum(lastOrder.cost)} USDT</span>
-                  </div>
-                  <div>
-                    <span className="crypto-testnet-lo-label">Precio medio</span>
-                    <span className="crypto-testnet-lo-value">{fmtNum(lastOrder.average)}</span>
-                  </div>
-                  <div>
-                    <span className="crypto-testnet-lo-label">Estado</span>
-                    <span className="crypto-testnet-lo-value">{lastOrder.status ?? "—"}</span>
-                  </div>
-                  <div>
-                    <span className="crypto-testnet-lo-label">Hora</span>
-                    <span className="crypto-testnet-lo-value">{fmtExchangeMs(lastOrder.timestamp)}</span>
+            <div className="crypto-testnet-manual-footer">
+              <h4 className="crypto-testnet-subheading">Última orden ejecutada</h4>
+              {lastOrder ? (
+                <div className="crypto-testnet-last-order">
+                  <span
+                    className={`crypto-side-badge ${
+                      String(lastOrder.side).toLowerCase() === "sell" ? "crypto-side-badge--sell" : "crypto-side-badge--buy"
+                    }`}
+                  >
+                    {String(lastOrder.side).toUpperCase()}
+                  </span>
+                  <div className="crypto-testnet-last-grid">
+                    <div>
+                      <span className="crypto-testnet-lo-label">Par</span>
+                      <span className="crypto-testnet-lo-value">{lastOrder.symbol}</span>
+                    </div>
+                    <div>
+                      <span className="crypto-testnet-lo-label">Cantidad</span>
+                      <span className="crypto-testnet-lo-value">{fmtNum(lastOrder.filled)}</span>
+                    </div>
+                    <div>
+                      <span className="crypto-testnet-lo-label">Cost / notional</span>
+                      <span className="crypto-testnet-lo-value">{fmtNum(lastOrder.cost)} USDT</span>
+                    </div>
+                    <div>
+                      <span className="crypto-testnet-lo-label">Precio medio</span>
+                      <span className="crypto-testnet-lo-value">{fmtNum(lastOrder.average)}</span>
+                    </div>
+                    <div>
+                      <span className="crypto-testnet-lo-label">Estado</span>
+                      <span className="crypto-testnet-lo-value">{lastOrder.status ?? "—"}</span>
+                    </div>
+                    <div>
+                      <span className="crypto-testnet-lo-label">Hora</span>
+                      <span className="crypto-testnet-lo-value">{fmtExchangeMs(lastOrder.timestamp)}</span>
+                    </div>
                   </div>
                 </div>
+              ) : (
+                <p className="msg-muted" style={{ margin: 0, fontSize: "0.875rem" }}>
+                  Cuando envíes una orden aparece el resumen acá.
+                </p>
+              )}
+            </div>
+          </section>
+        </>
+      ) : null}
+
+      {/* 4 — Posiciones reales */}
+      {balances ? (
+        <section className="card crypto-testnet-section crypto-testnet-real-positions">
+          <h3 className="dashboard-section-title crypto-testnet-section-title">Posiciones reales</h3>
+          <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.85rem" }}>
+            Saldo spot en Binance Spot Testnet (no paper interno). Podés usar <strong>Vender</strong> para cargar el
+            formulario de arriba.
+          </p>
+          {positionsError ? <p className="msg-error crypto-testnet-block-start">{positionsError}</p> : null}
+          {!positionsPayload && balances.ok && !positionsError ? (
+            <p className="msg-muted" style={{ margin: "0.5rem 0 0", fontSize: "0.88rem" }}>
+              Refrescá datos para sincronizar posiciones desde testnet.
+            </p>
+          ) : null}
+          {positionsPayload?.ok ? (
+            <>
+              <div className="crypto-testnet-mini-grid" style={{ marginBottom: "0.85rem" }}>
+                <div className="crypto-testnet-kpi">
+                  <span className="crypto-testnet-kpi-label">USDT (efectivo)</span>
+                  <span className="crypto-testnet-kpi-value">{fmtNum(positionsPayload.cash_usdt)}</span>
+                </div>
+                <div className="crypto-testnet-kpi crypto-testnet-kpi--accent">
+                  <span className="crypto-testnet-kpi-label">Valor total aprox.</span>
+                  <span className="crypto-testnet-kpi-value">{fmtNum(positionsPayload.total_value_usdt)} USDT</span>
+                </div>
+                <div className="crypto-testnet-kpi">
+                  <span className="crypto-testnet-kpi-label">Sincronizado</span>
+                  <span className="crypto-testnet-kpi-value" style={{ fontSize: "0.85rem", fontWeight: 500 }}>
+                    {fmtIsoLocalShort(positionsPayload.updated_at)}
+                  </span>
+                </div>
+              </div>
+              {positionsPayload.positions.length === 0 ? (
+                <p className="msg-muted" style={{ margin: 0 }}>
+                  Sin posiciones crypto (sólo efectivo USDT o cuenta vacía).
+                </p>
+              ) : (
+                <div className="table-wrap">
+                  <table className="crypto-testnet-table">
+                    <thead>
+                      <tr>
+                        <th>Activo</th>
+                        <th className="crypto-testnet-num">Libre</th>
+                        <th className="crypto-testnet-num">En orden</th>
+                        <th className="crypto-testnet-num">Total</th>
+                        <th className="crypto-testnet-num">Precio USDT</th>
+                        <th className="crypto-testnet-num">Valor USDT</th>
+                        <th>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {positionsPayload.positions.map((r) => {
+                        const canSell = Boolean(r.symbol);
+                        return (
+                          <tr key={r.asset} className={PAIR_FOR_BASE[r.asset] ? "crypto-testnet-row--hl" : undefined}>
+                            <td className={PAIR_FOR_BASE[r.asset] ? "crypto-testnet-asset-hl" : undefined}>{r.asset}</td>
+                            <td className="crypto-testnet-num">{numFmt4.format(r.free)}</td>
+                            <td className="crypto-testnet-num">{numFmt4.format(r.used)}</td>
+                            <td className="crypto-testnet-num">{numFmt4.format(r.total)}</td>
+                            <td className="crypto-testnet-num">{fmtNum(r.last_price_usdt)}</td>
+                            <td className="crypto-testnet-num">{r.value_usdt !== null ? fmtNum(r.value_usdt) : "—"}</td>
+                            <td>
+                              {canSell ? (
+                                <button
+                                  type="button"
+                                  className="radar-refresh-btn crypto-testnet-btn-compact"
+                                  onClick={() => prefillQuickSell(r.symbol)}
+                                  disabled={orderBusy}
+                                >
+                                  Vender
+                                </button>
+                              ) : (
+                                <span className="msg-muted" style={{ fontSize: "0.8rem" }}>
+                                  —
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          ) : positionsPayload && !positionsPayload.ok ? (
+            <p className="msg-error" style={{ margin: "0.5rem 0 0", fontSize: "0.875rem" }}>
+              {positionsPayload.error ?? "No se pudieron leer posiciones testnet"}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
+      {/* 5 — Órdenes abiertas */}
+      {balances ? (
+        <section className="card crypto-testnet-section">
+          <div className="crypto-testnet-section-head">
+            <div>
+              <h3 className="dashboard-section-title crypto-testnet-section-title" style={{ margin: 0 }}>
+                Órdenes abiertas
+              </h3>
+              <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
+                Lectura directa desde Binance Spot Testnet (cuando existan límites aparecerán acá). No es historial local ni paper.
+              </p>
+            </div>
+            <div className="crypto-testnet-toolbar">
+              <button type="button" className="radar-refresh-btn" onClick={() => void loadOpenOrders()} disabled={openOrdersLoading}>
+                {openOrdersLoading ? "Refrescando…" : "Refrescar órdenes abiertas"}
+              </button>
+              <CryptoRefreshBadge active={openOrdersLoading} label="Órdenes abiertas…" />
+            </div>
+          </div>
+          {openOrdersError ? <p className="msg-error">{openOrdersError}</p> : null}
+          {openOrdersPayload?.ok ? (
+            openOrdersPayload.orders.length === 0 ? (
+              <div className="crypto-testnet-empty-panel" role="status">
+                Sin órdenes abiertas en testnet.
               </div>
             ) : (
-              <p className="msg-muted" style={{ margin: 0, fontSize: "0.9rem" }}>
-                Todavía no enviaste una orden en esta sesión. Tras operar aparece el resumen acá.
-              </p>
-            )}
-          </section>
-
-          {/* F — Historial */}
-          <section className="card crypto-testnet-section">
-            <div className="crypto-testnet-section-head">
-              <div>
-                <h3 className="dashboard-section-title crypto-testnet-section-title" style={{ margin: 0 }}>
-                  Órdenes locales enviadas desde esta app
-                </h3>
-                <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
-                  Historial persistido en el servidor ({ordersTotal} registros). Mostrando las últimas{" "}
-                  {recentOrders.length}. No es el libro completo de Binance ni las posiciones en vivo.
-                </p>
-              </div>
-              <div className="crypto-testnet-toolbar">
-                <button type="button" className="radar-refresh-btn" onClick={() => void loadOrders()} disabled={ordersLoading}>
-                  {ordersLoading ? "Refrescando…" : "Refrescar historial"}
-                </button>
-                <CryptoRefreshBadge active={ordersLoading} />
-              </div>
-            </div>
-            {ordersError ? <p className="msg-error">{ordersError}</p> : null}
-            {recentOrders.length > 0 ? (
               <div className="table-wrap">
                 <table className="crypto-testnet-table">
                   <thead>
                     <tr>
                       <th>Fecha</th>
-                      <th>Tipo</th>
                       <th>Símbolo</th>
+                      <th>Lado</th>
+                      <th>Tipo</th>
+                      <th className="crypto-testnet-num">Precio</th>
                       <th className="crypto-testnet-num">Cantidad</th>
-                      <th className="crypto-testnet-num">Cost</th>
-                      <th className="crypto-testnet-num">Avg</th>
+                      <th className="crypto-testnet-num">Ejecutado</th>
+                      <th className="crypto-testnet-num">Pendiente</th>
                       <th>Estado</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {recentOrders.map((row, idx) => (
-                      <tr key={`${row.created_at}-${String(row.order_id)}-${idx}`}>
-                        <td style={{ whiteSpace: "nowrap", fontSize: "0.82rem" }}>{fmtIsoLocalShort(row.created_at)}</td>
-                        <td>{sideHistoryLabel(row.side)}</td>
-                        <td>{row.symbol ?? "—"}</td>
-                        <td className="crypto-testnet-num">{fmtNum(row.filled)}</td>
-                        <td className="crypto-testnet-num">{fmtNum(row.cost)}</td>
-                        <td className="crypto-testnet-num">{fmtNum(row.average)}</td>
-                        <td>{row.status ?? row.raw_status ?? "—"}</td>
+                    {openOrdersPayload.orders.map((r, idx) => (
+                      <tr key={`${String(r.order_id)}-${r.symbol}-${idx}`}>
+                        <td style={{ whiteSpace: "nowrap", fontSize: "0.82rem" }}>{fmtExchangeMs(r.timestamp)}</td>
+                        <td>{r.symbol}</td>
+                        <td>{sideHistoryLabel(r.side)}</td>
+                        <td>{r.type ?? "—"}</td>
+                        <td className="crypto-testnet-num">{fmtNum(r.price)}</td>
+                        <td className="crypto-testnet-num">{fmtNum(r.amount)}</td>
+                        <td className="crypto-testnet-num">{fmtNum(r.filled)}</td>
+                        <td className="crypto-testnet-num">{fmtNum(r.remaining)}</td>
+                        <td>{r.status}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            ) : ordersLoading ? (
-              <p className="msg-muted" style={{ margin: 0 }}>
-                Cargando…
+            )
+          ) : openOrdersPayload && !openOrdersPayload.ok ? (
+            <p className="msg-error" style={{ margin: "0.5rem 0 0", fontSize: "0.875rem" }}>
+              {openOrdersPayload.error ?? "No se pudieron leer órdenes abiertas"}
+            </p>
+          ) : balances.ok && !openOrdersError ? (
+            <p className="msg-muted" style={{ margin: "0.5rem 0 0", fontSize: "0.88rem" }}>
+              Refrescá datos o el botón para cargar órdenes abiertas desde testnet.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
+      {/* 6 — Historial local */}
+      {connected ? (
+        <section className="card crypto-testnet-section">
+          <div className="crypto-testnet-section-head">
+            <div>
+              <h3 className="dashboard-section-title crypto-testnet-section-title" style={{ margin: 0 }}>
+                Historial local
+              </h3>
+              <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
+                Órdenes que esta app registró en disco ({ordersTotal} en archivo). Mostrando las últimas {recentOrders.length}.
+                No es el libro completo de Binance.
               </p>
-            ) : (
-              <p className="msg-muted" style={{ margin: 0 }}>
-                Sin órdenes registradas.
-              </p>
-            )}
-          </section>
-        </>
+            </div>
+            <div className="crypto-testnet-toolbar">
+              <button type="button" className="radar-refresh-btn" onClick={() => void loadOrders()} disabled={ordersLoading}>
+                {ordersLoading ? "Refrescando…" : "Refrescar historial"}
+              </button>
+              <CryptoRefreshBadge active={ordersLoading} />
+            </div>
+          </div>
+          {ordersError ? <p className="msg-error">{ordersError}</p> : null}
+          {recentOrders.length > 0 ? (
+            <div className="table-wrap">
+              <table className="crypto-testnet-table">
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Tipo</th>
+                    <th>Símbolo</th>
+                    <th className="crypto-testnet-num">Cantidad</th>
+                    <th className="crypto-testnet-num">Cost</th>
+                    <th className="crypto-testnet-num">Avg</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentOrders.map((row, idx) => (
+                    <tr key={`${row.created_at}-${String(row.order_id)}-${idx}`}>
+                      <td style={{ whiteSpace: "nowrap", fontSize: "0.82rem" }}>{fmtIsoLocalShort(row.created_at)}</td>
+                      <td>{sideHistoryLabel(row.side)}</td>
+                      <td>{row.symbol ?? "—"}</td>
+                      <td className="crypto-testnet-num">{fmtNum(row.filled)}</td>
+                      <td className="crypto-testnet-num">{fmtNum(row.cost)}</td>
+                      <td className="crypto-testnet-num">{fmtNum(row.average)}</td>
+                      <td>{row.status ?? row.raw_status ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : ordersLoading ? (
+            <p className="msg-muted" style={{ margin: 0 }}>
+              Cargando…
+            </p>
+          ) : (
+            <p className="msg-muted" style={{ margin: 0 }}>
+              Sin órdenes registradas en local.
+            </p>
+          )}
+        </section>
       ) : null}
     </div>
   );
