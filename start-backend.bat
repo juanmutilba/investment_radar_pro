@@ -11,6 +11,14 @@ if not exist "%ROOT%\venv\Scripts\python.exe" (
   exit /b 1
 )
 
+echo [INFO] Sincronizando dependencias Python (requirements.txt)...
+"%ROOT%\venv\Scripts\python.exe" -m pip install -r "%ROOT%\requirements.txt" -q
+if errorlevel 1 (
+  echo [ERROR] pip install fallo. Ejecutá repair-venv.bat
+  pause
+  exit /b 1
+)
+
 echo [Investment Radar] Backend: http://127.0.0.1:8000
 call "%ROOT%\venv\Scripts\python.exe" -m uvicorn api.app:app --reload --host 127.0.0.1 --port 8000
 echo.
