@@ -6,6 +6,7 @@ No usa BINANCE_API_KEY / BINANCE_API_SECRET (cuenta real).
 from __future__ import annotations
 
 import json
+import math
 import os
 import time as time_mod
 from datetime import datetime
@@ -750,22 +751,77 @@ def _base_asset_from_pair(sym: str) -> str | None:
     if len(parts) != 2 or not parts[0].strip():
         return None
     return parts[0].strip().upper()
+
+
+def _safe_ccxt_float(v: Any) -> float | None:
+    """Evita NaN/inf en respuestas JSON y valores no numéricos."""
+    if v is None:
+        return None
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(x) or math.isinf(x):
+        return None
+    return x
+
+
+def _summarize_ccxt_order(sym: str, side: str, raw: dict[str, Any]) -> dict[str, Any]:
     oid = raw.get("id")
     status = raw.get("status")
     if isinstance(status, str):
         status_s = status
     else:
         status_s = str(status) if status is not None else None
+
+    ts_out = _safe_ccxt_float(raw.get("timestamp"))
+
+    if oid is None:
+        oid_out: str | int | float | None = None
+    elif isinstance(oid, (str, int, float)):
+        oid_out = oid
+    else:
+        oid_out = str(oid)
+
     return {
         "symbol": sym,
         "side": side,
-        "order_id": oid,
+        "order_id": oid_out,
         "status": status_s,
-        "filled": raw.get("filled"),
-        "cost": raw.get("cost"),
-        "average": raw.get("average"),
-        "timestamp": raw.get("timestamp"),
+        "filled": _safe_ccxt_float(raw.get("filled")),
+        "cost": _safe_ccxt_float(raw.get("cost")),
+        "average": _safe_ccxt_float(raw.get("average")),
+        "timestamp": ts_out,
     }
+
+
+def _http_status_for_exchange_failure(exc: BaseException) -> int:
+    """Errores típicos de reglas Binance/ccxt → 400; resto → 502."""
+    msg = _safe_error(exc).lower()
+    markers = (
+        "insufficient balance",
+        "insufficient funds",
+        "-1013",
+        "-1111",
+        "-2010",
+        "-1021",
+        "-2019",
+        "filter failure",
+        "minimum",
+        "notional",
+        "precision",
+        "lot size",
+        "invalid quantity",
+        "quote_order_qty",
+        "market lot",
+        "account has insufficient balance",
+    )
+    if any(m in msg for m in markers):
+        return 400
+    name = type(exc).__name__.lower()
+    if name in ("insufficientfunds", "invalidorder", "badrequest", "argumentsrequired"):
+        return 400
+    return 502
 
 
 _ORDER_HISTORY_LIMIT_CAP = 500
@@ -936,8 +992,9 @@ def place_testnet_market_order(
             raw = ex.create_market_buy_order_with_cost(sym, cost)
         except Exception as e:
             err = _safe_error(e)
+            code = _http_status_for_exchange_failure(e)
             _log(f"market_buy falló {err}")
-            return out_err(err, 502)
+            return out_err(err, code)
 
         if not isinstance(raw, dict):
             return out_err("Respuesta de orden inválida", 502)
@@ -989,8 +1046,9 @@ def place_testnet_market_order(
             raw = ex.create_market_sell_order(sym, amt)
         except Exception as e:
             err = _safe_error(e)
+            code = _http_status_for_exchange_failure(e)
             _log(f"market_sell falló {err}")
-            return out_err(err, 502)
+            return out_err(err, code)
 
         if not isinstance(raw, dict):
             return out_err("Respuesta de orden inválida", 502)

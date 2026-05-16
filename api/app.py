@@ -547,15 +547,25 @@ def crypto_testnet_market_order(body: CryptoTestnetMarketOrderBody):
     """Spot market testnet: BUY (USDT) o SELL (base); whitelist; sandbox."""
     from services.crypto import binance_testnet as tn
 
-    r = tn.place_testnet_market_order(
-        body.symbol.strip(),
-        body.side,
-        body.quote_amount_usdt,
-        amount_base=body.amount_base,
-    )
+    try:
+        r = tn.place_testnet_market_order(
+            body.symbol.strip(),
+            str(body.side),
+            body.quote_amount_usdt,
+            amount_base=body.amount_base,
+        )
+    except Exception as e:
+        msg = str(e).strip()
+        if len(msg) > 600:
+            msg = msg[:600] + "…"
+        raise HTTPException(status_code=502, detail=msg or type(e).__name__) from e
+
     if not r.get("ok"):
+        code = int(r.get("http_status") or 502)
+        if code not in (400, 502, 503):
+            code = 502
         raise HTTPException(
-            status_code=int(r.get("http_status") or 502),
+            status_code=code,
             detail=str(r.get("error") or "Error testnet"),
         )
     return {"ok": True, "order": r.get("order")}
