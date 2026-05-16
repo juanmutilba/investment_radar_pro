@@ -13,6 +13,8 @@ import {
   saveUseFavoritesForSignals,
 } from "@/components/crypto/cryptoPrincipalPrefs";
 import { CycleDiagnosticsPanel } from "@/components/crypto/CycleDiagnosticsPanel";
+import { CryptoTimeframeField } from "@/components/crypto/CryptoTimeframeField";
+import { normalizeTimeframeString } from "@/components/crypto/cryptoTimeframe";
 import { PaperSimEquityCurvePanel } from "@/components/crypto/PaperSimEquityCurvePanel";
 import { CryptoTestnetPanel } from "@/components/crypto/CryptoTestnetPanel";
 import type { CSSProperties } from "react";
@@ -300,6 +302,9 @@ function strategyPrimaryReasonLabel(reason: string | null | undefined): string {
   if (!reason) return "—";
   const labels: Record<string, string> = {
     no_opportunity: "Sin oportunidades (compra_potencial)",
+    watchlist_empty: "Watchlist vacía",
+    scanner_empty: "Scanner sin filas",
+    scanner_error: "Error de scanner",
     score_below_min: "Score por debajo del mínimo",
     already_open: "Posición ya abierta en el símbolo",
     cooldown_symbol: "Cooldown activo para el símbolo",
@@ -308,6 +313,7 @@ function strategyPrimaryReasonLabel(reason: string | null | undefined): string {
     max_one_per_run: "Máximo 1 entrada por ejecución",
     max_open_positions: "Máximo de posiciones abiertas",
     no_entry: "Sin entrada tras evaluar candidatos",
+    candidates_present: "Hay candidatos con señal",
   };
   return labels[reason] ?? reason;
 }
@@ -913,7 +919,7 @@ export function CryptoPage() {
     try {
       const { actions } = await reviewCryptoPaperExits();
       setStrategyCycle((prev) => ({
-        timeframe: strategyTf.trim() || "1h",
+        timeframe: normalizeTimeframeString(strategyTf),
         candidates: prev?.candidates ?? [],
         positions_review: prev?.positions_review ?? [],
         actions,
@@ -983,7 +989,7 @@ export function CryptoPage() {
     setAutoError(null);
     try {
       const status = await startCryptoPaperBotAuto({
-        timeframe: strategyTf.trim() || "1h",
+        timeframe: normalizeTimeframeString(strategyTf),
         limit: ANALYSIS_LIMIT,
         amountUsdt: risk.amountUsdt,
         stopLossPct: risk.stopLossPct,
@@ -1040,7 +1046,7 @@ export function CryptoPage() {
     setStrategyError(null);
     try {
       const data = await executeCryptoPaperStrategy({
-        timeframe: strategyTf.trim() || "1h",
+        timeframe: normalizeTimeframeString(strategyTf),
         limit: ANALYSIS_LIMIT,
         amountUsdt: risk.amountUsdt,
         stopLossPct: risk.stopLossPct,
@@ -1559,16 +1565,12 @@ export function CryptoPage() {
           </p>
         ) : null}
         <div className="radar-toolbar" style={{ marginBottom: "0.75rem" }}>
-          <label className="radar-toolbar__field">
-            <span className="radar-toolbar__label">Timeframe</span>
-            <input
-              className="radar-toolbar__input"
-              value={strategyTf}
-              onChange={(ev) => setStrategyTf(ev.target.value)}
-              placeholder="1h"
-              disabled={autoRunActive}
-            />
-          </label>
+          <CryptoTimeframeField
+            value={strategyTf}
+            onChange={setStrategyTf}
+            disabled={autoRunActive}
+            id="crypto-strategy-timeframe"
+          />
           <label className="radar-toolbar__field">
             <span className="radar-toolbar__label">Monto USDT</span>
             <input
@@ -1970,6 +1972,7 @@ export function CryptoPage() {
           durationMs={autoStatus?.last_cycle_duration_ms}
           primaryReason={autoStatus?.last_primary_reason}
           summary={autoStatus?.last_cycle_summary}
+          lastScanDebug={autoStatus?.last_scan_debug}
           bestRejected={autoStatus?.best_rejected_candidate}
           entryCandidate={autoStatus?.last_entry_candidate}
           phases={autoStatus?.last_cycle_phases}

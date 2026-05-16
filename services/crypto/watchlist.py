@@ -17,10 +17,20 @@ CRYPTO_WATCHLIST: list[str] = [
     "BNB/USDT",
     "XRP/USDT",
     "ADA/USDT",
+    "DOGE/USDT",
     "AVAX/USDT",
     "LINK/USDT",
     "DOT/USDT",
     "MATIC/USDT",
+    "LTC/USDT",
+    "UNI/USDT",
+    "ATOM/USDT",
+    "TRX/USDT",
+    "NEAR/USDT",
+    "BCH/USDT",
+    "APT/USDT",
+    "INJ/USDT",
+    "ARB/USDT",
 ]
 
 
@@ -31,6 +41,11 @@ def _log(msg: str) -> None:
 def get_crypto_watchlist() -> list[str]:
     """Lista de pares spot a escanear (copia para no mutar la constante)."""
     return list(CRYPTO_WATCHLIST)
+
+
+def get_crypto_watchlist_count() -> int:
+    """Cantidad de pares en la watchlist del bot (constante CRYPTO_WATCHLIST)."""
+    return len(CRYPTO_WATCHLIST)
 
 
 def _error_row(symbol: str, timeframe: str, error: str) -> dict[str, Any]:
@@ -106,7 +121,11 @@ def scan_crypto_watchlist(timeframe: str = "1h", limit: int = 200) -> list[dict[
     tf = (timeframe or "1h").strip() or "1h"
     lim = max(50, min(int(limit), 1000))
     symbols = get_crypto_watchlist()
-    _log(f"inicio symbols={len(symbols)} timeframe={tf} limit={lim}")
+    wl_count = len(symbols)
+    _log(f"inicio symbols={wl_count} timeframe={tf} limit={lim}")
+    if wl_count == 0:
+        _log("watchlist vacía: CRYPTO_WATCHLIST sin símbolos")
+        return []
     rows: list[dict[str, Any]] = []
     for sym in symbols:
         rows.append(_scan_one(sym, tf, lim))

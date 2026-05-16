@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { CycleDiagnosticsPanel } from "@/components/crypto/CycleDiagnosticsPanel";
+import { CryptoTimeframeField } from "@/components/crypto/CryptoTimeframeField";
+import { normalizeTimeframeString } from "@/components/crypto/cryptoTimeframe";
 import {
   getCryptoTestnetBalances,
   getCryptoTestnetMonitorStatus,
@@ -532,7 +534,7 @@ export function CryptoTestnetPanel() {
       const cd = Number.parseInt(assistCooldown, 10);
       const ms = Number.parseFloat(assistMinScore.replace(",", "."));
       const payload = await postCryptoTestnetProposeEntry({
-        timeframe: assistTf.trim() || "1h",
+        timeframe: normalizeTimeframeString(assistTf),
         limit: 200,
         quote_amount_usdt: Number.isFinite(q) && q > 0 ? Math.min(q, MAX_TESTNET_ORDER_USDT) : 10,
         max_open_positions: Number.isFinite(mo) && mo >= 1 ? mo : 3,
@@ -649,7 +651,7 @@ export function CryptoTestnetPanel() {
       const m = await postCryptoTestnetMonitorStart({
         interval_minutes: Number.isFinite(interval) && interval >= 1 ? interval : 5,
         quote_amount_usdt: Number.isFinite(q) && q > 0 ? Math.min(q, MAX_TESTNET_ORDER_USDT) : 10,
-        timeframe: monTf.trim() || "1h",
+        timeframe: normalizeTimeframeString(monTf),
         limit: 200,
         max_open_positions: Number.isFinite(mo) && mo >= 1 ? mo : 3,
         cooldown_minutes: Number.isFinite(cd) && cd >= 0 ? cd : 0,
@@ -875,19 +877,14 @@ export function CryptoTestnetPanel() {
           límites del backend siguen aplicando).
         </p>
         <div className="crypto-testnet-mini-grid crypto-testnet-mini-grid--dense" style={{ marginBottom: "0.75rem" }}>
-          <label className="crypto-testnet-field">
-            <span className="msg-muted">Timeframe</span>
-            <select
-              className="radar-toolbar__select"
-              value={assistTf}
-              onChange={(ev) => setAssistTf(ev.target.value)}
-              disabled={assistedLoading || statusLoading}
-            >
-              <option value="1h">1h</option>
-              <option value="4h">4h</option>
-              <option value="1d">1d</option>
-            </select>
-          </label>
+          <CryptoTimeframeField
+            className="crypto-testnet-field"
+            label="Timeframe"
+            value={assistTf}
+            onChange={setAssistTf}
+            disabled={assistedLoading || statusLoading}
+            id="crypto-testnet-assist-timeframe"
+          />
           <label className="crypto-testnet-field">
             <span className="msg-muted">USDT por entrada</span>
             <input
@@ -1324,19 +1321,14 @@ export function CryptoTestnetPanel() {
               disabled={monInputsLocked || monitorActionBusy}
             />
           </label>
-          <label className="crypto-testnet-field">
-            <span className="msg-muted">Timeframe entrada</span>
-            <select
-              className="radar-toolbar__select"
-              value={monTf}
-              onChange={(ev) => setMonTf(ev.target.value)}
-              disabled={monInputsLocked || monitorActionBusy}
-            >
-              <option value="1h">1h</option>
-              <option value="4h">4h</option>
-              <option value="1d">1d</option>
-            </select>
-          </label>
+          <CryptoTimeframeField
+            className="crypto-testnet-field"
+            label="Timeframe entrada"
+            value={monTf}
+            onChange={setMonTf}
+            disabled={monInputsLocked || monitorActionBusy}
+            id="crypto-testnet-monitor-timeframe"
+          />
           <label className="crypto-testnet-field">
             <span className="msg-muted">USDT entrada</span>
             <input
