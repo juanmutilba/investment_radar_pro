@@ -314,6 +314,57 @@ export async function getCryptoTestnetPositions(): Promise<CryptoTestnetPosition
   return data;
 }
 
+/** GET /crypto/testnet/open-orders — órdenes abiertas en vivo desde Binance Spot Testnet. */
+export type CryptoTestnetOpenOrderRow = {
+  symbol: string;
+  order_id: string | number | null;
+  side: string | null;
+  type: string | null;
+  status: string;
+  price: number | null;
+  amount: number | null;
+  filled: number | null;
+  remaining: number | null;
+  cost: number | null;
+  timestamp: number | null;
+};
+
+export type CryptoTestnetOpenOrdersPayload = {
+  ok: boolean;
+  error: string | null;
+  orders: CryptoTestnetOpenOrderRow[];
+  total: number;
+  updated_at: string;
+};
+
+function isCryptoTestnetOpenOrdersPayload(data: unknown): data is CryptoTestnetOpenOrdersPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.ok === "boolean" &&
+    (o.error === null || typeof o.error === "string") &&
+    Array.isArray(o.orders) &&
+    typeof o.total === "number" &&
+    typeof o.updated_at === "string"
+  );
+}
+
+export async function getCryptoTestnetOpenOrders(symbol?: string | null): Promise<CryptoTestnetOpenOrdersPayload> {
+  const q = new URLSearchParams();
+  if (symbol != null && symbol.trim() !== "") q.set("symbol", symbol.trim());
+  const qs = q.toString();
+  const url = qs.length > 0 ? `${BASE}/crypto/testnet/open-orders?${qs}` : `${BASE}/crypto/testnet/open-orders`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetOpenOrdersPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/testnet/open-orders");
+  }
+  return data;
+}
+
 export async function getCryptoTestnetTicker(symbol: string): Promise<CryptoTestnetTickerPayload> {
   const q = new URLSearchParams({ symbol: symbol.trim() });
   const res = await fetch(`${BASE}/crypto/testnet/ticker?${q.toString()}`);

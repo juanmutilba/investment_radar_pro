@@ -809,6 +809,124 @@ def get_testnet_positions() -> dict[str, Any]:
     }
 
 
+def _open_order_row_from_ccxt(raw: dict[str, Any], fallback_symbol: str) -> dict[str, Any]:
+    """Fila normalizada para órdenes abiertas ccxt (spot testnet)."""
+    sym_r = raw.get("symbol")
+    if isinstance(sym_r, str) and sym_r.strip():
+        out_sym = sym_r.strip()
+    else:
+        out_sym = fallback_symbol
+
+    oid = raw.get("id")
+    if oid is None:
+        oid_out: str | int | float | None = None
+    elif isinstance(oid, (str, int, float)):
+        oid_out = oid
+    else:
+        oid_out = str(oid)
+
+    side = raw.get("side")
+    side_s = str(side).lower() if side is not None else None
+
+    typ = raw.get("type")
+    type_s = str(typ).lower() if typ is not None else None
+
+    st = raw.get("status")
+    status_s = str(st).lower() if st is not None else "open"
+
+    return {
+        "symbol": out_sym,
+        "order_id": oid_out,
+        "side": side_s,
+        "type": type_s,
+        "status": status_s,
+        "price": _safe_ccxt_float(raw.get("price")),
+        "amount": _safe_ccxt_float(raw.get("amount")),
+        "filled": _safe_ccxt_float(raw.get("filled")),
+        "remaining": _safe_ccxt_float(raw.get("remaining")),
+        "cost": _safe_ccxt_float(raw.get("cost")),
+        "timestamp": _safe_ccxt_float(raw.get("timestamp")),
+    }
+
+
+def get_testnet_open_orders(symbol: str | None = None) -> dict[str, Any]:
+    """
+    Órdenes abiertas spot desde Binance Testnet (solo lectura; no persiste JSON).
+    Si symbol es None, consulta todos los pares en MARKET_ORDER_SYMBOL_WHITELIST.
+    """
+    _ensure_dotenv()
+    updated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    def _fail(msg: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "error": msg,
+            "orders": [],
+            "total": 0,
+            "updated_at": updated_at,
+        }
+
+    if not _ccxt_available():
+        return _fail("ccxt no instalado")
+
+    if not is_testnet_enabled():
+        return _fail("BINANCE_TESTNET_ENABLED=false")
+
+    if not is_testnet_configured():
+        return _fail("Testnet no configurado (API key/secret)")
+
+    ex = get_testnet_exchange()
+    if ex is None:
+        return _fail("Exchange testnet no disponible")
+
+    try:
+        _assert_exchange_is_sandbox(ex, "open_orders")
+    except RuntimeError as e:
+        return _fail(str(e))
+
+    sym_raw = (symbol or "").strip() or None
+    if sym_raw:
+        sym_norm = _normalize_whitelisted_symbol(sym_raw)
+        if sym_norm is None:
+            return _fail(
+                f"Símbolo no permitido; whitelist: {sorted(MARKET_ORDER_SYMBOL_WHITELIST)}"
+            )
+        symbols_to_query = [sym_norm]
+    else:
+        symbols_to_query = sorted(MARKET_ORDER_SYMBOL_WHITELIST)
+
+    combined: list[dict[str, Any]] = []
+    for sym in symbols_to_query:
+        try:
+            raw_list = ex.fetch_open_orders(sym)
+        except Exception as e:
+            err = _safe_error(e)
+            _log(f"open_orders {sym} falló {err}")
+            return _fail(f"No se pudieron leer órdenes abiertas ({sym}): {err}")
+        if not isinstance(raw_list, list):
+            return _fail(f"Respuesta inválida de órdenes abiertas ({sym})")
+        for item in raw_list:
+            if isinstance(item, dict):
+                combined.append(_open_order_row_from_ccxt(item, sym))
+
+    def _ts_key(row: dict[str, Any]) -> float:
+        t = row.get("timestamp")
+        if isinstance(t, (int, float)) and not math.isnan(float(t)) and not math.isinf(float(t)):
+            return float(t)
+        return 0.0
+
+    combined.sort(key=lambda r: -_ts_key(r))
+
+    _log(f"open_orders: OK total={len(combined)}")
+    return {
+        "ok": True,
+        "error": None,
+        "orders": combined,
+        "total": len(combined),
+        "updated_at": updated_at,
+    }
+
+
 def get_testnet_account_info() -> dict[str, Any]:
     """Resumen de cuenta testnet derivado del balance (sin secretos ni órdenes)."""
     bal = get_testnet_balances()

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   getCryptoTestnetBalances,
+  getCryptoTestnetOpenOrders,
   getCryptoTestnetOrders,
   getCryptoTestnetPositions,
   getCryptoTestnetStatus,
@@ -8,6 +9,7 @@ import {
   postCryptoTestnetMarketOrder,
   type CryptoTestnetBalancesPayload,
   type CryptoTestnetMarketOrderRow,
+  type CryptoTestnetOpenOrdersPayload,
   type CryptoTestnetPositionsPayload,
   type CryptoTestnetStoredOrder,
   type CryptoTestnetStatusPayload,
@@ -120,6 +122,9 @@ export function CryptoTestnetPanel() {
   const [ordersError, setOrdersError] = useState<string | null>(null);
   const [positionsPayload, setPositionsPayload] = useState<CryptoTestnetPositionsPayload | null>(null);
   const [positionsError, setPositionsError] = useState<string | null>(null);
+  const [openOrdersPayload, setOpenOrdersPayload] = useState<CryptoTestnetOpenOrdersPayload | null>(null);
+  const [openOrdersError, setOpenOrdersError] = useState<string | null>(null);
+  const [openOrdersLoading, setOpenOrdersLoading] = useState(false);
 
   const prefillQuickSell = useCallback((pair: string | null | undefined) => {
     const p = (pair ?? "").trim();
@@ -146,7 +151,11 @@ export function CryptoTestnetPanel() {
   const loadBalances = useCallback(async () => {
     setBalancesLoading(true);
     try {
-      const [rb, rp] = await Promise.allSettled([getCryptoTestnetBalances(), getCryptoTestnetPositions()]);
+      const [rb, rp, ro] = await Promise.allSettled([
+        getCryptoTestnetBalances(),
+        getCryptoTestnetPositions(),
+        getCryptoTestnetOpenOrders(),
+      ]);
       if (rb.status !== "fulfilled") throw rb.reason;
       const b = rb.value;
       setBalances(b);
@@ -156,6 +165,15 @@ export function CryptoTestnetPanel() {
       } else {
         setPositionsPayload(null);
         setPositionsError(rp.reason instanceof Error ? rp.reason.message : "Error al leer posiciones testnet");
+      }
+      if (ro.status === "fulfilled") {
+        setOpenOrdersPayload(ro.value);
+        setOpenOrdersError(null);
+      } else {
+        setOpenOrdersPayload(null);
+        setOpenOrdersError(
+          ro.reason instanceof Error ? ro.reason.message : "Error al leer órdenes abiertas testnet",
+        );
       }
       const entries = await Promise.all(
         [...TESTNET_WHITELIST_SYMBOLS].map(async (sym) => {
@@ -178,8 +196,24 @@ export function CryptoTestnetPanel() {
       setError(e instanceof Error ? e.message : "Error al leer balances testnet");
       setPositionsPayload(null);
       setPositionsError(null);
+      setOpenOrdersPayload(null);
+      setOpenOrdersError(null);
     } finally {
       setBalancesLoading(false);
+    }
+  }, []);
+
+  const loadOpenOrders = useCallback(async () => {
+    setOpenOrdersLoading(true);
+    try {
+      const d = await getCryptoTestnetOpenOrders();
+      setOpenOrdersPayload(d);
+      setOpenOrdersError(null);
+    } catch (e: unknown) {
+      setOpenOrdersPayload(null);
+      setOpenOrdersError(e instanceof Error ? e.message : "Error al leer órdenes abiertas testnet");
+    } finally {
+      setOpenOrdersLoading(false);
     }
   }, []);
 
@@ -595,6 +629,77 @@ export function CryptoTestnetPanel() {
           ) : positionsPayload && !positionsPayload.ok ? (
             <p className="msg-error" style={{ margin: "0.5rem 0 0", fontSize: "0.875rem" }}>
               {positionsPayload.error ?? "No se pudieron leer posiciones testnet"}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
+      {/* Órdenes abiertas en vivo (exchange) */}
+      {balances ? (
+        <section className="card crypto-testnet-section">
+          <div className="crypto-testnet-section-head">
+            <div>
+              <h3 className="dashboard-section-title crypto-testnet-section-title" style={{ margin: 0 }}>
+                Órdenes abiertas Testnet
+              </h3>
+              <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
+                Órdenes abiertas leídas directamente desde Binance Spot Testnet. No es historial local.
+              </p>
+            </div>
+            <div className="crypto-testnet-toolbar">
+              <button type="button" className="radar-refresh-btn" onClick={() => void loadOpenOrders()} disabled={openOrdersLoading}>
+                {openOrdersLoading ? "Refrescando…" : "Refrescar órdenes abiertas"}
+              </button>
+              <CryptoRefreshBadge active={openOrdersLoading} label="Órdenes abiertas…" />
+            </div>
+          </div>
+          {openOrdersError ? <p className="msg-error">{openOrdersError}</p> : null}
+          {openOrdersPayload?.ok ? (
+            openOrdersPayload.orders.length === 0 ? (
+              <p className="msg-muted" style={{ margin: "0.5rem 0 0" }}>
+                Sin órdenes abiertas.
+              </p>
+            ) : (
+              <div className="table-wrap">
+                <table className="crypto-testnet-table">
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Símbolo</th>
+                      <th>Lado</th>
+                      <th>Tipo</th>
+                      <th className="crypto-testnet-num">Precio</th>
+                      <th className="crypto-testnet-num">Cantidad</th>
+                      <th className="crypto-testnet-num">Ejecutado</th>
+                      <th className="crypto-testnet-num">Pendiente</th>
+                      <th>Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {openOrdersPayload.orders.map((r, idx) => (
+                      <tr key={`${String(r.order_id)}-${r.symbol}-${idx}`}>
+                        <td style={{ whiteSpace: "nowrap", fontSize: "0.82rem" }}>{fmtExchangeMs(r.timestamp)}</td>
+                        <td>{r.symbol}</td>
+                        <td>{sideHistoryLabel(r.side)}</td>
+                        <td>{r.type ?? "—"}</td>
+                        <td className="crypto-testnet-num">{fmtNum(r.price)}</td>
+                        <td className="crypto-testnet-num">{fmtNum(r.amount)}</td>
+                        <td className="crypto-testnet-num">{fmtNum(r.filled)}</td>
+                        <td className="crypto-testnet-num">{fmtNum(r.remaining)}</td>
+                        <td>{r.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          ) : openOrdersPayload && !openOrdersPayload.ok ? (
+            <p className="msg-error" style={{ margin: "0.5rem 0 0", fontSize: "0.875rem" }}>
+              {openOrdersPayload.error ?? "No se pudieron leer órdenes abiertas"}
+            </p>
+          ) : balances.ok && !openOrdersError ? (
+            <p className="msg-muted" style={{ margin: "0.5rem 0 0", fontSize: "0.88rem" }}>
+              Refrescá la cartera o usá el botón para cargar órdenes abiertas desde testnet.
             </p>
           ) : null}
         </section>

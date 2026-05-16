@@ -507,6 +507,20 @@ def crypto_testnet_positions():
     return tn.get_testnet_positions()
 
 
+@app.get("/crypto/testnet/open-orders")
+def crypto_testnet_open_orders(
+    symbol: str | None = Query(
+        None,
+        description="Par CCXT en whitelist (ej. BTC/USDT). Si se omite, se consultan todos los pares permitidos.",
+    ),
+):
+    """Órdenes abiertas spot testnet desde Binance (solo lectura); no archivo local."""
+    from services.crypto import binance_testnet as tn
+
+    raw = (symbol or "").strip()
+    return tn.get_testnet_open_orders(raw if raw else None)
+
+
 @app.get("/crypto/testnet/ticker")
 def crypto_testnet_ticker(
     symbol: str = Query("BTC/USDT", min_length=3, description="Par spot CCXT, ej. BTC/USDT"),
