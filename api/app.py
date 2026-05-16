@@ -521,6 +521,47 @@ def crypto_testnet_open_orders(
     return tn.get_testnet_open_orders(raw if raw else None)
 
 
+@app.post("/crypto/testnet/strategy/propose-entry")
+def crypto_testnet_strategy_propose_entry(
+    timeframe: str = Query("1h"),
+    limit: int = Query(200, ge=50, le=1000),
+    quote_amount_usdt: float = Query(10, gt=0),
+    stop_loss_pct: float = Query(2, ge=0),
+    take_profit_pct: float = Query(4, ge=0),
+    trailing_stop_pct: float = Query(1.5, ge=0),
+    max_open_positions: int = Query(3, ge=1, le=50),
+    break_even_trigger_pct: float = Query(0, ge=0),
+    break_even_plus_pct: float = Query(0, ge=0),
+    cooldown_minutes: int = Query(0, ge=0),
+    require_btc_trend_up: bool = Query(False),
+    min_entry_score: float = Query(0, ge=0, le=100),
+):
+    """
+    Escaneo + filtros alineados a execute-paper-strategy; sólo propone BUY testnet (sin paper ni orden automática).
+    """
+    from services.crypto.bot_runner import propose_testnet_entry_from_strategy
+
+    try:
+        return propose_testnet_entry_from_strategy(
+            timeframe=timeframe,
+            limit=limit,
+            quote_amount_usdt=quote_amount_usdt,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+            trailing_stop_pct=trailing_stop_pct,
+            max_open_positions=max_open_positions,
+            break_even_trigger_pct=break_even_trigger_pct,
+            break_even_plus_pct=break_even_plus_pct,
+            cooldown_minutes=cooldown_minutes,
+            require_btc_trend_up=require_btc_trend_up,
+            min_entry_score=min_entry_score,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Propuesta testnet: {e}") from e
+
+
 @app.get("/crypto/testnet/ticker")
 def crypto_testnet_ticker(
     symbol: str = Query("BTC/USDT", min_length=3, description="Par spot CCXT, ej. BTC/USDT"),

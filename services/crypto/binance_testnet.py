@@ -1090,6 +1090,40 @@ def _load_testnet_orders_json() -> list[dict[str, Any]]:
     return []
 
 
+def testnet_symbol_in_local_order_cooldown(symbol: str, cooldown_minutes: int) -> bool:
+    """
+    True si en el historial local de órdenes testnet hay una orden reciente para el mismo par.
+    Usado sólo como filtro heurístico (no incluye órdenes no persistidas por esta app).
+    """
+    from datetime import timedelta, timezone
+
+    if cooldown_minutes <= 0:
+        return False
+    sym_norm = _normalize_whitelisted_symbol(symbol)
+    if sym_norm is None:
+        return False
+    want = sym_norm.upper().replace(" ", "")
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=int(cooldown_minutes))
+    for row in reversed(_load_testnet_orders_json()):
+        rs = str(row.get("symbol") or "").strip().upper().replace(" ", "")
+        if rs != want:
+            continue
+        raw = str(row.get("created_at") or "").strip()
+        if not raw:
+            continue
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        if dt >= cutoff:
+            return True
+    return False
+
+
 def _atomic_write_testnet_orders(rows: list[dict[str, Any]]) -> None:
     _ORDERS_JSON.parent.mkdir(parents=True, exist_ok=True)
     tmp = _ORDERS_JSON.with_suffix(".tmp_write")

@@ -365,6 +365,100 @@ export async function getCryptoTestnetOpenOrders(symbol?: string | null): Promis
   return data;
 }
 
+/** POST /crypto/testnet/strategy/propose-entry — propuesta BUY (sin ejecutar paper ni Binance). */
+export type CryptoTestnetProposalRisk = {
+  stop_loss_pct: number;
+  take_profit_pct: number;
+  trailing_stop_pct: number;
+  break_even_trigger_pct: number;
+  break_even_plus_pct: number;
+};
+
+export type CryptoTestnetStrategyProposal = {
+  symbol: string;
+  side: string;
+  quote_amount_usdt: number;
+  score: number | null;
+  signal: string;
+  reason: string;
+  timeframe: string;
+  risk: CryptoTestnetProposalRisk;
+};
+
+export type CryptoTestnetEvaluatedRow = {
+  symbol?: string | null;
+  signal?: string | null;
+  score?: number | null;
+  status: string;
+  reason: string;
+  price?: number | null;
+};
+
+export type CryptoTestnetProposeEntryPayload = {
+  ok: boolean;
+  proposal: CryptoTestnetStrategyProposal | null;
+  primary_reason: string | null;
+  evaluated: CryptoTestnetEvaluatedRow[];
+  scanned_count?: number;
+  candidates_count?: number;
+  timeframe?: string;
+  quote_amount_usdt?: number;
+};
+
+export type CryptoTestnetProposeEntryParams = {
+  timeframe?: string;
+  limit?: number;
+  quote_amount_usdt?: number;
+  stop_loss_pct?: number;
+  take_profit_pct?: number;
+  trailing_stop_pct?: number;
+  max_open_positions?: number;
+  break_even_trigger_pct?: number;
+  break_even_plus_pct?: number;
+  cooldown_minutes?: number;
+  require_btc_trend_up?: boolean;
+  min_entry_score?: number;
+};
+
+function isCryptoTestnetProposeEntryPayload(data: unknown): data is CryptoTestnetProposeEntryPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  if (typeof o.ok !== "boolean") return false;
+  if (!("proposal" in o)) return false;
+  if (!Array.isArray(o.evaluated)) return false;
+  return true;
+}
+
+export async function postCryptoTestnetProposeEntry(
+  params: CryptoTestnetProposeEntryParams,
+): Promise<CryptoTestnetProposeEntryPayload> {
+  const q = new URLSearchParams();
+  if (params.timeframe != null) q.set("timeframe", params.timeframe);
+  if (params.limit != null) q.set("limit", String(params.limit));
+  if (params.quote_amount_usdt != null) q.set("quote_amount_usdt", String(params.quote_amount_usdt));
+  if (params.stop_loss_pct != null) q.set("stop_loss_pct", String(params.stop_loss_pct));
+  if (params.take_profit_pct != null) q.set("take_profit_pct", String(params.take_profit_pct));
+  if (params.trailing_stop_pct != null) q.set("trailing_stop_pct", String(params.trailing_stop_pct));
+  if (params.max_open_positions != null) q.set("max_open_positions", String(params.max_open_positions));
+  if (params.break_even_trigger_pct != null) q.set("break_even_trigger_pct", String(params.break_even_trigger_pct));
+  if (params.break_even_plus_pct != null) q.set("break_even_plus_pct", String(params.break_even_plus_pct));
+  if (params.cooldown_minutes != null) q.set("cooldown_minutes", String(params.cooldown_minutes));
+  if (params.require_btc_trend_up != null) q.set("require_btc_trend_up", params.require_btc_trend_up ? "true" : "false");
+  if (params.min_entry_score != null) q.set("min_entry_score", String(params.min_entry_score));
+  const res = await fetch(`${BASE}/crypto/testnet/strategy/propose-entry?${q.toString()}`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetProposeEntryPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/testnet/strategy/propose-entry");
+  }
+  return data;
+}
+
 export async function getCryptoTestnetTicker(symbol: string): Promise<CryptoTestnetTickerPayload> {
   const q = new URLSearchParams({ symbol: symbol.trim() });
   const res = await fetch(`${BASE}/crypto/testnet/ticker?${q.toString()}`);

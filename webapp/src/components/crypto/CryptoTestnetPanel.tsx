@@ -7,10 +7,13 @@ import {
   getCryptoTestnetStatus,
   getCryptoTestnetTicker,
   postCryptoTestnetMarketOrder,
+  postCryptoTestnetProposeEntry,
   type CryptoTestnetBalancesPayload,
+  type CryptoTestnetEvaluatedRow,
   type CryptoTestnetMarketOrderRow,
   type CryptoTestnetOpenOrdersPayload,
   type CryptoTestnetPositionsPayload,
+  type CryptoTestnetProposeEntryPayload,
   type CryptoTestnetStoredOrder,
   type CryptoTestnetStatusPayload,
 } from "@/services/api";
@@ -81,6 +84,25 @@ function sideHistoryLabel(side: string | null | undefined): string {
   return "—";
 }
 
+function assistedPrimaryReasonLabel(code: string | null | undefined): string {
+  if (!code) return "Sin propuesta en esta búsqueda.";
+  const labels: Record<string, string> = {
+    no_opportunity: "No hay candidatos con señal compra_potencial en la watchlist.",
+    testnet_balances_unavailable:
+      "No se pudieron leer balances testnet: revisá credenciales, BINANCE_TESTNET_ENABLED y pulsá Refrescar datos.",
+    max_open_positions:
+      "Hay candidatos, pero no entra uno nuevo: ya alcanzaste el máximo de posiciones testnet permitido (activos con saldo).",
+    no_entry: "Ningún candidato pasó todos los filtros de entrada.",
+    score_below_min: "Hay candidatos, pero el score quedó por debajo del mínimo configurado.",
+    btc_trend_filter: "Hay candidatos, pero el filtro de tendencia BTC los descartó.",
+    cooldown_symbol:
+      "Hay candidatos en cooldown según el historial local de órdenes testnet guardado por esta app.",
+    already_hold_base_testnet: "Ya tenés saldo libre del activo en testnet (no se propone duplicar).",
+    not_whitelisted_testnet: "El candidato no está en la whitelist testnet de esta app.",
+  };
+  return labels[code] ?? `Motivo: ${code}`;
+}
+
 function CryptoRefreshBadge({ active, label = "Actualizando…" }: { active: boolean; label?: string }) {
   if (!active) return null;
   return (
@@ -125,6 +147,16 @@ export function CryptoTestnetPanel() {
   const [openOrdersPayload, setOpenOrdersPayload] = useState<CryptoTestnetOpenOrdersPayload | null>(null);
   const [openOrdersError, setOpenOrdersError] = useState<string | null>(null);
   const [openOrdersLoading, setOpenOrdersLoading] = useState(false);
+  const [assistedPayload, setAssistedPayload] = useState<CryptoTestnetProposeEntryPayload | null>(null);
+  const [assistedLoading, setAssistedLoading] = useState(false);
+  const [assistedError, setAssistedError] = useState<string | null>(null);
+  const [assistedConfirmBusy, setAssistedConfirmBusy] = useState(false);
+  const [assistTf, setAssistTf] = useState("1h");
+  const [assistQuote, setAssistQuote] = useState("10");
+  const [assistMaxOpen, setAssistMaxOpen] = useState("3");
+  const [assistCooldown, setAssistCooldown] = useState("0");
+  const [assistBtcTrend, setAssistBtcTrend] = useState(false);
+  const [assistMinScore, setAssistMinScore] = useState("0");
 
   const prefillQuickSell = useCallback((pair: string | null | undefined) => {
     const p = (pair ?? "").trim();
@@ -414,6 +446,57 @@ export function CryptoTestnetPanel() {
     sellQuoteNum > 0 &&
     sellQuoteNum < SMALL_USDT_WARN;
 
+  const handleAssistedSearch = useCallback(async () => {
+    setAssistedLoading(true);
+    setAssistedError(null);
+    setAssistedPayload(null);
+    try {
+      const q = Number.parseFloat(assistQuote.replace(",", "."));
+      const mo = Number.parseInt(assistMaxOpen, 10);
+      const cd = Number.parseInt(assistCooldown, 10);
+      const ms = Number.parseFloat(assistMinScore.replace(",", "."));
+      const payload = await postCryptoTestnetProposeEntry({
+        timeframe: assistTf.trim() || "1h",
+        limit: 200,
+        quote_amount_usdt: Number.isFinite(q) && q > 0 ? Math.min(q, MAX_TESTNET_ORDER_USDT) : 10,
+        max_open_positions: Number.isFinite(mo) && mo >= 1 ? mo : 3,
+        cooldown_minutes: Number.isFinite(cd) && cd >= 0 ? cd : 0,
+        require_btc_trend_up: assistBtcTrend,
+        min_entry_score: Number.isFinite(ms) && ms >= 0 ? ms : 0,
+      });
+      setAssistedPayload(payload);
+    } catch (e: unknown) {
+      setAssistedError(e instanceof Error ? e.message : "Error al buscar propuesta");
+      setAssistedPayload(null);
+    } finally {
+      setAssistedLoading(false);
+    }
+  }, [assistTf, assistQuote, assistMaxOpen, assistCooldown, assistBtcTrend, assistMinScore]);
+
+  const handleAssistedConfirmBuy = useCallback(async () => {
+    const p = assistedPayload?.proposal;
+    if (!p || !connected) return;
+    setAssistedConfirmBusy(true);
+    setOrderFormError(null);
+    try {
+      const res = await postCryptoTestnetMarketOrder({
+        symbol: p.symbol.trim(),
+        side: "buy",
+        quote_amount_usdt: p.quote_amount_usdt,
+      });
+      if (res.order) setLastOrder(res.order);
+      setManualSymbol(p.symbol.trim());
+      setManualSide("buy");
+      await Promise.all([loadBalances(), loadOrders()]);
+      setAssistedPayload(null);
+      setError(null);
+    } catch (e: unknown) {
+      setOrderFormError(humanizeTestnetOrderError(e instanceof Error ? e.message : "Error al enviar orden testnet"));
+    } finally {
+      setAssistedConfirmBusy(false);
+    }
+  }, [assistedPayload, connected, loadBalances, loadOrders]);
+
   const refreshTestnetDatos = useCallback(() => {
     void loadBalances();
     if (connected) void loadOrders();
@@ -524,6 +607,198 @@ export function CryptoTestnetPanel() {
           ) : null}
         </section>
       ) : null}
+
+      {/* Propuesta asistida Testnet (estrategia propone; orden sólo si confirmás) */}
+      <section className="card crypto-testnet-section">
+        <h3 className="dashboard-section-title crypto-testnet-section-title">Propuesta asistida Testnet</h3>
+        <div className="crypto-testnet-note crypto-testnet-note--blue crypto-testnet-block-start">
+          La estrategia <strong>solo propone</strong>. La orden testnet se envía únicamente si pulsás{" "}
+          <strong>Enviar BUY Testnet</strong>. No hay ejecución automática desde esta búsqueda.
+        </div>
+        <p className="msg-muted" style={{ marginTop: "0.65rem", marginBottom: "0.65rem", fontSize: "0.85rem" }}>
+          Usa el mismo scanner y filtros que el bot paper para elegir el mejor candidato, pero sin abrir posición paper ni
+          enviar órdenes hasta que confirmes. Monto máximo por orden testnet: {MAX_TESTNET_ORDER_USDT} USDT (whitelist y
+          límites del backend siguen aplicando).
+        </p>
+        <div className="crypto-testnet-mini-grid crypto-testnet-mini-grid--dense" style={{ marginBottom: "0.75rem" }}>
+          <label className="crypto-testnet-field">
+            <span className="msg-muted">Timeframe</span>
+            <select
+              className="radar-toolbar__select"
+              value={assistTf}
+              onChange={(ev) => setAssistTf(ev.target.value)}
+              disabled={assistedLoading || statusLoading}
+            >
+              <option value="1h">1h</option>
+              <option value="4h">4h</option>
+              <option value="1d">1d</option>
+            </select>
+          </label>
+          <label className="crypto-testnet-field">
+            <span className="msg-muted">USDT por entrada</span>
+            <input
+              type="number"
+              className="radar-input"
+              min={MIN_TESTNET_ORDER_USDT}
+              max={MAX_TESTNET_ORDER_USDT}
+              step="0.01"
+              value={assistQuote}
+              onChange={(ev) => setAssistQuote(ev.target.value)}
+              disabled={assistedLoading}
+            />
+          </label>
+          <label className="crypto-testnet-field">
+            <span className="msg-muted">Máx. posiciones abiertas</span>
+            <input
+              type="number"
+              className="radar-input"
+              min={1}
+              max={20}
+              step={1}
+              value={assistMaxOpen}
+              onChange={(ev) => setAssistMaxOpen(ev.target.value)}
+              disabled={assistedLoading}
+            />
+          </label>
+          <label className="crypto-testnet-field">
+            <span className="msg-muted">Cooldown (min)</span>
+            <input
+              type="number"
+              className="radar-input"
+              min={0}
+              max={10080}
+              step={1}
+              value={assistCooldown}
+              onChange={(ev) => setAssistCooldown(ev.target.value)}
+              disabled={assistedLoading}
+            />
+          </label>
+          <label className="crypto-testnet-field">
+            <span className="msg-muted">Score mínimo</span>
+            <input
+              type="number"
+              className="radar-input"
+              min={0}
+              max={100}
+              step="0.5"
+              value={assistMinScore}
+              onChange={(ev) => setAssistMinScore(ev.target.value)}
+              disabled={assistedLoading}
+            />
+          </label>
+          <label className="crypto-testnet-radio" style={{ alignSelf: "end", marginTop: "0.35rem" }}>
+            <input
+              type="checkbox"
+              checked={assistBtcTrend}
+              onChange={(ev) => setAssistBtcTrend(ev.target.checked)}
+              disabled={assistedLoading}
+            />
+            Exigir BTC alcista
+          </label>
+        </div>
+        <div className="crypto-testnet-toolbar" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+          <button
+            type="button"
+            className="radar-refresh-btn"
+            onClick={() => void handleAssistedSearch()}
+            disabled={
+              assistedLoading ||
+              statusLoading ||
+              !status?.configured ||
+              !status?.enabled
+            }
+          >
+            {assistedLoading ? "Buscando…" : "Buscar propuesta"}
+          </button>
+          <CryptoRefreshBadge active={assistedLoading} label="Scanner…" />
+        </div>
+        {!status?.configured || !status?.enabled ? (
+          <p className="msg-muted crypto-testnet-block-start" style={{ fontSize: "0.82rem" }}>
+            Habilitá testnet en <code>.env</code> y esperá estado &quot;Lista&quot; para buscar propuestas con balances en vivo.
+          </p>
+        ) : null}
+        {assistedError ? (
+          <p className="msg-error crypto-testnet-block-start" style={{ fontSize: "0.875rem" }}>
+            {assistedError}
+          </p>
+        ) : null}
+        {assistedPayload ? (
+          <div className="crypto-testnet-block-start">
+            {assistedPayload.proposal ? (
+              <>
+                <div className="crypto-testnet-mini-grid crypto-testnet-mini-grid--dense">
+                  <div className="crypto-testnet-kpi crypto-testnet-kpi--accent">
+                    <span className="crypto-testnet-kpi-label">Par propuesto</span>
+                    <span className="crypto-testnet-kpi-value">{assistedPayload.proposal.symbol}</span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Monto USDT</span>
+                    <span className="crypto-testnet-kpi-value">{fmtNum(assistedPayload.proposal.quote_amount_usdt)}</span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Score</span>
+                    <span className="crypto-testnet-kpi-value">{assistedPayload.proposal.score}</span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">TF</span>
+                    <span className="crypto-testnet-kpi-value">{assistedPayload.proposal.timeframe}</span>
+                  </div>
+                </div>
+                <p className="msg-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.85rem" }}>
+                  <strong>Señal:</strong> {assistedPayload.proposal.signal || "—"}
+                </p>
+                <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.85rem" }}>
+                  <strong>Motivo:</strong> {assistedPayload.proposal.reason || "—"}
+                </p>
+                <p className="msg-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.82rem" }}>
+                  <strong>Riesgo sugerido</strong> (referencia; la orden mercado no coloca SL/TP automático):
+                </p>
+                <ul className="msg-muted" style={{ fontSize: "0.82rem", margin: "0.35rem 0 0", paddingLeft: "1.15rem" }}>
+                  <li>Stop loss {assistedPayload.proposal.risk.stop_loss_pct}%</li>
+                  <li>Take profit {assistedPayload.proposal.risk.take_profit_pct}%</li>
+                  <li>Trailing {assistedPayload.proposal.risk.trailing_stop_pct}%</li>
+                  <li>
+                    Break-even trigger {assistedPayload.proposal.risk.break_even_trigger_pct}% · más{" "}
+                    {assistedPayload.proposal.risk.break_even_plus_pct}%
+                  </li>
+                </ul>
+                <button
+                  type="button"
+                  className="radar-refresh-btn"
+                  style={{ marginTop: "0.85rem" }}
+                  onClick={() => void handleAssistedConfirmBuy()}
+                  disabled={!connected || assistedConfirmBusy || orderBusy}
+                >
+                  {assistedConfirmBusy ? "Enviando…" : "Enviar BUY Testnet"}
+                </button>
+                {!connected ? (
+                  <p className="msg-muted" style={{ marginTop: "0.5rem", fontSize: "0.82rem" }}>
+                    Conectá testnet (estado arriba) para poder confirmar la compra.
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p className="msg-muted" style={{ margin: "0.5rem 0 0", fontSize: "0.88rem" }}>
+                {assistedPrimaryReasonLabel(assistedPayload.primary_reason)}
+              </p>
+            )}
+            {Array.isArray(assistedPayload.evaluated) && assistedPayload.evaluated.length > 0 ? (
+              <details style={{ marginTop: "0.75rem", fontSize: "0.82rem" }}>
+                <summary className="msg-muted" style={{ cursor: "pointer" }}>
+                  Evaluados ({assistedPayload.evaluated.length})
+                </summary>
+                <ul className="msg-muted" style={{ margin: "0.5rem 0 0", paddingLeft: "1.1rem", maxHeight: "180px", overflow: "auto" }}>
+                  {assistedPayload.evaluated.map((row: CryptoTestnetEvaluatedRow, idx: number) => (
+                    <li key={`${row.symbol ?? "sym"}-${idx}`}>
+                      {row.symbol ?? "—"} · {row.status} — {row.reason}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
 
       {connected ? (
         <>

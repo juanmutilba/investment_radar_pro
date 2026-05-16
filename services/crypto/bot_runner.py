@@ -469,3 +469,219 @@ def execute_paper_strategy(
         "positions_review": positions_review,
         "actions": actions,
     }
+
+
+def propose_testnet_entry_from_strategy(
+    timeframe: str = "1h",
+    limit: int = 200,
+    quote_amount_usdt: float = 10.0,
+    stop_loss_pct: float = 2.0,
+    take_profit_pct: float = 4.0,
+    trailing_stop_pct: float = 1.5,
+    max_open_positions: int = 3,
+    break_even_trigger_pct: float = 0.0,
+    break_even_plus_pct: float = 0.0,
+    cooldown_minutes: int = 0,
+    require_btc_trend_up: bool = False,
+    min_entry_score: float = 0.0,
+) -> dict[str, Any]:
+    """
+    Ejecuta el mismo escaneo y filtros de entrada que execute_paper_strategy, pero sin abrir posición paper
+    ni orden Binance: devuelve una propuesta BUY testnet para confirmación manual.
+    """
+    import math
+
+    from services.crypto.binance_testnet import (
+        MARKET_ORDER_SYMBOL_WHITELIST,
+        MAX_MARKET_ORDER_QUOTE_USDT,
+        MIN_MARKET_ORDER_QUOTE_USDT,
+        get_testnet_balances,
+        testnet_symbol_in_local_order_cooldown,
+    )
+    from services.crypto.watchlist import scan_crypto_watchlist
+
+    if not math.isfinite(quote_amount_usdt) or quote_amount_usdt <= 0:
+        raise ValueError("quote_amount_usdt debe ser > 0")
+
+    q_use = max(MIN_MARKET_ORDER_QUOTE_USDT, min(float(quote_amount_usdt), MAX_MARKET_ORDER_QUOTE_USDT))
+    max_pos = max(1, int(max_open_positions))
+    cooldown_m = max(0, int(cooldown_minutes))
+    min_score = float(min_entry_score) if math.isfinite(min_entry_score) and min_entry_score > 0 else 0.0
+
+    tf = (timeframe or "1h").strip() or "1h"
+    lim = max(50, min(int(limit), 1000))
+    _log(
+        f"propose_testnet_entry: timeframe={tf} limit={lim} quote={q_use} max_open={max_pos} "
+        f"cooldown={cooldown_m} btc_filter={require_btc_trend_up} min_score={min_score}"
+    )
+
+    scan_results = scan_crypto_watchlist(timeframe=tf, limit=lim)
+    scanned_count = len(scan_results)
+    scan_by_sym = _scan_by_symbol(scan_results)
+    candidates = evaluate_entry_candidates(scan_results)
+    candidates_count = len(candidates)
+
+    risk_block: dict[str, float] = {
+        "stop_loss_pct": float(stop_loss_pct),
+        "take_profit_pct": float(take_profit_pct),
+        "trailing_stop_pct": float(trailing_stop_pct),
+        "break_even_trigger_pct": float(break_even_trigger_pct),
+        "break_even_plus_pct": float(break_even_plus_pct),
+    }
+
+    base_evaluated_meta = {
+        "timeframe": tf,
+        "limit": lim,
+        "quote_amount_usdt": q_use,
+        "scanned_count": scanned_count,
+        "candidates_count": candidates_count,
+    }
+
+    if not candidates:
+        return {
+            "ok": True,
+            "proposal": None,
+            "primary_reason": "no_opportunity",
+            "evaluated": [],
+            **base_evaluated_meta,
+        }
+
+    bal = get_testnet_balances()
+    bal_ok = bool(bal.get("ok"))
+
+    if not bal_ok:
+        evaluated_offline: list[dict[str, Any]] = []
+        for c in candidates:
+            if not isinstance(c, dict):
+                continue
+            sym = str(c.get("symbol") or "").strip()
+            if not sym:
+                continue
+            evaluated_offline.append(_evaluated_row(c, status="rejected", reason="testnet_balances_unavailable"))
+        return {
+            "ok": True,
+            "proposal": None,
+            "primary_reason": "testnet_balances_unavailable",
+            "evaluated": evaluated_offline,
+            **base_evaluated_meta,
+        }
+
+    btc_ok = _btc_trend_favorable(scan_by_sym) if require_btc_trend_up else True
+
+    def free_base_asset(sym_pair: str) -> float:
+        parts = sym_pair.split("/", 1)
+        base = parts[0].strip().upper() if parts else ""
+        if not base:
+            return 0.0
+        for row in bal.get("balances") or []:
+            if str(row.get("asset") or "").upper() == base:
+                try:
+                    return float(row.get("free") or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+        return 0.0
+
+    def count_whitelist_base_positions() -> int:
+        bases_in_whitelist = {"BTC", "ETH", "SOL", "BNB"}
+        n = 0
+        for row in bal.get("balances") or []:
+            au = str(row.get("asset") or "").upper()
+            if au not in bases_in_whitelist:
+                continue
+            try:
+                free_b = float(row.get("free") or 0)
+            except (TypeError, ValueError):
+                continue
+            if free_b > 1e-6:
+                n += 1
+        return n
+
+    open_style_count = count_whitelist_base_positions()
+
+    evaluated: list[dict[str, Any]] = []
+    proposal: dict[str, Any] | None = None
+    primary_reason: str | None = None
+
+    for c in candidates:
+        if not isinstance(c, dict):
+            continue
+        sym = str(c.get("symbol") or "").strip()
+        if not sym:
+            continue
+        score = c.get("score")
+
+        def _append(status: str, reason: str) -> None:
+            evaluated.append(_evaluated_row(c, status=status, reason=reason))
+
+        sym_u = _norm_symbol(sym)
+        if sym_u not in MARKET_ORDER_SYMBOL_WHITELIST:
+            _append("rejected", "not_whitelisted_testnet")
+            continue
+
+        if proposal is not None:
+            _append("skipped", "max_one_per_run")
+            continue
+
+        if open_style_count >= max_pos:
+            _append("skipped", "max_open_positions")
+            continue
+
+        if min_score > 0:
+            try:
+                sc_val = float(score) if score is not None else None
+            except (TypeError, ValueError):
+                sc_val = None
+            if sc_val is None or sc_val < min_score:
+                _append("rejected", "score_below_min")
+                continue
+
+        if free_base_asset(sym_u) > 1e-6:
+            _append("rejected", "already_hold_base_testnet")
+            continue
+
+        if cooldown_m > 0 and testnet_symbol_in_local_order_cooldown(sym_u, cooldown_m):
+            _append("rejected", "cooldown_symbol")
+            continue
+
+        if require_btc_trend_up and not _is_btc_symbol(sym_u) and not btc_ok:
+            _append("rejected", "btc_trend_filter")
+            continue
+
+        sig = str(c.get("signal") or "")
+        reason_txt = f"estrategia_coincidente_con_paper score={score}" if score is not None else "estrategia_coincidente_con_paper"
+
+        score_out: float | None
+        if isinstance(score, (int, float)) and math.isfinite(float(score)):
+            score_out = float(score)
+        else:
+            score_out = None
+
+        proposal = {
+            "symbol": sym_u,
+            "side": "buy",
+            "quote_amount_usdt": q_use,
+            "score": score_out,
+            "signal": sig,
+            "reason": reason_txt,
+            "timeframe": tf,
+            "risk": risk_block,
+        }
+        _append("selected", reason_txt)
+        primary_reason = None
+        break
+
+    if proposal is None:
+        primary_reason = primary_reason or _primary_no_entry_reason(evaluated, had_candidates=candidates_count > 0)
+        if primary_reason is None:
+            primary_reason = "no_entry"
+
+    _log(f"propose_testnet_entry: fin has_proposal={proposal is not None} primary_reason={primary_reason}")
+
+    out: dict[str, Any] = {
+        "ok": True,
+        "proposal": proposal,
+        "primary_reason": primary_reason if proposal is None else None,
+        "evaluated": evaluated,
+        **base_evaluated_meta,
+    }
+    return out
