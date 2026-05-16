@@ -676,6 +676,139 @@ def get_testnet_balances() -> dict[str, Any]:
         }
 
 
+def _whitelist_usdt_pair_for_asset(asset: str) -> str | None:
+    au = (asset or "").strip().upper()
+    if not au:
+        return None
+    cand = f"{au}/USDT"
+    return cand if cand in MARKET_ORDER_SYMBOL_WHITELIST else None
+
+
+def get_testnet_positions() -> dict[str, Any]:
+    """
+    Posiciones spot leídas en vivo desde Binance Spot Testnet (balances + últimos precios).
+    USDT va en cash_usdt (efectivo estable), no en la lista positions.
+    """
+    _ensure_dotenv()
+    updated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    def _fail(error: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "error": error,
+            "cash_usdt": 0.0,
+            "positions": [],
+            "total_value_usdt": 0.0,
+            "updated_at": updated_at,
+        }
+
+    if not _ccxt_available():
+        return _fail("ccxt no instalado")
+
+    if not is_testnet_enabled():
+        return _fail("BINANCE_TESTNET_ENABLED=false")
+
+    if not is_testnet_configured():
+        return _fail("Testnet no configurado (API key/secret)")
+
+    ex = get_testnet_exchange()
+    if ex is None:
+        return _fail("Exchange testnet no disponible")
+
+    try:
+        _assert_exchange_is_sandbox(ex, "positions")
+    except RuntimeError as e:
+        return _fail(str(e))
+
+    bal_payload = get_testnet_balances()
+    if not bal_payload.get("ok"):
+        return _fail(str(bal_payload.get("error") or "balance_error"))
+
+    prices: dict[str, float | None] = {}
+    for sym in sorted(MARKET_ORDER_SYMBOL_WHITELIST):
+        try:
+            tk = ex.fetch_ticker(sym)
+            if not isinstance(tk, dict):
+                prices[sym] = None
+                continue
+            raw = tk.get("last") or tk.get("bid") or tk.get("close")
+            px = _safe_ccxt_float(raw)
+            prices[sym] = px if px is not None and px > 0 else None
+        except Exception as e:
+            _log(f"positions: ticker {sym} falló {_safe_error(e)}")
+            prices[sym] = None
+
+    cash_usdt = 0.0
+    positions: list[dict[str, Any]] = []
+
+    for row in bal_payload.get("balances") or []:
+        if not isinstance(row, dict):
+            continue
+        asset_raw = row.get("asset")
+        if not isinstance(asset_raw, str):
+            continue
+        asset = asset_raw.strip().upper()
+        if not asset:
+            continue
+
+        free = _safe_ccxt_float(row.get("free"))
+        used = _safe_ccxt_float(row.get("used"))
+        total = _safe_ccxt_float(row.get("total"))
+        if free is None:
+            free = 0.0
+        if used is None:
+            used = 0.0
+        if total is None:
+            total = free + used
+
+        if free + used <= 0:
+            continue
+
+        if asset == "USDT":
+            cash_usdt = total
+            continue
+
+        sym = _whitelist_usdt_pair_for_asset(asset)
+        last_px = prices.get(sym) if sym else None
+
+        value_usdt: float | None = None
+        if last_px is not None:
+            value_usdt = total * last_px
+            if value_usdt is not None and (math.isnan(value_usdt) or math.isinf(value_usdt)):
+                value_usdt = None
+
+        positions.append(
+            {
+                "asset": asset,
+                "symbol": sym,
+                "free": free,
+                "used": used,
+                "total": total,
+                "last_price_usdt": last_px,
+                "value_usdt": value_usdt,
+                "source": "binance_testnet",
+            }
+        )
+
+    positions.sort(key=lambda r: (-float(r.get("total") or 0), str(r.get("asset") or "")))
+
+    total_val = cash_usdt
+    for p in positions:
+        v = p.get("value_usdt")
+        if isinstance(v, (int, float)) and not math.isnan(v) and not math.isinf(v):
+            total_val += float(v)
+
+    _log(f"positions: OK cash_usdt≈{cash_usdt} rows={len(positions)}")
+    return {
+        "ok": True,
+        "error": None,
+        "cash_usdt": cash_usdt,
+        "positions": positions,
+        "total_value_usdt": total_val,
+        "updated_at": updated_at,
+    }
+
+
 def get_testnet_account_info() -> dict[str, Any]:
     """Resumen de cuenta testnet derivado del balance (sin secretos ni órdenes)."""
     bal = get_testnet_balances()
@@ -878,17 +1011,17 @@ def _append_manual_testnet_order_record(summary: dict[str, Any], raw_ccxt_order:
     _atomic_write_testnet_orders(prev)
 
 
-def get_testnet_order_history(limit: int = 50) -> list[dict[str, Any]]:
+def get_testnet_order_history(limit: int = 50) -> dict[str, Any]:
     """
-    Últimas órdenes persistidas desde esta app (archivo JSON local).
-    Orden descendente por tiempo de registro local (más reciente primero).
+    Últimas órdenes persistidas (más reciente primero) + total acumulado en JSON.
     """
     if limit < 1:
         limit = 1
     limit = min(limit, _ORDER_HISTORY_LIMIT_CAP)
     all_rows = _load_testnet_orders_json()
+    total = len(all_rows)
     tail = all_rows[-limit:] if len(all_rows) > limit else all_rows[:]
-    return list(reversed(tail))
+    return {"orders": list(reversed(tail)), "total": total}
 
 
 def place_testnet_market_order(
@@ -897,12 +1030,13 @@ def place_testnet_market_order(
     quote_amount_usdt: float | None = None,
     *,
     amount_base: float | None = None,
+    sell_quote_amount_usdt: float | None = None,
     max_quote_usdt: float = MAX_MARKET_ORDER_QUOTE_USDT,
 ) -> dict[str, Any]:
     """
     Orden market sólo testnet (sandbox).
     BUY: monto quote en USDT (create_market_buy_order_with_cost).
-    SELL: cantidad explícita del activo base (create_market_sell_order); amount_base obligatorio.
+    SELL: amount_base explícito, o sell_quote_amount_usdt (estima base vía ticker last).
     """
     _ensure_dotenv()
     out_err = (
@@ -1002,20 +1136,6 @@ def place_testnet_market_order(
         summary = _summarize_ccxt_order(sym, "buy", raw)
 
     else:
-        if amount_base is None:
-            return out_err(
-                "amount_base es obligatorio para SELL (indicá una cantidad explícita del activo base)",
-                400,
-            )
-
-        try:
-            amt_in = float(amount_base)
-        except (TypeError, ValueError):
-            return out_err("amount_base inválido", 400)
-
-        if not (amt_in == amt_in) or amt_in <= 0:
-            return out_err("amount_base debe ser > 0", 400)
-
         base_asset = _base_asset_from_pair(sym)
         if base_asset is None:
             return out_err("No se pudo determinar activo base del par", 400)
@@ -1023,6 +1143,73 @@ def place_testnet_market_order(
         base_free = _free_asset_from_balances_payload(bal, base_asset)
         if base_free is None:
             return out_err(f"No se pudo determinar saldo libre de {base_asset}", 503)
+
+        has_base = amount_base is not None
+        has_sq = sell_quote_amount_usdt is not None
+        if has_base and has_sq:
+            return out_err("SELL: usá cantidad exacta O monto en USDT, no ambos", 400)
+        if not has_base and not has_sq:
+            return out_err(
+                "SELL: indicá cantidad en el activo o monto aproximado a vender en USDT",
+                400,
+            )
+
+        amt_in: float
+
+        if has_sq:
+            try:
+                sq = float(sell_quote_amount_usdt)
+            except (TypeError, ValueError):
+                return out_err("sell_quote_amount_usdt inválido", 400)
+
+            if not (sq == sq) or sq <= 0:
+                return out_err("sell_quote_amount_usdt debe ser > 0", 400)
+
+            if sq < MIN_MARKET_ORDER_QUOTE_USDT:
+                return out_err(
+                    f"Monto mínimo a vender en USDT: {MIN_MARKET_ORDER_QUOTE_USDT}",
+                    400,
+                )
+
+            if sq > max_quote_usdt:
+                return out_err(f"Monto máximo por orden {max_quote_usdt} USDT (lado venta)", 400)
+
+            try:
+                tk = ex.fetch_ticker(sym)
+            except Exception as e:
+                err = _safe_error(e)
+                code = _http_status_for_exchange_failure(e)
+                return out_err(f"No se pudo leer precio testnet para vender: {err}", code)
+
+            if not isinstance(tk, dict):
+                return out_err("Ticker inválido para estimar venta", 502)
+
+            px_raw = tk.get("last") or tk.get("bid") or tk.get("close")
+            try:
+                px = float(px_raw)
+            except (TypeError, ValueError):
+                px = 0.0
+
+            if not (px == px) or px <= 0:
+                return out_err("Precio del par no disponible para estimar la venta en USDT", 400)
+
+            amt_raw = sq / px
+            if amt_raw > base_free + 1e-12:
+                return out_err(
+                    f"{base_asset} libre insuficiente para vender ~{sq} USDT "
+                    f"(libre≈{base_free:.12f}, necesario≈{amt_raw:.12f})",
+                    400,
+                )
+
+            amt_in = amt_raw
+        else:
+            try:
+                amt_in = float(amount_base)
+            except (TypeError, ValueError):
+                return out_err("amount_base inválido", 400)
+
+            if not (amt_in == amt_in) or amt_in <= 0:
+                return out_err("amount_base debe ser > 0", 400)
 
         amt = amt_in
         atp = getattr(ex, "amount_to_precision", None)

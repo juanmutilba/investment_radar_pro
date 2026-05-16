@@ -499,6 +499,14 @@ def crypto_testnet_balances():
     return tn.get_testnet_balances()
 
 
+@app.get("/crypto/testnet/positions")
+def crypto_testnet_positions():
+    """Posiciones spot valorizadas desde Binance Spot Testnet (balances + tickers); no historial local."""
+    from services.crypto import binance_testnet as tn
+
+    return tn.get_testnet_positions()
+
+
 @app.get("/crypto/testnet/ticker")
 def crypto_testnet_ticker(
     symbol: str = Query("BTC/USDT", min_length=3, description="Par spot CCXT, ej. BTC/USDT"),

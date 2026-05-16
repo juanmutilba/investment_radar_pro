@@ -268,6 +268,52 @@ export async function getCryptoTestnetBalances(): Promise<CryptoTestnetBalancesP
   return data;
 }
 
+/** GET /crypto/testnet/positions — balances testnet en vivo + valorización (no historial local). */
+export type CryptoTestnetPositionRow = {
+  asset: string;
+  symbol: string | null;
+  free: number;
+  used: number;
+  total: number;
+  last_price_usdt: number | null;
+  value_usdt: number | null;
+  source: "binance_testnet";
+};
+
+export type CryptoTestnetPositionsPayload = {
+  ok: boolean;
+  error: string | null;
+  cash_usdt: number;
+  positions: CryptoTestnetPositionRow[];
+  total_value_usdt: number;
+  updated_at: string;
+};
+
+function isCryptoTestnetPositionsPayload(data: unknown): data is CryptoTestnetPositionsPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.ok === "boolean" &&
+    (o.error === null || typeof o.error === "string") &&
+    typeof o.cash_usdt === "number" &&
+    Array.isArray(o.positions) &&
+    typeof o.total_value_usdt === "number" &&
+    typeof o.updated_at === "string"
+  );
+}
+
+export async function getCryptoTestnetPositions(): Promise<CryptoTestnetPositionsPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/positions`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetPositionsPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/testnet/positions");
+  }
+  return data;
+}
+
 export async function getCryptoTestnetTicker(symbol: string): Promise<CryptoTestnetTickerPayload> {
   const q = new URLSearchParams({ symbol: symbol.trim() });
   const res = await fetch(`${BASE}/crypto/testnet/ticker?${q.toString()}`);

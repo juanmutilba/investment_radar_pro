@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import {
   getCryptoTestnetBalances,
   getCryptoTestnetOrders,
+  getCryptoTestnetPositions,
   getCryptoTestnetStatus,
   getCryptoTestnetTicker,
   postCryptoTestnetMarketOrder,
   type CryptoTestnetBalancesPayload,
   type CryptoTestnetMarketOrderRow,
+  type CryptoTestnetPositionsPayload,
   type CryptoTestnetStoredOrder,
   type CryptoTestnetStatusPayload,
 } from "@/services/api";
@@ -116,6 +118,17 @@ export function CryptoTestnetPanel() {
   const [ordersTotal, setOrdersTotal] = useState(0);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState<string | null>(null);
+  const [positionsPayload, setPositionsPayload] = useState<CryptoTestnetPositionsPayload | null>(null);
+  const [positionsError, setPositionsError] = useState<string | null>(null);
+
+  const prefillQuickSell = useCallback((pair: string | null | undefined) => {
+    const p = (pair ?? "").trim();
+    if (!p) return;
+    setManualSymbol(p);
+    setManualSide("sell");
+    setSellMode("quote");
+    setOrderFormError(null);
+  }, []);
 
   const loadStatus = useCallback(async (soft = false) => {
     if (!soft) setStatusLoading(true);
@@ -133,8 +146,17 @@ export function CryptoTestnetPanel() {
   const loadBalances = useCallback(async () => {
     setBalancesLoading(true);
     try {
-      const b = await getCryptoTestnetBalances();
+      const [rb, rp] = await Promise.allSettled([getCryptoTestnetBalances(), getCryptoTestnetPositions()]);
+      if (rb.status !== "fulfilled") throw rb.reason;
+      const b = rb.value;
       setBalances(b);
+      if (rp.status === "fulfilled") {
+        setPositionsPayload(rp.value);
+        setPositionsError(null);
+      } else {
+        setPositionsPayload(null);
+        setPositionsError(rp.reason instanceof Error ? rp.reason.message : "Error al leer posiciones testnet");
+      }
       const entries = await Promise.all(
         [...TESTNET_WHITELIST_SYMBOLS].map(async (sym) => {
           try {
@@ -154,6 +176,8 @@ export function CryptoTestnetPanel() {
       setError(null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error al leer balances testnet");
+      setPositionsPayload(null);
+      setPositionsError(null);
     } finally {
       setBalancesLoading(false);
     }
@@ -474,79 +498,105 @@ export function CryptoTestnetPanel() {
                 </div>
               </div>
               <p className="msg-muted" style={{ margin: "0.65rem 0 0", fontSize: "0.8rem" }}>
-                Total aprox.: USDT 1:1; BTC/ETH/SOL/BNB valorizados con el último precio testnet del par. Otros activos:
-                cantidad sin sumar al total si no hay par en esta vista.
+                Vista rápida desde la API de balances testnet + precios locales para el formulario. Ubicación detallada
+                libre/en orden y valorización directa desde Binance: sección{" "}
+                <strong>Posiciones reales Testnet</strong> más abajo.
               </p>
             </>
           ) : null}
         </section>
       ) : null}
 
-      {/* C — Activos */}
-      {balances?.ok && portfolio ? (
-        <section className="card crypto-testnet-section">
-          <h3 className="dashboard-section-title crypto-testnet-section-title">Activos en cartera</h3>
-          <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", fontSize: "0.85rem" }}>
-            Sólo filas con saldo libre &gt; 0. <strong>USDT</strong> es efectivo estable; el resto son cripto en custodia
-            testnet.
-          </p>
-          {portfolio.rows.length === 0 ? (
-            <p className="msg-muted" style={{ margin: 0 }}>
-              No tenés saldos libres visibles.
+      {/* Posiciones en vivo Binance Testnet */}
+      {balances ? (
+        <section className="card crypto-testnet-section crypto-testnet-real-positions">
+          <h3 className="dashboard-section-title crypto-testnet-section-title">Posiciones reales Testnet</h3>
+          <div className="crypto-testnet-note crypto-testnet-note--neutral">
+            <strong>Lectura en vivo desde Binance Spot Testnet</strong> (balances + últimos precios de mercado testnet).
+            No se mezcla con paper trading ni con el historial local de órdenes guardadas en esta app.
+          </div>
+          {positionsError ? <p className="msg-error crypto-testnet-block-start">{positionsError}</p> : null}
+          {!positionsPayload && balances.ok && !positionsError ? (
+            <p className="msg-muted" style={{ margin: "0.5rem 0 0", fontSize: "0.88rem" }}>
+              Refrescá la cartera para cargar posiciones desde testnet.
             </p>
-          ) : (
-            <div className="table-wrap">
-              <table className="crypto-testnet-table">
-                <thead>
-                  <tr>
-                    <th>Activo</th>
-                    <th className="crypto-testnet-num">Libre</th>
-                    <th className="crypto-testnet-num">Valor aprox. USDT</th>
-                    <th className="crypto-testnet-num">% cartera</th>
-                    <th>Acción</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {portfolio.rows.map((r) => {
-                    const pct =
-                      r.approxUsdt !== null && portfolio.totalApprox > 0
-                        ? (100 * r.approxUsdt) / portfolio.totalApprox
-                        : null;
-                    const canQuickSell = r.asset !== "USDT" && r.pair !== null;
-                    return (
-                      <tr key={r.asset} className={r.highlight ? "crypto-testnet-row--hl" : undefined}>
-                        <td className={r.highlight ? "crypto-testnet-asset-hl" : undefined}>{r.asset}</td>
-                        <td className="crypto-testnet-num">{numFmt4.format(r.free)}</td>
-                        <td className="crypto-testnet-num">{r.approxUsdt !== null ? fmtNum(r.approxUsdt) : "—"}</td>
-                        <td className="crypto-testnet-num">{pct !== null ? `${numFmt2.format(pct)}%` : "—"}</td>
-                        <td>
-                          {canQuickSell ? (
-                            <button
-                              type="button"
-                              className="radar-refresh-btn crypto-testnet-btn-compact"
-                              onClick={() => {
-                                setManualSymbol(r.pair as string);
-                                setManualSide("sell");
-                                setSellMode("quote");
-                                setOrderFormError(null);
-                              }}
-                              disabled={orderBusy}
-                            >
-                              Vender
-                            </button>
-                          ) : (
-                            <span className="msg-muted" style={{ fontSize: "0.8rem" }}>
-                              —
-                            </span>
-                          )}
-                        </td>
+          ) : null}
+          {positionsPayload?.ok ? (
+            <>
+              <div className="crypto-testnet-mini-grid" style={{ marginBottom: "0.85rem" }}>
+                <div className="crypto-testnet-kpi">
+                  <span className="crypto-testnet-kpi-label">USDT (efectivo)</span>
+                  <span className="crypto-testnet-kpi-value">{fmtNum(positionsPayload.cash_usdt)}</span>
+                </div>
+                <div className="crypto-testnet-kpi crypto-testnet-kpi--accent">
+                  <span className="crypto-testnet-kpi-label">Valor total aprox.</span>
+                  <span className="crypto-testnet-kpi-value">{fmtNum(positionsPayload.total_value_usdt)} USDT</span>
+                </div>
+                <div className="crypto-testnet-kpi">
+                  <span className="crypto-testnet-kpi-label">Sincronizado</span>
+                  <span className="crypto-testnet-kpi-value" style={{ fontSize: "0.85rem", fontWeight: 500 }}>
+                    {fmtIsoLocalShort(positionsPayload.updated_at)}
+                  </span>
+                </div>
+              </div>
+              {positionsPayload.positions.length === 0 ? (
+                <p className="msg-muted" style={{ margin: 0 }}>
+                  Sin posiciones crypto (sólo efectivo USDT o cuenta vacía).
+                </p>
+              ) : (
+                <div className="table-wrap">
+                  <table className="crypto-testnet-table">
+                    <thead>
+                      <tr>
+                        <th>Activo</th>
+                        <th className="crypto-testnet-num">Libre</th>
+                        <th className="crypto-testnet-num">En orden</th>
+                        <th className="crypto-testnet-num">Total</th>
+                        <th className="crypto-testnet-num">Precio USDT</th>
+                        <th className="crypto-testnet-num">Valor USDT</th>
+                        <th>Acción</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                    </thead>
+                    <tbody>
+                      {positionsPayload.positions.map((r) => {
+                        const canSell = Boolean(r.symbol);
+                        return (
+                          <tr key={r.asset} className={PAIR_FOR_BASE[r.asset] ? "crypto-testnet-row--hl" : undefined}>
+                            <td className={PAIR_FOR_BASE[r.asset] ? "crypto-testnet-asset-hl" : undefined}>{r.asset}</td>
+                            <td className="crypto-testnet-num">{numFmt4.format(r.free)}</td>
+                            <td className="crypto-testnet-num">{numFmt4.format(r.used)}</td>
+                            <td className="crypto-testnet-num">{numFmt4.format(r.total)}</td>
+                            <td className="crypto-testnet-num">{fmtNum(r.last_price_usdt)}</td>
+                            <td className="crypto-testnet-num">{r.value_usdt !== null ? fmtNum(r.value_usdt) : "—"}</td>
+                            <td>
+                              {canSell ? (
+                                <button
+                                  type="button"
+                                  className="radar-refresh-btn crypto-testnet-btn-compact"
+                                  onClick={() => prefillQuickSell(r.symbol)}
+                                  disabled={orderBusy}
+                                >
+                                  Vender
+                                </button>
+                              ) : (
+                                <span className="msg-muted" style={{ fontSize: "0.8rem" }}>
+                                  —
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          ) : positionsPayload && !positionsPayload.ok ? (
+            <p className="msg-error" style={{ margin: "0.5rem 0 0", fontSize: "0.875rem" }}>
+              {positionsPayload.error ?? "No se pudieron leer posiciones testnet"}
+            </p>
+          ) : null}
         </section>
       ) : null}
 
@@ -767,11 +817,11 @@ export function CryptoTestnetPanel() {
             <div className="crypto-testnet-section-head">
               <div>
                 <h3 className="dashboard-section-title crypto-testnet-section-title" style={{ margin: 0 }}>
-                  Historial de órdenes
+                  Órdenes locales enviadas desde esta app
                 </h3>
                 <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
-                  Archivo local en el servidor ({ordersTotal} órdenes guardadas). Mostrando las últimas{" "}
-                  {recentOrders.length}.
+                  Historial persistido en el servidor ({ordersTotal} registros). Mostrando las últimas{" "}
+                  {recentOrders.length}. No es el libro completo de Binance ni las posiciones en vivo.
                 </p>
               </div>
               <div className="crypto-testnet-toolbar">
