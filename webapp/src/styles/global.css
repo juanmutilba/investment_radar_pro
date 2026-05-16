@@ -2502,6 +2502,51 @@ table.radar-table thead .radar-table__sticky-col {
   background: rgba(148, 163, 184, 0.07);
 }
 
+.crypto-testnet-security-card {
+  padding-top: 0.85rem;
+  padding-bottom: 0.85rem;
+}
+
+.crypto-testnet-security-list {
+  margin: 0.55rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.38rem;
+}
+
+.crypto-testnet-security-row {
+  display: grid;
+  grid-template-columns: 1.1rem minmax(0, 1.4fr) minmax(0, 1.6fr);
+  gap: 0.35rem 0.55rem;
+  align-items: baseline;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.crypto-testnet-security-mark {
+  font-weight: 700;
+  text-align: center;
+}
+
+.crypto-testnet-security-row--ok .crypto-testnet-security-mark {
+  color: var(--success, #16a34a);
+}
+
+.crypto-testnet-security-row--warn .crypto-testnet-security-mark {
+  color: #d97706;
+}
+
+.crypto-testnet-security-label {
+  color: var(--text-muted, #94a3b8);
+}
+
+.crypto-testnet-security-value {
+  text-align: right;
+  font-weight: 500;
+}
+
 .crypto-testnet-order-form {
   display: flex;
   flex-direction: column;

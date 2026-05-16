@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { CycleDiagnosticsPanel } from "@/components/crypto/CycleDiagnosticsPanel";
 import { CryptoTimeframeField } from "@/components/crypto/CryptoTimeframeField";
 import { normalizeTimeframeString } from "@/components/crypto/cryptoTimeframe";
 import {
   getCryptoTestnetBalances,
+  getCryptoTestnetMonitorCycles,
   getCryptoTestnetMonitorStatus,
   getCryptoTestnetOpenOrders,
   getCryptoTestnetOrders,
   getCryptoTestnetPositions,
   getCryptoTestnetStatus,
   getCryptoTestnetTicker,
+  postCryptoTestnetCancelOrder,
+  postCryptoTestnetLimitOrder,
   postCryptoTestnetMarketOrder,
+  postCryptoTestnetSyncHistory,
   postCryptoTestnetMonitorStart,
   postCryptoTestnetMonitorStop,
   postCryptoTestnetProposeEntry,
@@ -19,6 +23,7 @@ import {
   type CryptoTestnetEvaluatedRow,
   type CryptoTestnetExitProposal,
   type CryptoTestnetMarketOrderRow,
+  type CryptoTestnetMonitorCycleRow,
   type CryptoTestnetMonitorStatusPayload,
   type CryptoTestnetOpenOrdersPayload,
   type CryptoTestnetPositionsPayload,
@@ -26,6 +31,7 @@ import {
   type CryptoTestnetProposeExitsPayload,
   type CryptoTestnetStoredOrder,
   type CryptoTestnetStatusPayload,
+  type CryptoTestnetStrategyProposal,
 } from "@/services/api";
 
 const HIGHLIGHT_ASSETS = ["BTC", "ETH", "SOL", "BNB", "USDT"] as const;
@@ -40,6 +46,84 @@ const TESTNET_WHITELIST_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT
 const MAX_TESTNET_ORDER_USDT = 25;
 const MIN_TESTNET_ORDER_USDT = 0.01;
 const SMALL_USDT_WARN = 5;
+const PROPOSAL_PREFILL_MESSAGE =
+  "Propuesta cargada en el formulario. Revisá y confirmá manualmente.";
+
+function formatBaseQtyForInput(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const digits = value >= 1 ? 6 : 8;
+  const s = value.toFixed(digits).replace(/\.?0+$/, "");
+  return s || value.toString();
+}
+
+type TestnetSecurityCheckRow = {
+  id: string;
+  label: string;
+  value: string;
+  ok: boolean;
+};
+
+function testnetEnvironmentLabel(status: CryptoTestnetStatusPayload | null): string {
+  if (!status) return "Spot Testnet (política de la app)";
+  const urls = status.urls_api_safe;
+  if (urls === "real") return "Revisar credenciales (.env)";
+  if (urls === "sandbox" || status.sandbox_mode) return "Sandbox / Spot Testnet";
+  if (urls === "testnet") return "Testnet";
+  if (status.testnet) return "Testnet";
+  if (urls === "unknown") return "Testnet (sin diagnóstico en vivo)";
+  return "Spot Testnet";
+}
+
+function buildTestnetSecurityChecks(status: CryptoTestnetStatusPayload | null): TestnetSecurityCheckRow[] {
+  const urls = status?.urls_api_safe;
+  const realNotUsed = urls !== "real";
+  const envOk = urls !== "real";
+
+  return [
+    {
+      id: "no-real",
+      label: "Binance real",
+      value: realNotUsed ? "Deshabilitado / no usado" : "Posible cuenta real",
+      ok: realNotUsed,
+    },
+    {
+      id: "env",
+      label: "Entorno",
+      value: testnetEnvironmentLabel(status),
+      ok: envOk,
+    },
+    {
+      id: "no-auto-orders",
+      label: "Órdenes automáticas",
+      value: "Desactivadas",
+      ok: true,
+    },
+    {
+      id: "monitor-proposals",
+      label: "Monitor",
+      value: "Solo propuestas",
+      ok: true,
+    },
+    {
+      id: "manual-confirm",
+      label: "Confirmación manual",
+      value: "Requerida",
+      ok: true,
+    },
+    {
+      id: "order-cap",
+      label: "Límite por orden",
+      value: `${MAX_TESTNET_ORDER_USDT} USDT`,
+      ok: true,
+    },
+    {
+      id: "local-history",
+      label: "Historial local",
+      value: "data/crypto_testnet_orders.json",
+      ok: true,
+    },
+  ];
+}
 
 const numFmt2 = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 8, minimumFractionDigits: 2 });
 const numFmt4 = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 8, minimumFractionDigits: 0 });
@@ -94,6 +178,14 @@ function sideHistoryLabel(side: string | null | undefined): string {
   return "—";
 }
 
+function orderTypeLabel(row: { order_type?: string | null; type?: string | null; limit_price?: number | null }): string {
+  const t = String(row.order_type ?? row.type ?? "").toUpperCase();
+  if (t === "LIMIT" || t === "limit") return "LIMIT";
+  if (t === "MARKET" || t === "market") return "MARKET";
+  if (row.limit_price != null && Number.isFinite(Number(row.limit_price))) return "LIMIT";
+  return "MARKET";
+}
+
 function assistedPrimaryReasonLabel(code: string | null | undefined): string {
   if (!code) return "Sin propuesta en esta búsqueda.";
   const labels: Record<string, string> = {
@@ -113,17 +205,38 @@ function assistedPrimaryReasonLabel(code: string | null | undefined): string {
   return labels[code] ?? `Motivo: ${code}`;
 }
 
+function monitorCycleReasonLabel(row: CryptoTestnetMonitorCycleRow): string {
+  if (row.entry_proposal_generated && row.entry_proposal?.symbol) {
+    return `Entrada: ${row.entry_proposal.symbol}`;
+  }
+  if (row.entry_proposal_generated) {
+    return "Entrada propuesta";
+  }
+  const entryR = row.no_entry_reason;
+  if (entryR) return assistedPrimaryReasonLabel(entryR);
+  if ((row.exit_proposals_count ?? 0) > 0) {
+    const first = row.exit_proposals?.[0];
+    if (first?.exit_reason && first.asset) {
+      return `Salida ${first.asset}: ${exitProposalReasonLabel(first.exit_reason)}`;
+    }
+    return "Salidas propuestas";
+  }
+  if (row.no_exit_reason) return row.no_exit_reason;
+  return "—";
+}
+
 function exitProposalReasonLabel(reason: string | null | undefined): string {
   if (!reason) return "—";
   const labels: Record<string, string> = {
     stop_loss: "Stop loss",
     take_profit: "Take profit",
+    trailing_stop: "Trailing stop",
     missing_local_entry:
       "Sin base de compras local clara: operaste fuera de esta app, faltan datos de costo en el historial o el saldo no coincide con BUY/SELL guardados.",
     no_free_base: "Sin saldo libre para vender.",
     no_price: "Precio USDT no disponible.",
     below_min_value: "Valor posición por debajo del mínimo USDT configurado.",
-    inside_sl_tp_band: "Precio dentro de la banda SL/TP; no se propone venta.",
+    inside_sl_tp_band: "Dentro de SL/TP y por encima del trailing; no se propone venta.",
     no_symbol: "Par no disponible.",
   };
   return labels[reason] ?? reason;
@@ -161,18 +274,30 @@ export function CryptoTestnetPanel() {
   const [manualQuoteUsdt, setManualQuoteUsdt] = useState<string>("10");
   const [manualSellQuoteUsdt, setManualSellQuoteUsdt] = useState<string>("5");
   const [manualAmountBase, setManualAmountBase] = useState<string>("0.0001");
+  const [manualOrderType, setManualOrderType] = useState<"market" | "limit">("market");
+  const [manualLimitPrice, setManualLimitPrice] = useState<string>("");
+  const [manualLimitQty, setManualLimitQty] = useState<string>("0.001");
+  const [orderSuccessMessage, setOrderSuccessMessage] = useState<string | null>(null);
   const [orderBusy, setOrderBusy] = useState(false);
   const [orderFormError, setOrderFormError] = useState<string | null>(null);
+  const [proposalPrefillMessage, setProposalPrefillMessage] = useState<string | null>(null);
+  const manualOrderSectionRef = useRef<HTMLElement | null>(null);
   const [lastOrder, setLastOrder] = useState<CryptoTestnetMarketOrderRow | null>(null);
   const [recentOrders, setRecentOrders] = useState<CryptoTestnetStoredOrder[]>([]);
   const [ordersTotal, setOrdersTotal] = useState(0);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState<string | null>(null);
+  const [syncHistoryBusy, setSyncHistoryBusy] = useState(false);
+  const [syncHistoryMessage, setSyncHistoryMessage] = useState<string | null>(null);
+  const [syncHistoryError, setSyncHistoryError] = useState<string | null>(null);
   const [positionsPayload, setPositionsPayload] = useState<CryptoTestnetPositionsPayload | null>(null);
   const [positionsError, setPositionsError] = useState<string | null>(null);
   const [openOrdersPayload, setOpenOrdersPayload] = useState<CryptoTestnetOpenOrdersPayload | null>(null);
   const [openOrdersError, setOpenOrdersError] = useState<string | null>(null);
   const [openOrdersLoading, setOpenOrdersLoading] = useState(false);
+  const [cancelOpenOrderKey, setCancelOpenOrderKey] = useState<string | null>(null);
+  const [cancelOpenOrderMessage, setCancelOpenOrderMessage] = useState<string | null>(null);
+  const [cancelOpenOrderError, setCancelOpenOrderError] = useState<string | null>(null);
   const [assistedPayload, setAssistedPayload] = useState<CryptoTestnetProposeEntryPayload | null>(null);
   const [assistedLoading, setAssistedLoading] = useState(false);
   const [assistedError, setAssistedError] = useState<string | null>(null);
@@ -197,6 +322,10 @@ export function CryptoTestnetPanel() {
   const [monitorActionBusy, setMonitorActionBusy] = useState(false);
   const [monitorConfirmBuyBusy, setMonitorConfirmBuyBusy] = useState(false);
   const [monitorSellBusyAsset, setMonitorSellBusyAsset] = useState<string | null>(null);
+  const [monitorCycles, setMonitorCycles] = useState<CryptoTestnetMonitorCycleRow[]>([]);
+  const [monitorCyclesTotal, setMonitorCyclesTotal] = useState(0);
+  const [monitorCyclesLoading, setMonitorCyclesLoading] = useState(false);
+  const [monitorCyclesError, setMonitorCyclesError] = useState<string | null>(null);
   const [monitorIntervalMin, setMonitorIntervalMin] = useState("5");
   const [monTf, setMonTf] = useState("1h");
   const [monQuote, setMonQuote] = useState("10");
@@ -221,6 +350,55 @@ export function CryptoTestnetPanel() {
     setSellMode("quote");
     setOrderFormError(null);
   }, []);
+
+  const scrollToManualOrderForm = useCallback(() => {
+    const el = manualOrderSectionRef.current ?? document.getElementById("crypto-testnet-manual-order");
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  const applyEntryProposalToManualForm = useCallback(
+    (proposal: CryptoTestnetStrategyProposal) => {
+      const sym = proposal.symbol?.trim();
+      if (!sym) return;
+      setManualSymbol(sym);
+      setManualSide("buy");
+      setManualOrderType("market");
+      const q = proposal.quote_amount_usdt;
+      if (typeof q === "number" && Number.isFinite(q) && q > 0) {
+        setManualQuoteUsdt(String(q));
+      }
+      setOrderFormError(null);
+      setProposalPrefillMessage(PROPOSAL_PREFILL_MESSAGE);
+      window.requestAnimationFrame(() => scrollToManualOrderForm());
+    },
+    [scrollToManualOrderForm],
+  );
+
+  const applyExitProposalToManualForm = useCallback(
+    (prop: CryptoTestnetExitProposal) => {
+      const sym = prop.symbol?.trim();
+      if (!sym) return;
+      setManualSymbol(sym);
+      setManualSide("sell");
+      setManualOrderType("market");
+      const base = prop.amount_base;
+      if (typeof base === "number" && Number.isFinite(base) && base > 0) {
+        setSellMode("advanced");
+        const qty = formatBaseQtyForInput(base);
+        if (qty) setManualAmountBase(qty);
+      } else {
+        const sq = prop.sell_quote_amount_usdt;
+        if (typeof sq === "number" && Number.isFinite(sq) && sq > 0) {
+          setSellMode("quote");
+          setManualSellQuoteUsdt(String(sq));
+        }
+      }
+      setOrderFormError(null);
+      setProposalPrefillMessage(PROPOSAL_PREFILL_MESSAGE);
+      window.requestAnimationFrame(() => scrollToManualOrderForm());
+    },
+    [scrollToManualOrderForm],
+  );
 
   const loadStatus = useCallback(async (soft = false) => {
     if (!soft) setStatusLoading(true);
@@ -304,6 +482,40 @@ export function CryptoTestnetPanel() {
     }
   }, []);
 
+  const handleCancelOpenOrder = useCallback(
+    async (row: { symbol: string; order_id: string | number | null }) => {
+      if (row.order_id == null) return;
+      const sym = row.symbol.trim();
+      const oidNum =
+        typeof row.order_id === "number"
+          ? row.order_id
+          : Number.parseInt(String(row.order_id).trim(), 10);
+      if (!sym || !Number.isFinite(oidNum) || oidNum <= 0) {
+        setCancelOpenOrderError("order_id o símbolo inválido para cancelar");
+        return;
+      }
+      const ok = window.confirm(
+        `¿Cancelar la orden testnet #${oidNum} en ${sym}?\n\nSolo Binance Spot Testnet (sandbox). No se envía ninguna orden nueva.`,
+      );
+      if (!ok) return;
+
+      const busyKey = `${sym}-${oidNum}`;
+      setCancelOpenOrderKey(busyKey);
+      setCancelOpenOrderError(null);
+      setCancelOpenOrderMessage(null);
+      try {
+        const res = await postCryptoTestnetCancelOrder({ symbol: sym, order_id: oidNum });
+        setCancelOpenOrderMessage(res.message ?? `Orden #${oidNum} cancelada en testnet.`);
+        await Promise.all([loadOpenOrders(), loadBalances()]);
+      } catch (e: unknown) {
+        setCancelOpenOrderError(e instanceof Error ? e.message : "Error al cancelar orden testnet");
+      } finally {
+        setCancelOpenOrderKey(null);
+      }
+    },
+    [loadBalances, loadOpenOrders],
+  );
+
   const loadOrders = useCallback(async () => {
     setOrdersLoading(true);
     try {
@@ -318,6 +530,36 @@ export function CryptoTestnetPanel() {
     }
   }, []);
 
+  const handleSyncOrderHistory = useCallback(async () => {
+    setSyncHistoryBusy(true);
+    setSyncHistoryError(null);
+    setSyncHistoryMessage(null);
+    try {
+      const res = await postCryptoTestnetSyncHistory(50);
+      if (!res.ok) {
+        setSyncHistoryError(res.error ?? "No se pudo sincronizar el historial con testnet");
+        if (Array.isArray(res.orders)) {
+          setRecentOrders(res.orders);
+          setOrdersTotal(res.total);
+        }
+        return;
+      }
+      setRecentOrders(res.orders);
+      setOrdersTotal(res.total);
+      setOrdersError(null);
+      setSyncHistoryMessage(
+        `Sincronizado: ${res.checked_count} revisadas, ${res.updated_count} actualizadas` +
+          (res.errors_count > 0 ? `, ${res.errors_count} error(es)` : "") +
+          ".",
+      );
+      await loadOpenOrders();
+    } catch (e: unknown) {
+      setSyncHistoryError(e instanceof Error ? e.message : "Error al sincronizar historial testnet");
+    } finally {
+      setSyncHistoryBusy(false);
+    }
+  }, [loadOpenOrders]);
+
   const loadMonitorStatus = useCallback(async () => {
     setMonitorStatusLoading(true);
     try {
@@ -331,19 +573,45 @@ export function CryptoTestnetPanel() {
     }
   }, []);
 
+  const loadMonitorCycles = useCallback(async (limit = 20) => {
+    setMonitorCyclesLoading(true);
+    try {
+      const res = await getCryptoTestnetMonitorCycles(limit);
+      if (!res.ok) {
+        setMonitorCyclesError(res.error ?? "No se pudo leer historial de ciclos");
+        setMonitorCycles([]);
+        setMonitorCyclesTotal(0);
+        return;
+      }
+      setMonitorCycles(res.cycles);
+      setMonitorCyclesTotal(res.total);
+      setMonitorCyclesError(null);
+    } catch (e: unknown) {
+      setMonitorCyclesError(e instanceof Error ? e.message : "Error al leer ciclos del monitor");
+      setMonitorCycles([]);
+      setMonitorCyclesTotal(0);
+    } finally {
+      setMonitorCyclesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadStatus(false);
   }, [loadStatus]);
 
   useEffect(() => {
     void loadMonitorStatus();
-  }, [loadMonitorStatus]);
+    void loadMonitorCycles(20);
+  }, [loadMonitorStatus, loadMonitorCycles]);
 
   useEffect(() => {
     if (!monitorStatus?.enabled) return undefined;
-    const id = window.setInterval(() => void loadMonitorStatus(), 12000);
+    const id = window.setInterval(() => {
+      void loadMonitorStatus();
+      void loadMonitorCycles(20);
+    }, 12000);
     return () => window.clearInterval(id);
-  }, [monitorStatus?.enabled, loadMonitorStatus]);
+  }, [monitorStatus?.enabled, loadMonitorStatus, loadMonitorCycles]);
 
   const connected = Boolean(status?.configured && status?.enabled && status?.can_read_balance);
   const showEnvHelp = status && !status.configured;
@@ -412,13 +680,72 @@ export function CryptoTestnetPanel() {
 
   const sellQuoteNum = Number.parseFloat(manualSellQuoteUsdt.replace(",", "."));
 
-  const submitTestnetMarketOrder = useCallback(
+  const limitNotionalEstimate = useMemo(() => {
+    const q = Number.parseFloat(manualLimitQty.replace(",", "."));
+    const p = Number.parseFloat(manualLimitPrice.replace(",", "."));
+    if (!Number.isFinite(q) || !Number.isFinite(p) || q <= 0 || p <= 0) return null;
+    return q * p;
+  }, [manualLimitQty, manualLimitPrice]);
+
+  const submitTestnetManualOrder = useCallback(
     async (e: FormEvent) => {
       e.preventDefault();
       setOrderFormError(null);
+      setOrderSuccessMessage(null);
       setLastOrder(null);
       if (!connected || !manualSymbol.trim()) return;
       const symTrim = manualSymbol.trim();
+
+      if (manualOrderType === "limit") {
+        const qty = Number.parseFloat(manualLimitQty.replace(",", "."));
+        const px = Number.parseFloat(manualLimitPrice.replace(",", "."));
+        if (!Number.isFinite(qty) || qty <= 0) {
+          setOrderFormError("Ingresá una cantidad positiva del activo base.");
+          return;
+        }
+        if (!Number.isFinite(px) || px <= 0) {
+          setOrderFormError("Ingresá un precio límite positivo en USDT.");
+          return;
+        }
+        const notional = qty * px;
+        if (notional > MAX_TESTNET_ORDER_USDT + 1e-9) {
+          setOrderFormError(`El notional (cantidad × precio) no puede superar ${MAX_TESTNET_ORDER_USDT} USDT.`);
+          return;
+        }
+        if (manualSide === "buy") {
+          if (freeUsdt !== null && freeUsdt + 1e-9 < notional) {
+            setOrderFormError(`Supera tu USDT disponible (${fmtNum(freeUsdt)}).`);
+            return;
+          }
+        } else {
+          const fb = lookupFreeBalance(balances, baseAssetFromPair(symTrim));
+          if (fb !== null && fb + 1e-12 < qty) {
+            setOrderFormError(`Supera tu saldo de ${baseAssetFromPair(symTrim)} (${fmtNum(fb)}).`);
+            return;
+          }
+        }
+        setOrderBusy(true);
+        try {
+          const res = await postCryptoTestnetLimitOrder({
+            symbol: symTrim,
+            side: manualSide,
+            quantity: qty,
+            limit_price: px,
+          });
+          if (res.order) setLastOrder(res.order);
+          setOrderSuccessMessage(
+            "Orden LIMIT enviada a Binance Spot Testnet. Queda pendiente en el libro hasta que matchee el precio.",
+          );
+          await Promise.all([loadBalances(), loadOrders(), loadOpenOrders()]);
+          setError(null);
+        } catch (err: unknown) {
+          const raw = err instanceof Error ? err.message : "Error al enviar orden limit testnet";
+          setOrderFormError(humanizeTestnetOrderError(raw));
+        } finally {
+          setOrderBusy(false);
+        }
+        return;
+      }
 
       if (manualSide === "buy") {
         const q = Number.parseFloat(manualQuoteUsdt.replace(",", "."));
@@ -487,7 +814,8 @@ export function CryptoTestnetPanel() {
                   amount_base: Number.parseFloat(manualAmountBase.replace(",", ".")),
                 });
         if (res.order) setLastOrder(res.order);
-        await Promise.all([loadBalances(), loadOrders()]);
+        setOrderSuccessMessage("Orden MARKET enviada/ejecutada en Binance Spot Testnet.");
+        await Promise.all([loadBalances(), loadOrders(), loadOpenOrders()]);
         setError(null);
       } catch (err: unknown) {
         const raw = err instanceof Error ? err.message : "Error al enviar orden testnet";
@@ -501,6 +829,9 @@ export function CryptoTestnetPanel() {
       connected,
       freeUsdt,
       manualAmountBase,
+      manualLimitPrice,
+      manualLimitQty,
+      manualOrderType,
       manualQuoteUsdt,
       manualSellQuoteUsdt,
       manualSide,
@@ -508,6 +839,7 @@ export function CryptoTestnetPanel() {
       pairPrice,
       sellMode,
       loadBalances,
+      loadOpenOrders,
       loadOrders,
     ],
   );
@@ -666,6 +998,7 @@ export function CryptoTestnetPanel() {
         min_exit_value_usdt: Number.isFinite(xmv) && xmv >= 0 ? xmv : 5,
       });
       setMonitorStatus(m);
+      void loadMonitorCycles(20);
     } catch (e: unknown) {
       setMonitorBannerError(e instanceof Error ? e.message : "No se pudo iniciar el monitor");
     } finally {
@@ -685,6 +1018,7 @@ export function CryptoTestnetPanel() {
     monBeTrig,
     monBePlus,
     monExitMin,
+    loadMonitorCycles,
   ]);
 
   const handleMonitorStop = useCallback(async () => {
@@ -693,12 +1027,13 @@ export function CryptoTestnetPanel() {
     try {
       const m = await postCryptoTestnetMonitorStop();
       setMonitorStatus(m);
+      void loadMonitorCycles(20);
     } catch (e: unknown) {
       setMonitorBannerError(e instanceof Error ? e.message : "No se pudo detener el monitor");
     } finally {
       setMonitorActionBusy(false);
     }
-  }, []);
+  }, [loadMonitorCycles]);
 
   const handleMonitorConfirmBuy = useCallback(async () => {
     const p = monitorStatus?.last_entry_proposal;
@@ -752,6 +1087,12 @@ export function CryptoTestnetPanel() {
     if (monitorStatus.running) return "Ejecutando revisión";
     return "Activo";
   }, [monitorStatus?.enabled, monitorStatus?.running]);
+
+  const testnetSecurityChecks = useMemo(() => buildTestnetSecurityChecks(status), [status]);
+  const testnetSecurityAllOk = useMemo(
+    () => testnetSecurityChecks.every((row) => row.ok),
+    [testnetSecurityChecks],
+  );
 
   const refreshTestnetDatos = useCallback(() => {
     void loadBalances();
@@ -825,6 +1166,37 @@ export function CryptoTestnetPanel() {
             {status.message}
           </p>
         ) : null}
+      </section>
+
+      <section className="card crypto-testnet-section crypto-testnet-security-card">
+        <div className="crypto-testnet-section-head">
+          <h3 className="dashboard-section-title crypto-testnet-section-title" style={{ margin: 0 }}>
+            Seguridad Testnet
+          </h3>
+          <span
+            className={`crypto-side-badge ${testnetSecurityAllOk ? "crypto-side-badge--buy" : ""}`}
+            style={testnetSecurityAllOk ? undefined : { borderColor: "rgba(217, 119, 6, 0.55)", color: "#d97706" }}
+          >
+            {testnetSecurityAllOk ? "Checks OK" : "Revisar"}
+          </span>
+        </div>
+        <p className="msg-muted" style={{ margin: "0.4rem 0 0", fontSize: "0.78rem" }}>
+          Garantías de diseño de este módulo. El entorno en vivo se confirma con el estado de conexión arriba.
+        </p>
+        <ul className="crypto-testnet-security-list" aria-label="Checklist de seguridad testnet">
+          {testnetSecurityChecks.map((row) => (
+            <li
+              key={row.id}
+              className={`crypto-testnet-security-row ${row.ok ? "crypto-testnet-security-row--ok" : "crypto-testnet-security-row--warn"}`}
+            >
+              <span className="crypto-testnet-security-mark" aria-hidden>
+                {row.ok ? "✓" : "!"}
+              </span>
+              <span className="crypto-testnet-security-label">{row.label}</span>
+              <span className="crypto-testnet-security-value">{row.value}</span>
+            </li>
+          ))}
+        </ul>
       </section>
 
       {/* 2 — Cartera Testnet */}
@@ -1013,15 +1385,24 @@ export function CryptoTestnetPanel() {
                     {assistedPayload.proposal.risk.break_even_plus_pct}%
                   </li>
                 </ul>
-                <button
-                  type="button"
-                  className="radar-refresh-btn"
-                  style={{ marginTop: "0.85rem" }}
-                  onClick={() => void handleAssistedConfirmBuy()}
-                  disabled={!connected || assistedConfirmBusy || orderBusy}
-                >
-                  {assistedConfirmBusy ? "Enviando…" : "Enviar BUY Testnet"}
-                </button>
+                <div className="crypto-testnet-toolbar" style={{ marginTop: "0.85rem", flexWrap: "wrap", gap: "0.5rem" }}>
+                  <button
+                    type="button"
+                    className="radar-refresh-btn"
+                    onClick={() => applyEntryProposalToManualForm(assistedPayload.proposal!)}
+                    disabled={orderBusy}
+                  >
+                    Usar propuesta
+                  </button>
+                  <button
+                    type="button"
+                    className="radar-refresh-btn"
+                    onClick={() => void handleAssistedConfirmBuy()}
+                    disabled={!connected || assistedConfirmBusy || orderBusy}
+                  >
+                    {assistedConfirmBusy ? "Enviando…" : "Enviar BUY Testnet"}
+                  </button>
+                </div>
                 {!connected ? (
                   <p className="msg-muted" style={{ marginTop: "0.5rem", fontSize: "0.82rem" }}>
                     Conectá testnet (estado arriba) para poder confirmar la compra.
@@ -1145,10 +1526,16 @@ export function CryptoTestnetPanel() {
             {exitAssistError}
           </p>
         ) : null}
-        {exitAssistPayload?.ok && exitTrailingPct.trim() !== "" ? (
+        {exitAssistPayload?.ok && exitTrailingPct.trim() === "" ? (
           <p className="msg-muted crypto-testnet-block-start" style={{ fontSize: "0.82rem" }}>
-            Trailing stop enviado en la query pero <strong>aún no está implementado</strong>: sólo se aplican SL y TP en esta
-            búsqueda.
+            Trailing stop: con el campo vacío se usa{" "}
+            <strong>
+              {exitAssistPayload.trailing_stop_pct_effective ??
+                exitAssistPayload.default_trailing_stop_pct ??
+                1.5}
+              %
+            </strong>{" "}
+            (configurable en la búsqueda). SL y TP siguen usando el historial local de compras.
           </p>
         ) : null}
         {exitAssistPayload?.ok && exitAssistPayload.proposals.length > 0 ? (
@@ -1158,10 +1545,13 @@ export function CryptoTestnetPanel() {
                 <tr>
                   <th>Activo</th>
                   <th>Motivo</th>
+                  <th className="crypto-testnet-num">Precio</th>
+                  <th className="crypto-testnet-num">Máximo</th>
+                  <th className="crypto-testnet-num">Trailing %</th>
+                  <th className="crypto-testnet-num">Precio trail.</th>
                   <th className="crypto-testnet-num">PnL %</th>
                   <th className="crypto-testnet-num">Valor USDT</th>
                   <th className="crypto-testnet-num">Entrada ~</th>
-                  <th className="crypto-testnet-num">Precio</th>
                   <th />
                 </tr>
               </thead>
@@ -1169,20 +1559,37 @@ export function CryptoTestnetPanel() {
                 {exitAssistPayload.proposals.map((row) => (
                   <tr key={row.asset}>
                     <td>{row.asset}</td>
-                    <td>{exitProposalReasonLabel(row.reason)}</td>
-                    <td className="crypto-testnet-num">{numFmt4.format(row.pnl_pct)}</td>
+                    <td>{exitProposalReasonLabel(row.exit_reason ?? row.reason)}</td>
+                    <td className="crypto-testnet-num">
+                      {fmtNum(row.current_price ?? row.current_price_usdt)}
+                    </td>
+                    <td className="crypto-testnet-num">{fmtNum(row.highest_price)}</td>
+                    <td className="crypto-testnet-num">{fmtNum(row.trailing_stop_pct)}</td>
+                    <td className="crypto-testnet-num">{fmtNum(row.trailing_stop_price)}</td>
+                    <td className="crypto-testnet-num">
+                      {row.pnl_pct != null && Number.isFinite(row.pnl_pct) ? numFmt4.format(row.pnl_pct) : "—"}
+                    </td>
                     <td className="crypto-testnet-num">{fmtNum(row.value_usdt)}</td>
                     <td className="crypto-testnet-num">{fmtNum(row.avg_entry_usdt)}</td>
-                    <td className="crypto-testnet-num">{fmtNum(row.current_price_usdt)}</td>
                     <td>
-                      <button
-                        type="button"
-                        className="radar-refresh-btn crypto-testnet-btn-compact"
-                        onClick={() => void handleExitAssistConfirmSell(row)}
-                        disabled={!connected || exitConfirmAsset !== null || orderBusy}
-                      >
-                        {exitConfirmAsset === row.asset ? "Enviando…" : "Confirmar SELL Testnet"}
-                      </button>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem", alignItems: "flex-start" }}>
+                        <button
+                          type="button"
+                          className="radar-refresh-btn crypto-testnet-btn-compact"
+                          onClick={() => applyExitProposalToManualForm(row)}
+                          disabled={orderBusy}
+                        >
+                          Usar propuesta
+                        </button>
+                        <button
+                          type="button"
+                          className="radar-refresh-btn crypto-testnet-btn-compact"
+                          onClick={() => void handleExitAssistConfirmSell(row)}
+                          disabled={!connected || exitConfirmAsset !== null || orderBusy}
+                        >
+                          {exitConfirmAsset === row.asset ? "Enviando…" : "Confirmar SELL Testnet"}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1192,7 +1599,7 @@ export function CryptoTestnetPanel() {
         ) : exitAssistPayload?.ok && exitAssistPayload.proposals.length === 0 ? (
           <p className="msg-muted crypto-testnet-block-start" style={{ marginTop: "0.75rem", fontSize: "0.88rem" }}>
             No hay salidas propuestas con los umbrales actuales (o ninguna posición supera el valor mínimo). Revisá el detalle
-            evaluado si esperabas una venta por SL/TP.
+            evaluado si esperabas una venta por SL/TP o trailing.
           </p>
         ) : null}
         {exitAssistPayload?.ok &&
@@ -1251,6 +1658,53 @@ export function CryptoTestnetPanel() {
             </span>
           </div>
         </div>
+        <div
+          className="crypto-testnet-mini-grid crypto-testnet-mini-grid--dense"
+          style={{ marginTop: "0.65rem" }}
+        >
+          <div className="crypto-testnet-kpi">
+            <span className="crypto-testnet-kpi-label">Watchlist (Testnet scan)</span>
+            <span className="crypto-testnet-kpi-value">{monitorStatus?.last_watchlist_count ?? "—"}</span>
+          </div>
+          <div className="crypto-testnet-kpi">
+            <span className="crypto-testnet-kpi-label">Símbolos escaneados</span>
+            <span className="crypto-testnet-kpi-value">{monitorStatus?.last_scan_count ?? "—"}</span>
+          </div>
+          <div className="crypto-testnet-kpi">
+            <span className="crypto-testnet-kpi-label">Candidatos señal</span>
+            <span className="crypto-testnet-kpi-value">{monitorStatus?.last_candidates_count ?? "—"}</span>
+          </div>
+          <div className="crypto-testnet-kpi">
+            <span className="crypto-testnet-kpi-label">Propuesta entrada</span>
+            <span className="crypto-testnet-kpi-value">
+              {monitorStatus?.last_run_at == null
+                ? "—"
+                : monitorStatus?.last_entry_proposal_generated
+                  ? "Sí"
+                  : "No"}
+            </span>
+          </div>
+          <div className="crypto-testnet-kpi">
+            <span className="crypto-testnet-kpi-label">Propuestas salida</span>
+            <span className="crypto-testnet-kpi-value">
+              {monitorStatus?.last_run_at == null ? "—" : monitorStatus?.last_exit_proposals_count ?? 0}
+            </span>
+          </div>
+          <div className="crypto-testnet-kpi">
+            <span className="crypto-testnet-kpi-label">Sin propuesta entrada</span>
+            <span
+              className="crypto-testnet-kpi-value"
+              style={{ fontSize: "0.78rem", fontWeight: 500 }}
+              title={monitorStatus?.last_no_entry_reason ?? undefined}
+            >
+              {monitorStatus?.last_run_at == null
+                ? "—"
+                : monitorStatus?.last_entry_proposal_generated
+                  ? "—"
+                  : assistedPrimaryReasonLabel(monitorStatus?.last_no_entry_reason)}
+            </span>
+          </div>
+        </div>
         {monitorStatus?.last_error ? (
           <p className="msg-error crypto-testnet-block-start" style={{ fontSize: "0.875rem", marginTop: "0.65rem" }}>
             Último error monitor: {monitorStatus.last_error}
@@ -1268,10 +1722,11 @@ export function CryptoTestnetPanel() {
           durationMs={monitorStatus?.last_cycle_duration_ms}
           primaryReason={monitorStatus?.last_primary_reason ?? monitorStatus?.last_entry_primary_reason}
           summary={monitorStatus?.last_cycle_summary}
+          lastScanDebug={monitorStatus?.last_scan_debug}
           bestRejected={monitorStatus?.best_rejected_candidate}
           entryCandidate={monitorStatus?.last_entry_candidate}
           primaryReasonLabel={assistedPrimaryReasonLabel}
-          emptyHint="Sin datos de ciclo todavía. Iniciá el monitor y esperá la primera revisión."
+          emptyHint="Sin datos de ciclo todavía. Iniciá el monitor Testnet y esperá la primera revisión (solo propuestas; sin órdenes automáticas)."
         />
 
         <div className="crypto-testnet-toolbar crypto-testnet-block-start" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
@@ -1490,15 +1945,24 @@ export function CryptoTestnetPanel() {
               <p className="msg-muted" style={{ margin: "0.45rem 0 0", fontSize: "0.82rem" }}>
                 Señal: {monitorStatus.last_entry_proposal.signal || "—"}
               </p>
-              <button
-                type="button"
-                className="radar-refresh-btn"
-                style={{ marginTop: "0.65rem" }}
-                onClick={() => void handleMonitorConfirmBuy()}
-                disabled={!connected || monitorConfirmBuyBusy || orderBusy || exitConfirmAsset !== null || monitorSellBusyAsset !== null}
-              >
-                {monitorConfirmBuyBusy ? "Enviando…" : "Confirmar BUY Testnet"}
-              </button>
+              <div className="crypto-testnet-toolbar" style={{ marginTop: "0.65rem", flexWrap: "wrap", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  className="radar-refresh-btn"
+                  onClick={() => applyEntryProposalToManualForm(monitorStatus.last_entry_proposal!)}
+                  disabled={orderBusy}
+                >
+                  Usar propuesta
+                </button>
+                <button
+                  type="button"
+                  className="radar-refresh-btn"
+                  onClick={() => void handleMonitorConfirmBuy()}
+                  disabled={!connected || monitorConfirmBuyBusy || orderBusy || exitConfirmAsset !== null || monitorSellBusyAsset !== null}
+                >
+                  {monitorConfirmBuyBusy ? "Enviando…" : "Confirmar BUY Testnet"}
+                </button>
+              </div>
               {!connected ? (
                 <p className="msg-muted" style={{ marginTop: "0.35rem", fontSize: "0.8rem" }}>
                   Conectá testnet para confirmar la compra sugerida por el monitor.
@@ -1525,10 +1989,13 @@ export function CryptoTestnetPanel() {
                   <tr>
                     <th>Activo</th>
                     <th>Motivo</th>
+                    <th className="crypto-testnet-num">Precio</th>
+                    <th className="crypto-testnet-num">Máximo</th>
+                    <th className="crypto-testnet-num">Trailing %</th>
+                    <th className="crypto-testnet-num">Precio trail.</th>
                     <th className="crypto-testnet-num">PnL %</th>
                     <th className="crypto-testnet-num">Valor USDT</th>
                     <th className="crypto-testnet-num">Entrada ~</th>
-                    <th className="crypto-testnet-num">Precio</th>
                     <th />
                   </tr>
                 </thead>
@@ -1536,26 +2003,43 @@ export function CryptoTestnetPanel() {
                   {monitorStatus.last_exit_proposals.map((row) => (
                     <tr key={row.asset}>
                       <td>{row.asset}</td>
-                      <td>{exitProposalReasonLabel(row.reason)}</td>
-                      <td className="crypto-testnet-num">{numFmt4.format(row.pnl_pct)}</td>
+                      <td>{exitProposalReasonLabel(row.exit_reason ?? row.reason)}</td>
+                      <td className="crypto-testnet-num">
+                        {fmtNum(row.current_price ?? row.current_price_usdt)}
+                      </td>
+                      <td className="crypto-testnet-num">{fmtNum(row.highest_price)}</td>
+                      <td className="crypto-testnet-num">{fmtNum(row.trailing_stop_pct)}</td>
+                      <td className="crypto-testnet-num">{fmtNum(row.trailing_stop_price)}</td>
+                      <td className="crypto-testnet-num">
+                        {row.pnl_pct != null && Number.isFinite(row.pnl_pct) ? numFmt4.format(row.pnl_pct) : "—"}
+                      </td>
                       <td className="crypto-testnet-num">{fmtNum(row.value_usdt)}</td>
                       <td className="crypto-testnet-num">{fmtNum(row.avg_entry_usdt)}</td>
-                      <td className="crypto-testnet-num">{fmtNum(row.current_price_usdt)}</td>
                       <td>
-                        <button
-                          type="button"
-                          className="radar-refresh-btn crypto-testnet-btn-compact"
-                          onClick={() => void handleMonitorConfirmSell(row)}
-                          disabled={
-                            !connected ||
-                            monitorSellBusyAsset !== null ||
-                            exitConfirmAsset !== null ||
-                            orderBusy ||
-                            monitorConfirmBuyBusy
-                          }
-                        >
-                          {monitorSellBusyAsset === row.asset ? "Enviando…" : "Confirmar SELL Testnet"}
-                        </button>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem", alignItems: "flex-start" }}>
+                          <button
+                            type="button"
+                            className="radar-refresh-btn crypto-testnet-btn-compact"
+                            onClick={() => applyExitProposalToManualForm(row)}
+                            disabled={orderBusy}
+                          >
+                            Usar propuesta
+                          </button>
+                          <button
+                            type="button"
+                            className="radar-refresh-btn crypto-testnet-btn-compact"
+                            onClick={() => void handleMonitorConfirmSell(row)}
+                            disabled={
+                              !connected ||
+                              monitorSellBusyAsset !== null ||
+                              exitConfirmAsset !== null ||
+                              orderBusy ||
+                              monitorConfirmBuyBusy
+                            }
+                          >
+                            {monitorSellBusyAsset === row.asset ? "Enviando…" : "Confirmar SELL Testnet"}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1570,12 +2054,89 @@ export function CryptoTestnetPanel() {
             </p>
           )}
         </div>
+
+        <div className="crypto-testnet-block-start" style={{ marginTop: "1.1rem" }}>
+          <div className="crypto-testnet-section-head">
+            <div>
+              <h4 className="msg-muted" style={{ margin: 0, fontSize: "0.88rem", fontWeight: 600 }}>
+                Historial de ciclos monitor
+              </h4>
+              <p className="msg-muted" style={{ margin: "0.3rem 0 0", fontSize: "0.78rem" }}>
+                Auditoría local ({monitorCyclesTotal} en archivo). No incluye órdenes ejecutadas.
+              </p>
+            </div>
+            <div className="crypto-testnet-toolbar">
+              <button
+                type="button"
+                className="radar-refresh-btn"
+                style={{ fontSize: "0.82rem" }}
+                onClick={() => void loadMonitorCycles(20)}
+                disabled={monitorCyclesLoading}
+              >
+                {monitorCyclesLoading ? "Refrescando…" : "Refrescar"}
+              </button>
+              <CryptoRefreshBadge active={monitorCyclesLoading} />
+            </div>
+          </div>
+          {monitorCyclesError ? (
+            <p className="msg-error" style={{ margin: "0.5rem 0 0", fontSize: "0.82rem" }}>
+              {monitorCyclesError}
+            </p>
+          ) : null}
+          {monitorCycles.length > 0 ? (
+            <div className="table-wrap" style={{ marginTop: "0.55rem" }}>
+              <table className="crypto-testnet-table" style={{ fontSize: "0.8rem" }}>
+                <thead>
+                  <tr>
+                    <th>Fecha/hora</th>
+                    <th className="crypto-testnet-num">Escaneados</th>
+                    <th className="crypto-testnet-num">Candidatos</th>
+                    <th>Entrada</th>
+                    <th className="crypto-testnet-num">Salidas</th>
+                    <th>Razón</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {monitorCycles.map((row, idx) => (
+                    <tr key={`${row.timestamp ?? "t"}-${idx}`}>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        {fmtIsoLocalShort(row.timestamp ?? row.cycle_finished_at ?? "")}
+                      </td>
+                      <td className="crypto-testnet-num">{row.scan_count ?? "—"}</td>
+                      <td className="crypto-testnet-num">{row.candidates_count ?? "—"}</td>
+                      <td>{row.entry_proposal_generated ? "Sí" : "No"}</td>
+                      <td className="crypto-testnet-num">{row.exit_proposals_count ?? 0}</td>
+                      <td
+                        style={{ maxWidth: "14rem", overflow: "hidden", textOverflow: "ellipsis" }}
+                        title={monitorCycleReasonLabel(row)}
+                      >
+                        {monitorCycleReasonLabel(row)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : monitorCyclesLoading ? (
+            <p className="msg-muted" style={{ margin: "0.5rem 0 0", fontSize: "0.82rem" }}>
+              Cargando historial…
+            </p>
+          ) : (
+            <p className="msg-muted" style={{ margin: "0.5rem 0 0", fontSize: "0.82rem" }}>
+              Sin ciclos registrados. Iniciá el monitor y esperá al menos una revisión.
+            </p>
+          )}
+        </div>
       </section>
 
       {connected ? (
         <>
           {/* 3 — Abrir orden manual (Spot Testnet) */}
-          <section className="card crypto-testnet-section crypto-testnet-manual-card">
+          <section
+            ref={manualOrderSectionRef}
+            id="crypto-testnet-manual-order"
+            className="card crypto-testnet-section crypto-testnet-manual-card"
+          >
             <h3 className="dashboard-section-title crypto-testnet-section-title">Abrir orden manual</h3>
             <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.875rem" }}>
               <strong>Dinero ficticio de Binance</strong>, ejecución real sólo contra <strong>Spot Testnet</strong> (no el
@@ -1584,7 +2145,41 @@ export function CryptoTestnetPanel() {
             <div className="crypto-testnet-note crypto-testnet-note--blue">
               Límite por orden: hasta {MAX_TESTNET_ORDER_USDT} USDT · pares en whitelist · mercado spot testnet.
             </div>
-            <form className="crypto-testnet-order-form" onSubmit={(ev) => void submitTestnetMarketOrder(ev)}>
+            {proposalPrefillMessage ? (
+              <p
+                className="crypto-testnet-note crypto-testnet-note--blue"
+                style={{ marginTop: "0.65rem", marginBottom: 0, fontSize: "0.875rem" }}
+                role="status"
+              >
+                {proposalPrefillMessage}
+              </p>
+            ) : null}
+            <form className="crypto-testnet-order-form" onSubmit={(ev) => void submitTestnetManualOrder(ev)}>
+              <fieldset className="crypto-testnet-fieldset" style={{ marginBottom: "0.75rem" }}>
+                <legend className="msg-muted crypto-testnet-legend">Tipo de orden</legend>
+                <div className="crypto-testnet-radio-row">
+                  <label className="crypto-testnet-radio">
+                    <input
+                      type="radio"
+                      name="testnet-order-type"
+                      checked={manualOrderType === "market"}
+                      onChange={() => setManualOrderType("market")}
+                      disabled={orderBusy}
+                    />
+                    MARKET
+                  </label>
+                  <label className="crypto-testnet-radio">
+                    <input
+                      type="radio"
+                      name="testnet-order-type"
+                      checked={manualOrderType === "limit"}
+                      onChange={() => setManualOrderType("limit")}
+                      disabled={orderBusy}
+                    />
+                    LIMIT
+                  </label>
+                </div>
+              </fieldset>
               <div className="radar-toolbar" style={{ marginBottom: "0.85rem" }}>
                 <label className="radar-toolbar__field">
                   <span className="radar-toolbar__label">Par</span>
@@ -1650,7 +2245,44 @@ export function CryptoTestnetPanel() {
                 </div>
               </div>
 
-              {manualSide === "buy" ? (
+              {manualOrderType === "limit" ? (
+                <>
+                  <label className="crypto-testnet-field">
+                    <span className="msg-muted">Cantidad ({baseAssetHint})</span>
+                    <input
+                      type="number"
+                      className="radar-input"
+                      min={0}
+                      step="any"
+                      value={manualLimitQty}
+                      onChange={(ev) => setManualLimitQty(ev.target.value)}
+                      disabled={orderBusy}
+                    />
+                  </label>
+                  <label className="crypto-testnet-field">
+                    <span className="msg-muted">Precio límite (USDT)</span>
+                    <input
+                      type="number"
+                      className="radar-input"
+                      min={0}
+                      step="any"
+                      value={manualLimitPrice}
+                      onChange={(ev) => setManualLimitPrice(ev.target.value)}
+                      disabled={orderBusy}
+                      placeholder={pairPrice != null ? String(pairPrice) : "ej. precio actual"}
+                    />
+                    {limitNotionalEstimate !== null ? (
+                      <span className="msg-muted" style={{ fontSize: "0.82rem", marginTop: "0.35rem" }}>
+                        Notional ≈ {fmtNum(limitNotionalEstimate)} USDT (cantidad × precio límite)
+                      </span>
+                    ) : null}
+                  </label>
+                  <p className="msg-muted" style={{ fontSize: "0.82rem", marginTop: 0 }}>
+                    La orden LIMIT queda en <strong>órdenes abiertas</strong> hasta que el mercado llegue al precio.
+                    Podés cancelarla desde la tabla de abajo.
+                  </p>
+                </>
+              ) : manualSide === "buy" ? (
                 <label className="crypto-testnet-field">
                   <span className="msg-muted">Monto en USDT (comprás contra {manualSymbol})</span>
                   <input
@@ -1736,14 +2368,30 @@ export function CryptoTestnetPanel() {
 
               <div>
                 <button type="submit" className="radar-refresh-btn" disabled={orderBusy}>
-                  {orderBusy ? "Enviando…" : manualSide === "buy" ? "Comprar" : "Vender"}
+                  {orderBusy
+                    ? "Enviando…"
+                    : manualOrderType === "limit"
+                      ? manualSide === "buy"
+                        ? "Enviar LIMIT BUY"
+                        : "Enviar LIMIT SELL"
+                      : manualSide === "buy"
+                        ? "Comprar"
+                        : "Vender"}
                 </button>
               </div>
             </form>
             {orderFormError ? <p className="msg-error crypto-testnet-block-start">{orderFormError}</p> : null}
+            {orderSuccessMessage ? (
+              <p
+                className="msg-muted crypto-testnet-block-start"
+                style={{ fontSize: "0.875rem", color: "var(--success, #16a34a)" }}
+              >
+                {orderSuccessMessage}
+              </p>
+            ) : null}
 
             <div className="crypto-testnet-manual-footer">
-              <h4 className="crypto-testnet-subheading">Última orden ejecutada</h4>
+              <h4 className="crypto-testnet-subheading">Última orden enviada</h4>
               {lastOrder ? (
                 <div className="crypto-testnet-last-order">
                   <span
@@ -1755,12 +2403,24 @@ export function CryptoTestnetPanel() {
                   </span>
                   <div className="crypto-testnet-last-grid">
                     <div>
+                      <span className="crypto-testnet-lo-label">Tipo</span>
+                      <span className="crypto-testnet-lo-value">{orderTypeLabel(lastOrder)}</span>
+                    </div>
+                    <div>
                       <span className="crypto-testnet-lo-label">Par</span>
                       <span className="crypto-testnet-lo-value">{lastOrder.symbol}</span>
                     </div>
+                    {lastOrder.price != null ? (
+                      <div>
+                        <span className="crypto-testnet-lo-label">Precio límite</span>
+                        <span className="crypto-testnet-lo-value">{fmtNum(lastOrder.price)} USDT</span>
+                      </div>
+                    ) : null}
                     <div>
                       <span className="crypto-testnet-lo-label">Cantidad</span>
-                      <span className="crypto-testnet-lo-value">{fmtNum(lastOrder.filled)}</span>
+                      <span className="crypto-testnet-lo-value">
+                        {fmtNum(lastOrder.amount ?? lastOrder.filled)}
+                      </span>
                     </div>
                     <div>
                       <span className="crypto-testnet-lo-label">Cost / notional</span>
@@ -1903,6 +2563,16 @@ export function CryptoTestnetPanel() {
             </div>
           </div>
           {openOrdersError ? <p className="msg-error">{openOrdersError}</p> : null}
+          {cancelOpenOrderError ? (
+            <p className="msg-error" style={{ fontSize: "0.875rem", marginTop: "0.5rem" }}>
+              {cancelOpenOrderError}
+            </p>
+          ) : null}
+          {cancelOpenOrderMessage ? (
+            <p className="msg-muted" style={{ fontSize: "0.875rem", marginTop: "0.5rem", color: "var(--success, #16a34a)" }}>
+              {cancelOpenOrderMessage}
+            </p>
+          ) : null}
           {openOrdersPayload?.ok ? (
             openOrdersPayload.orders.length === 0 ? (
               <div className="crypto-testnet-empty-panel" role="status">
@@ -1922,6 +2592,7 @@ export function CryptoTestnetPanel() {
                       <th className="crypto-testnet-num">Ejecutado</th>
                       <th className="crypto-testnet-num">Pendiente</th>
                       <th>Estado</th>
+                      <th />
                     </tr>
                   </thead>
                   <tbody>
@@ -1936,6 +2607,27 @@ export function CryptoTestnetPanel() {
                         <td className="crypto-testnet-num">{fmtNum(r.filled)}</td>
                         <td className="crypto-testnet-num">{fmtNum(r.remaining)}</td>
                         <td>{r.status}</td>
+                        <td>
+                          {r.order_id != null ? (
+                            <button
+                              type="button"
+                              className="radar-refresh-btn"
+                              style={{ fontSize: "0.78rem", padding: "0.2rem 0.5rem" }}
+                              disabled={
+                                !connected ||
+                                openOrdersLoading ||
+                                cancelOpenOrderKey === `${r.symbol}-${String(r.order_id)}`
+                              }
+                              onClick={() => void handleCancelOpenOrder(r)}
+                            >
+                              {cancelOpenOrderKey === `${r.symbol}-${String(r.order_id)}`
+                                ? "Cancelando…"
+                                : "Cancelar"}
+                            </button>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1971,9 +2663,28 @@ export function CryptoTestnetPanel() {
               <button type="button" className="radar-refresh-btn" onClick={() => void loadOrders()} disabled={ordersLoading}>
                 {ordersLoading ? "Refrescando…" : "Refrescar historial"}
               </button>
-              <CryptoRefreshBadge active={ordersLoading} />
+              <button
+                type="button"
+                className="radar-refresh-btn"
+                onClick={() => void handleSyncOrderHistory()}
+                disabled={ordersLoading || syncHistoryBusy || !connected}
+                title="Consulta Binance Spot Testnet y actualiza órdenes LIMIT abiertas en el historial local (no envía ni cancela órdenes)."
+              >
+                {syncHistoryBusy ? "Sincronizando…" : "Sincronizar estado"}
+              </button>
+              <CryptoRefreshBadge active={ordersLoading || syncHistoryBusy} />
             </div>
           </div>
+          {syncHistoryMessage ? (
+            <p className="msg-muted crypto-testnet-block-start" style={{ fontSize: "0.875rem", margin: 0 }}>
+              {syncHistoryMessage}
+            </p>
+          ) : null}
+          {syncHistoryError ? (
+            <p className="msg-error crypto-testnet-block-start" style={{ fontSize: "0.875rem", margin: 0 }}>
+              {syncHistoryError}
+            </p>
+          ) : null}
           {ordersError ? <p className="msg-error">{ordersError}</p> : null}
           {recentOrders.length > 0 ? (
             <div className="table-wrap">
@@ -1981,9 +2692,12 @@ export function CryptoTestnetPanel() {
                 <thead>
                   <tr>
                     <th>Fecha</th>
-                    <th>Tipo</th>
+                    <th>Tipo orden</th>
+                    <th>Lado</th>
                     <th>Símbolo</th>
                     <th className="crypto-testnet-num">Cantidad</th>
+                    <th className="crypto-testnet-num">Ejecutado</th>
+                    <th className="crypto-testnet-num">Pendiente</th>
                     <th className="crypto-testnet-num">Cost</th>
                     <th className="crypto-testnet-num">Avg</th>
                     <th>Estado</th>
@@ -1993,9 +2707,12 @@ export function CryptoTestnetPanel() {
                   {recentOrders.map((row, idx) => (
                     <tr key={`${row.created_at}-${String(row.order_id)}-${idx}`}>
                       <td style={{ whiteSpace: "nowrap", fontSize: "0.82rem" }}>{fmtIsoLocalShort(row.created_at)}</td>
+                      <td>{orderTypeLabel(row)}</td>
                       <td>{sideHistoryLabel(row.side)}</td>
                       <td>{row.symbol ?? "—"}</td>
+                      <td className="crypto-testnet-num">{fmtNum(row.amount)}</td>
                       <td className="crypto-testnet-num">{fmtNum(row.filled)}</td>
+                      <td className="crypto-testnet-num">{fmtNum(row.remaining)}</td>
                       <td className="crypto-testnet-num">{fmtNum(row.cost)}</td>
                       <td className="crypto-testnet-num">{fmtNum(row.average)}</td>
                       <td>{row.status ?? row.raw_status ?? "—"}</td>

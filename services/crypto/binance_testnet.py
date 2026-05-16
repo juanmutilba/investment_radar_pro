@@ -14,8 +14,37 @@ from pathlib import Path
 from typing import Any, Literal
 
 _LOG_PREFIX = "[CRYPTO_TESTNET]"
+_CANCEL_ORDER_LOG_PREFIX = "[CRYPTO_TESTNET_CANCEL_ORDER]"
+_LIMIT_ORDER_LOG_PREFIX = "[CRYPTO_TESTNET_LIMIT_ORDER]"
+_SYNC_ORDERS_LOG_PREFIX = "[CRYPTO_TESTNET_SYNC_ORDERS]"
+_TRAILING_EXIT_LOG_PREFIX = "[CRYPTO_TESTNET_TRAILING_EXIT]"
+DEFAULT_TESTNET_TRAILING_STOP_PCT: float = 1.5
+
+# Estados LIMIT en historial local que pueden cambiar en el exchange (solo lectura/sync).
+_SYNCABLE_LIMIT_STATUSES = frozenset(
+    {
+        "open",
+        "pending",
+        "new",
+        "partially_filled",
+        "partial",
+    }
+)
+_FINAL_ORDER_STATUSES = frozenset(
+    {
+        "filled",
+        "closed",
+        "canceled",
+        "cancelled",
+        "expired",
+        "rejected",
+    }
+)
 _ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 _ORDERS_JSON = Path(__file__).resolve().parents[2] / "data" / "crypto_testnet_orders.json"
+_POSITION_STATE_JSON = (
+    Path(__file__).resolve().parents[2] / "data" / "crypto_testnet_position_state.json"
+)
 _PROBE_SYMBOL = "BTC/USDT"
 UrlsApiSafe = Literal["sandbox", "testnet", "real", "unknown"]
 
@@ -43,6 +72,22 @@ MIN_MARKET_ORDER_QUOTE_USDT: float = 0.01
 
 def _log(msg: str) -> None:
     print(f"{_LOG_PREFIX} {msg}", flush=True)
+
+
+def _log_cancel_order(msg: str) -> None:
+    print(f"{_CANCEL_ORDER_LOG_PREFIX} {msg}", flush=True)
+
+
+def _log_limit_order(msg: str) -> None:
+    print(f"{_LIMIT_ORDER_LOG_PREFIX} {msg}", flush=True)
+
+
+def _log_sync_orders(msg: str) -> None:
+    print(f"{_SYNC_ORDERS_LOG_PREFIX} {msg}", flush=True)
+
+
+def _log_trailing_exit(msg: str) -> None:
+    print(f"{_TRAILING_EXIT_LOG_PREFIX} {msg}", flush=True)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -927,6 +972,108 @@ def get_testnet_open_orders(symbol: str | None = None) -> dict[str, Any]:
     }
 
 
+def _parse_testnet_order_id(order_id: int | str) -> int | str | None:
+    if isinstance(order_id, bool):
+        return None
+    if isinstance(order_id, int):
+        return order_id if order_id > 0 else None
+    if isinstance(order_id, float):
+        if order_id != order_id or order_id <= 0 or abs(order_id - int(order_id)) > 1e-9:
+            return None
+        return int(order_id)
+    raw = str(order_id).strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        n = int(raw)
+        return n if n > 0 else None
+    return raw
+
+
+def cancel_testnet_order(symbol: str, order_id: int | str) -> dict[str, Any]:
+    """
+    Cancela una orden spot abierta en Binance Testnet (sandbox).
+    No escribe en data/crypto_testnet_orders.json (solo log).
+    """
+    _ensure_dotenv()
+    sym_display = (symbol or "").strip().upper()
+    oid_parsed = _parse_testnet_order_id(order_id)
+
+    def _fail(msg: str, *, http_status: int = 502) -> dict[str, Any]:
+        _log_cancel_order(f"FAIL symbol={sym_display} order_id={order_id!r} err={msg}")
+        return {
+            "ok": False,
+            "symbol": sym_display,
+            "order_id": oid_parsed if oid_parsed is not None else order_id,
+            "status": None,
+            "message": None,
+            "error": msg,
+            "http_status": http_status,
+            "raw": None,
+        }
+
+    if oid_parsed is None:
+        return _fail("order_id inválido", http_status=400)
+
+    sym = _normalize_whitelisted_symbol(symbol)
+    if sym is None:
+        return _fail(
+            f"Símbolo no permitido; whitelist: {sorted(MARKET_ORDER_SYMBOL_WHITELIST)}",
+            http_status=400,
+        )
+
+    if not _ccxt_available():
+        return _fail("ccxt no instalado", http_status=503)
+
+    if not is_testnet_enabled():
+        return _fail("BINANCE_TESTNET_ENABLED=false", http_status=503)
+
+    if not is_testnet_configured():
+        return _fail("Testnet no configurado (API key/secret)", http_status=503)
+
+    ex = get_testnet_exchange()
+    if ex is None:
+        return _fail("Exchange testnet no disponible", http_status=503)
+
+    try:
+        _assert_exchange_is_sandbox(ex, "cancel_order")
+    except RuntimeError as e:
+        return _fail(str(e), http_status=503)
+
+    _log_cancel_order(f"request symbol={sym} order_id={oid_parsed}")
+    try:
+        raw = ex.cancel_order(oid_parsed, sym)
+    except Exception as e:
+        err = _safe_error(e)
+        code = _http_status_for_exchange_failure(e)
+        return _fail(f"No se pudo cancelar la orden: {err}", http_status=code)
+
+    if not isinstance(raw, dict):
+        return _fail("Respuesta inválida al cancelar orden", http_status=502)
+
+    st = raw.get("status")
+    status_s = str(st).lower() if st is not None else "canceled"
+    oid_raw = raw.get("id")
+    if oid_raw is None:
+        oid_out: str | int = oid_parsed
+    elif isinstance(oid_raw, (str, int)):
+        oid_out = oid_raw
+    else:
+        oid_out = str(oid_raw)
+
+    msg = f"Orden testnet {oid_out} cancelada ({sym})"
+    _log_cancel_order(f"OK {msg} status={status_s}")
+    return {
+        "ok": True,
+        "symbol": sym,
+        "order_id": oid_out,
+        "status": status_s,
+        "message": msg,
+        "error": None,
+        "raw": raw,
+    }
+
+
 def get_testnet_account_info() -> dict[str, Any]:
     """Resumen de cuenta testnet derivado del balance (sin secretos ni órdenes)."""
     bal = get_testnet_balances()
@@ -1017,7 +1164,13 @@ def _safe_ccxt_float(v: Any) -> float | None:
     return x
 
 
-def _summarize_ccxt_order(sym: str, side: str, raw: dict[str, Any]) -> dict[str, Any]:
+def _summarize_ccxt_order(
+    sym: str,
+    side: str,
+    raw: dict[str, Any],
+    *,
+    order_type: str = "market",
+) -> dict[str, Any]:
     oid = raw.get("id")
     status = raw.get("status")
     if isinstance(status, str):
@@ -1034,11 +1187,16 @@ def _summarize_ccxt_order(sym: str, side: str, raw: dict[str, Any]) -> dict[str,
     else:
         oid_out = str(oid)
 
+    ot = (order_type or "market").strip().lower()
     return {
         "symbol": sym,
         "side": side,
         "order_id": oid_out,
         "status": status_s,
+        "order_type": ot,
+        "type": ot,
+        "price": _safe_ccxt_float(raw.get("price")),
+        "amount": _safe_ccxt_float(raw.get("amount")),
         "filled": _safe_ccxt_float(raw.get("filled")),
         "cost": _safe_ccxt_float(raw.get("cost")),
         "average": _safe_ccxt_float(raw.get("average")),
@@ -1166,6 +1324,122 @@ def _local_orders_for_symbol(all_rows: list[dict[str, Any]], symbol: str) -> lis
     return out
 
 
+def _position_state_symbol_key(symbol: str) -> str:
+    return str(symbol or "").strip().upper().replace(" ", "")
+
+
+def _load_testnet_position_state() -> dict[str, dict[str, Any]]:
+    if not _POSITION_STATE_JSON.is_file():
+        return {}
+    try:
+        raw = json.loads(_POSITION_STATE_JSON.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for k, v in raw.items():
+        if isinstance(k, str) and isinstance(v, dict):
+            out[_position_state_symbol_key(k)] = v
+    return out
+
+
+def _atomic_write_testnet_position_state(state: dict[str, dict[str, Any]]) -> None:
+    _POSITION_STATE_JSON.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _POSITION_STATE_JSON.with_suffix(".tmp_write")
+    data = json.dumps(state, ensure_ascii=False, indent=2)
+    tmp.write_text(data + ("\n" if not data.endswith("\n") else ""), encoding="utf-8")
+    tmp.replace(_POSITION_STATE_JSON)
+
+
+def _effective_trailing_stop_pct(trailing_stop_pct: float | None) -> float:
+    """None → default 1.5%; 0 desactiva trailing; >0 usa el valor indicado."""
+    if trailing_stop_pct is None:
+        return DEFAULT_TESTNET_TRAILING_STOP_PCT
+    if not math.isfinite(trailing_stop_pct) or trailing_stop_pct < 0:
+        return DEFAULT_TESTNET_TRAILING_STOP_PCT
+    return float(trailing_stop_pct)
+
+
+def _update_trailing_state_entry(
+    state: dict[str, dict[str, Any]],
+    symbol: str,
+    current_price: float,
+    trailing_stop_pct: float,
+) -> tuple[dict[str, Any], bool]:
+    """
+    Actualiza highest_price para el par y devuelve snapshot + si hubo cambio en disco.
+    trailing_stop_price = highest * (1 - pct/100).
+    """
+    key = _position_state_symbol_key(symbol)
+    prev = state.get(key) if isinstance(state.get(key), dict) else {}
+    prev_high = _safe_ccxt_float(prev.get("highest_price"))
+    highest = prev_high if prev_high is not None and prev_high > 0 else current_price
+    if current_price > highest:
+        highest = current_price
+
+    trail_price = highest * (1.0 - trailing_stop_pct / 100.0)
+    now_iso = datetime.now().astimezone().isoformat(timespec="seconds")
+    entry = {
+        "highest_price": round(highest, 8),
+        "trailing_stop_pct": round(trailing_stop_pct, 6),
+        "trailing_stop_price": round(trail_price, 8),
+        "updated_at": now_iso,
+    }
+    changed = (
+        prev.get("highest_price") != entry["highest_price"]
+        or prev.get("trailing_stop_pct") != entry["trailing_stop_pct"]
+        or prev.get("trailing_stop_price") != entry["trailing_stop_price"]
+        or prev.get("updated_at") != entry["updated_at"]
+    )
+    state[key] = entry
+    snapshot = {
+        "highest_price": entry["highest_price"],
+        "trailing_stop_pct": entry["trailing_stop_pct"],
+        "trailing_stop_price": entry["trailing_stop_price"],
+        "updated_at": entry["updated_at"],
+        "triggered": current_price <= trail_price + 1e-12,
+    }
+    return snapshot, changed
+
+
+def _build_testnet_exit_proposal(
+    *,
+    asset: str,
+    symbol: str,
+    exit_reason: str,
+    free: float,
+    px: float,
+    value_free: float,
+    avg_entry: float | None,
+    pnl_pct: float | None,
+    trailing_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    sell_quote = free * px
+    obj: dict[str, Any] = {
+        "asset": asset,
+        "symbol": symbol,
+        "side": "sell",
+        "reason": exit_reason,
+        "exit_reason": exit_reason,
+        "amount_base": free,
+        "sell_quote_amount_usdt": round(sell_quote, 8),
+        "current_price_usdt": round(px, 8),
+        "current_price": round(px, 8),
+        "value_usdt": round(value_free, 8),
+        "source": "assisted_testnet",
+    }
+    if avg_entry is not None and math.isfinite(avg_entry):
+        obj["avg_entry_usdt"] = round(avg_entry, 8)
+    if pnl_pct is not None and math.isfinite(pnl_pct):
+        obj["pnl_pct"] = round(pnl_pct, 6)
+    if trailing_snapshot:
+        obj["highest_price"] = trailing_snapshot.get("highest_price")
+        obj["trailing_stop_pct"] = trailing_snapshot.get("trailing_stop_pct")
+        obj["trailing_stop_price"] = trailing_snapshot.get("trailing_stop_price")
+    return obj
+
+
 def propose_testnet_exits(
     *,
     stop_loss_pct: float = 2.0,
@@ -1174,10 +1448,8 @@ def propose_testnet_exits(
     min_value_usdt: float = 5.0,
 ) -> dict[str, Any]:
     """
-    Propone ventas testnet según SL/TP simples sobre PnL %, sin ejecutar órdenes.
-    Precio de entrada aproximado: sólo desde data/crypto_testnet_orders.json (compras/ventas
-    registradas por esta app). Si el saldo en Binance no cuadra con ese historial → missing_local_entry.
-    Trailing: no implementado (se informa como not_supported_yet).
+    Propone ventas testnet según SL/TP (PnL % desde historial local) y trailing stop
+    (máximo en data/crypto_testnet_position_state.json). Sin ejecutar órdenes.
     """
     if not math.isfinite(stop_loss_pct) or stop_loss_pct < 0:
         raise ValueError("stop_loss_pct inválido")
@@ -1190,9 +1462,9 @@ def propose_testnet_exits(
     if not math.isfinite(min_value_usdt) or min_value_usdt < 0:
         raise ValueError("min_value_usdt inválido")
 
-    trailing_note = "not_supported_yet"
-    if trailing_stop_pct is not None and trailing_stop_pct > 0:
-        _log(f"propose_testnet_exits: trailing_stop_pct={trailing_stop_pct} ignorado ({trailing_note})")
+    effective_trail = _effective_trailing_stop_pct(trailing_stop_pct)
+    trailing_active = effective_trail > 0
+    trailing_note = "active" if trailing_active else "disabled"
 
     pos_payload = get_testnet_positions()
     if not pos_payload.get("ok"):
@@ -1202,9 +1474,13 @@ def propose_testnet_exits(
             "proposals": [],
             "evaluated": [],
             "trailing_stop_status": trailing_note,
+            "trailing_stop_pct_effective": effective_trail if trailing_active else None,
         }
 
     all_local = _load_testnet_orders_json()
+    position_state = _load_testnet_position_state()
+    position_state_dirty = False
+    active_symbols: set[str] = set()
     proposals: list[dict[str, Any]] = []
     evaluated: list[dict[str, Any]] = []
 
@@ -1262,6 +1538,8 @@ def propose_testnet_exits(
             evaluated.append(eval_row)
             continue
 
+        active_symbols.add(_position_state_symbol_key(sym_s))
+
         if px is None or px <= 0:
             eval_row["status"] = "skipped"
             eval_row["reason"] = "no_price"
@@ -1277,67 +1555,92 @@ def propose_testnet_exits(
 
         eval_row["value_usdt"] = round(value_free, 8)
 
-        if not pricing_ok or not local_covers:
-            eval_row["status"] = "rejected"
-            eval_row["reason"] = "missing_local_entry"
-            evaluated.append(eval_row)
-            continue
-
-        if base_inv <= 1e-18:
-            eval_row["status"] = "rejected"
-            eval_row["reason"] = "missing_local_entry"
-            evaluated.append(eval_row)
-            continue
-
-        avg_entry = cost_inv / base_inv
-        if avg_entry <= 0 or not math.isfinite(avg_entry):
-            eval_row["status"] = "rejected"
-            eval_row["reason"] = "missing_local_entry"
-            evaluated.append(eval_row)
-            continue
-
-        pnl_pct = (px - avg_entry) / avg_entry * 100.0
-        eval_row["avg_entry_usdt"] = round(avg_entry, 8)
-        eval_row["pnl_pct"] = round(pnl_pct, 6)
-
         if value_free + 1e-9 < min_value_usdt:
             eval_row["status"] = "skipped"
             eval_row["reason"] = "below_min_value"
             evaluated.append(eval_row)
             continue
 
+        avg_entry: float | None = None
+        pnl_pct: float | None = None
+        local_entry_ok = pricing_ok and local_covers and base_inv > 1e-18
+        if local_entry_ok:
+            avg_entry = cost_inv / base_inv
+            if avg_entry <= 0 or not math.isfinite(avg_entry):
+                local_entry_ok = False
+                avg_entry = None
+            else:
+                pnl_pct = (px - avg_entry) / avg_entry * 100.0
+                eval_row["avg_entry_usdt"] = round(avg_entry, 8)
+                eval_row["pnl_pct"] = round(pnl_pct, 6)
+
         exit_reason: str | None = None
-        if stop_loss_pct > 0 and pnl_pct <= -stop_loss_pct:
-            exit_reason = "stop_loss"
-        elif take_profit_pct > 0 and pnl_pct >= take_profit_pct:
-            exit_reason = "take_profit"
+        trailing_snapshot: dict[str, Any] | None = None
+
+        if local_entry_ok and pnl_pct is not None:
+            if stop_loss_pct > 0 and pnl_pct <= -stop_loss_pct:
+                exit_reason = "stop_loss"
+            elif take_profit_pct > 0 and pnl_pct >= take_profit_pct:
+                exit_reason = "take_profit"
+
+        if exit_reason is None and trailing_active:
+            trailing_snapshot, st_changed = _update_trailing_state_entry(
+                position_state, sym_s, px, effective_trail
+            )
+            if st_changed:
+                position_state_dirty = True
+            eval_row["highest_price"] = trailing_snapshot.get("highest_price")
+            eval_row["trailing_stop_pct"] = trailing_snapshot.get("trailing_stop_pct")
+            eval_row["trailing_stop_price"] = trailing_snapshot.get("trailing_stop_price")
+            if trailing_snapshot.get("triggered"):
+                exit_reason = "trailing_stop"
+                _log_trailing_exit(
+                    f"propuesta {sym_s} px={px} high={trailing_snapshot.get('highest_price')} "
+                    f"trail={trailing_snapshot.get('trailing_stop_price')} pct={effective_trail}"
+                )
+            else:
+                _log_trailing_exit(
+                    f"hold {sym_s} px={px} high={trailing_snapshot.get('highest_price')} "
+                    f"trail={trailing_snapshot.get('trailing_stop_price')}"
+                )
 
         if exit_reason is None:
-            eval_row["status"] = "hold"
-            eval_reason = "inside_sl_tp_band"
-            eval_row["reason"] = eval_reason
+            if not local_entry_ok:
+                eval_row["status"] = "rejected"
+                eval_row["reason"] = "missing_local_entry"
+            else:
+                eval_row["status"] = "hold"
+                eval_row["reason"] = "inside_sl_tp_band"
             evaluated.append(eval_row)
             continue
 
-        sell_quote = free * px
-        proposal_obj = {
-            "asset": asset,
-            "symbol": sym_s,
-            "side": "sell",
-            "reason": exit_reason,
-            "amount_base": free,
-            "sell_quote_amount_usdt": round(sell_quote, 8),
-            "avg_entry_usdt": round(avg_entry, 8),
-            "current_price_usdt": round(px, 8),
-            "pnl_pct": round(pnl_pct, 6),
-            "value_usdt": round(value_free, 8),
-            "source": "assisted_testnet",
-        }
+        proposal_obj = _build_testnet_exit_proposal(
+            asset=asset,
+            symbol=sym_s,
+            exit_reason=exit_reason,
+            free=free,
+            px=px,
+            value_free=value_free,
+            avg_entry=avg_entry,
+            pnl_pct=pnl_pct,
+            trailing_snapshot=trailing_snapshot if exit_reason == "trailing_stop" else None,
+        )
         proposals.append(proposal_obj)
         eval_row["status"] = "proposed"
         eval_row["reason"] = exit_reason
+        eval_row["exit_reason"] = exit_reason
         eval_row["proposal"] = proposal_obj
         evaluated.append(eval_row)
+
+    pruned = {
+        k: v for k, v in position_state.items() if k in active_symbols and isinstance(v, dict)
+    }
+    if len(pruned) != len(position_state):
+        position_state.clear()
+        position_state.update(pruned)
+        position_state_dirty = True
+    if position_state_dirty:
+        _atomic_write_testnet_position_state(position_state)
 
     _log(f"propose_testnet_exits: proposals={len(proposals)} evaluated={len(evaluated)}")
     return {
@@ -1345,6 +1648,8 @@ def propose_testnet_exits(
         "proposals": proposals,
         "evaluated": evaluated,
         "trailing_stop_status": trailing_note,
+        "trailing_stop_pct_effective": effective_trail if trailing_active else None,
+        "default_trailing_stop_pct": DEFAULT_TESTNET_TRAILING_STOP_PCT,
         "stop_loss_pct": float(stop_loss_pct),
         "take_profit_pct": float(take_profit_pct),
         "min_value_usdt": float(min_value_usdt),
@@ -1403,14 +1708,26 @@ def _normalize_raw_status_for_store(raw_status: Any) -> str | None:
     return str(raw_status)[:160]
 
 
-def _append_manual_testnet_order_record(summary: dict[str, Any], raw_ccxt_order: dict[str, Any]) -> None:
+def _append_manual_testnet_order_record(
+    summary: dict[str, Any],
+    raw_ccxt_order: dict[str, Any],
+    *,
+    order_type: str = "MARKET",
+    limit_price: float | None = None,
+    amount: float | None = None,
+) -> None:
     """Persiste sólo campos permitidos (sin secrets)."""
+    ot = (order_type or "MARKET").strip().upper()
     row: dict[str, Any] = {
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "symbol": summary.get("symbol"),
         "side": summary.get("side"),
         "order_id": summary.get("order_id"),
         "status": summary.get("status"),
+        "order_type": ot,
+        "type": ot,
+        "limit_price": limit_price if limit_price is not None else summary.get("price"),
+        "amount": amount if amount is not None else summary.get("amount"),
         "filled": summary.get("filled"),
         "cost": summary.get("cost"),
         "average": summary.get("average"),
@@ -1435,6 +1752,194 @@ def get_testnet_order_history(limit: int = 50) -> dict[str, Any]:
     total = len(all_rows)
     tail = all_rows[-limit:] if len(all_rows) > limit else all_rows[:]
     return {"orders": list(reversed(tail)), "total": total}
+
+
+def _local_order_type_upper(row: dict[str, Any]) -> str:
+    return str(row.get("order_type") or row.get("type") or "").strip().upper()
+
+
+def _local_order_status_lower(row: dict[str, Any]) -> str:
+    return str(row.get("status") or row.get("raw_status") or "").strip().lower()
+
+
+def _should_sync_limit_history_row(row: dict[str, Any]) -> bool:
+    if _local_order_type_upper(row) != "LIMIT":
+        return False
+    st = _local_order_status_lower(row)
+    if not st:
+        return True
+    if st in _FINAL_ORDER_STATUSES:
+        return False
+    return st in _SYNCABLE_LIMIT_STATUSES
+
+
+def _apply_exchange_fetch_to_local_row(row: dict[str, Any], raw: dict[str, Any]) -> bool:
+    """Actualiza fila local desde fetch_order ccxt; devuelve True si hubo cambios."""
+    st_raw = raw.get("status")
+    status_s = str(st_raw).lower() if st_raw is not None else None
+
+    updates: dict[str, Any] = {
+        "status": status_s,
+        "filled": _safe_ccxt_float(raw.get("filled")),
+        "remaining": _safe_ccxt_float(raw.get("remaining")),
+        "average": _safe_ccxt_float(raw.get("average")),
+        "price": _safe_ccxt_float(raw.get("price")),
+        "cost": _safe_ccxt_float(raw.get("cost")),
+        "raw_status": _normalize_raw_status_for_store(st_raw),
+        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    ts_ex = _safe_ccxt_float(raw.get("timestamp"))
+    if ts_ex is not None:
+        updates["timestamp_exchange"] = ts_ex
+
+    updates["exchange_sync"] = {
+        "status": st_raw,
+        "filled": raw.get("filled"),
+        "remaining": raw.get("remaining"),
+        "average": raw.get("average"),
+        "price": raw.get("price"),
+        "cost": raw.get("cost"),
+    }
+
+    changed = False
+    for key, val in updates.items():
+        if row.get(key) != val:
+            row[key] = val
+            changed = True
+    return changed
+
+
+def sync_testnet_order_history(*, history_limit: int = 50) -> dict[str, Any]:
+    """
+    Sincroniza estado de órdenes LIMIT abiertas/pendientes del historial local contra Binance Testnet.
+    No crea ni cancela órdenes; no modifica MARKET cerradas salvo filas LIMIT elegibles.
+    """
+    _ensure_dotenv()
+    _log_sync_orders("inicio sync historial local LIMIT")
+
+    def _fail(msg: str) -> dict[str, Any]:
+        _log_sync_orders(f"FAIL {msg}")
+        hist = get_testnet_order_history(history_limit)
+        return {
+            "ok": False,
+            "error": msg,
+            "checked_count": 0,
+            "updated_count": 0,
+            "skipped_count": 0,
+            "errors_count": 0,
+            "errors": [],
+            "orders": hist.get("orders") or [],
+            "total": hist.get("total") or 0,
+        }
+
+    if not _ccxt_available():
+        return _fail("ccxt no instalado")
+
+    if not is_testnet_enabled():
+        return _fail("BINANCE_TESTNET_ENABLED=false")
+
+    if not is_testnet_configured():
+        return _fail("Testnet no configurado (API key/secret)")
+
+    ex = get_testnet_exchange()
+    if ex is None:
+        return _fail("Exchange testnet no disponible")
+
+    try:
+        _assert_exchange_is_sandbox(ex, "sync_order_history")
+    except RuntimeError as e:
+        return _fail(str(e))
+
+    rows = _load_testnet_orders_json()
+    checked_count = 0
+    updated_count = 0
+    skipped_count = 0
+    errors_count = 0
+    errors: list[dict[str, Any]] = []
+    file_changed = False
+
+    for row in rows:
+        if not _should_sync_limit_history_row(row):
+            continue
+
+        checked_count += 1
+        oid = _parse_testnet_order_id(row.get("order_id"))
+        sym = _normalize_whitelisted_symbol(str(row.get("symbol") or ""))
+
+        if oid is None:
+            skipped_count += 1
+            errors_count += 1
+            errors.append(
+                {
+                    "order_id": row.get("order_id"),
+                    "symbol": row.get("symbol"),
+                    "error": "order_id inválido en historial local",
+                }
+            )
+            continue
+
+        if sym is None:
+            skipped_count += 1
+            errors_count += 1
+            errors.append(
+                {
+                    "order_id": oid,
+                    "symbol": row.get("symbol"),
+                    "error": "símbolo no permitido o inválido",
+                }
+            )
+            continue
+
+        try:
+            raw = ex.fetch_order(oid, sym)
+        except Exception as e:
+            errors_count += 1
+            err = _safe_error(e)
+            errors.append({"order_id": oid, "symbol": sym, "error": err})
+            _log_sync_orders(f"fetch_order falló {sym} #{oid}: {err}")
+            continue
+
+        if not isinstance(raw, dict):
+            skipped_count += 1
+            errors_count += 1
+            errors.append(
+                {
+                    "order_id": oid,
+                    "symbol": sym,
+                    "error": "respuesta fetch_order inválida",
+                }
+            )
+            continue
+
+        if _apply_exchange_fetch_to_local_row(row, raw):
+            updated_count += 1
+            file_changed = True
+            _log_sync_orders(
+                f"actualizado {sym} #{oid} status={row.get('status')} "
+                f"filled={row.get('filled')} remaining={row.get('remaining')}"
+            )
+        else:
+            skipped_count += 1
+
+    if file_changed:
+        _atomic_write_testnet_orders(rows)
+
+    hist = get_testnet_order_history(history_limit)
+    _log_sync_orders(
+        f"fin checked={checked_count} updated={updated_count} "
+        f"skipped={skipped_count} errors={errors_count}"
+    )
+    return {
+        "ok": True,
+        "error": None,
+        "checked_count": checked_count,
+        "updated_count": updated_count,
+        "skipped_count": skipped_count,
+        "errors_count": errors_count,
+        "errors": errors,
+        "orders": hist.get("orders") or [],
+        "total": hist.get("total") or 0,
+    }
 
 
 def place_testnet_market_order(
@@ -1546,7 +2051,7 @@ def place_testnet_market_order(
         if not isinstance(raw, dict):
             return out_err("Respuesta de orden inválida", 502)
 
-        summary = _summarize_ccxt_order(sym, "buy", raw)
+        summary = _summarize_ccxt_order(sym, "buy", raw, order_type="market")
 
     else:
         base_asset = _base_asset_from_pair(sym)
@@ -1653,13 +2158,177 @@ def place_testnet_market_order(
         if not isinstance(raw, dict):
             return out_err("Respuesta de orden inválida", 502)
 
-        summary = _summarize_ccxt_order(sym, "sell", raw)
+        summary = _summarize_ccxt_order(sym, "sell", raw, order_type="market")
 
     try:
-        _append_manual_testnet_order_record(summary, raw)
+        _append_manual_testnet_order_record(summary, raw, order_type="MARKET")
     except Exception as e:
         _log(f"orders_json: fallo persistencia (orden ya ejecutada en exchange): {_safe_error(e)}")
 
+    return {
+        "ok": True,
+        "error": None,
+        "http_status": 200,
+        "order": summary,
+    }
+
+
+def place_testnet_limit_order(
+    symbol: str,
+    side: str,
+    quantity: float,
+    limit_price: float,
+    *,
+    max_quote_usdt: float = MAX_MARKET_ORDER_QUOTE_USDT,
+) -> dict[str, Any]:
+    """
+    Orden limit spot en Binance Testnet (sandbox); queda en libro hasta match.
+    quantity = cantidad del activo base; limit_price = precio límite en USDT.
+    """
+    _ensure_dotenv()
+    out_err = (
+        lambda e, code: {
+            "ok": False,
+            "error": e,
+            "http_status": code,
+            "order": None,
+        }
+    )
+
+    side_l = (side or "").strip().lower()
+    if side_l not in ("buy", "sell"):
+        return out_err("side debe ser buy o sell", 400)
+
+    try:
+        qty_in = float(quantity)
+        price_in = float(limit_price)
+    except (TypeError, ValueError):
+        return out_err("quantity o limit_price inválidos", 400)
+
+    if not (qty_in == qty_in) or qty_in <= 0:
+        return out_err("quantity debe ser > 0", 400)
+    if not (price_in == price_in) or price_in <= 0:
+        return out_err("limit_price debe ser > 0", 400)
+
+    if not _ccxt_available():
+        return out_err("ccxt no instalado", 503)
+
+    if not is_testnet_enabled():
+        return out_err("BINANCE_TESTNET_ENABLED=false", 503)
+
+    if not is_testnet_configured():
+        return out_err("Testnet no configurado (API key/secret)", 503)
+
+    sym = _normalize_whitelisted_symbol(symbol)
+    if sym is None:
+        return out_err(
+            f"Símbolo no permitido; whitelist: {sorted(MARKET_ORDER_SYMBOL_WHITELIST)}",
+            400,
+        )
+
+    notional = qty_in * price_in
+    if notional > max_quote_usdt + 1e-9:
+        return out_err(
+            f"Notional máximo por orden {max_quote_usdt} USDT (qty×precio={notional:.4f})",
+            400,
+        )
+
+    bal = get_testnet_balances()
+    if not bal.get("ok"):
+        return out_err(
+            f"Lectura de balance requerida antes de operar: {bal.get('error')}",
+            503,
+        )
+
+    ex = get_testnet_exchange()
+    if ex is None:
+        return out_err("Exchange testnet no disponible", 503)
+
+    try:
+        _assert_exchange_is_sandbox(ex, "limit_order")
+    except RuntimeError as e:
+        return out_err(str(e), 503)
+
+    amt = qty_in
+    price = price_in
+    atp = getattr(ex, "amount_to_precision", None)
+    ptp = getattr(ex, "price_to_precision", None)
+    if callable(atp):
+        try:
+            amt = float(atp(sym, qty_in))
+        except Exception:
+            amt = qty_in
+    if callable(ptp):
+        try:
+            price = float(ptp(sym, price_in))
+        except Exception:
+            price = price_in
+
+    if amt <= 0 or price <= 0:
+        return out_err("Cantidad o precio tras precisión inválidos", 400)
+
+    notional_adj = amt * price
+    if notional_adj > max_quote_usdt + 1e-9:
+        return out_err(f"Notional tras precisión supera {max_quote_usdt} USDT", 400)
+
+    if side_l == "buy":
+        usdt_free = _free_usdt_from_balances_payload(bal)
+        if usdt_free is None:
+            return out_err("No se pudo determinar USDT libre", 503)
+        if usdt_free + 1e-9 < notional_adj:
+            return out_err(
+                f"USDT libre insuficiente (libre≈{usdt_free:.8f}, necesario≈{notional_adj:.8f})",
+                400,
+            )
+        _log_limit_order(f"limit_buy: symbol={sym} amount={amt} price={price}")
+        try:
+            raw = ex.create_limit_buy_order(sym, amt, price)
+        except Exception as e:
+            err = _safe_error(e)
+            code = _http_status_for_exchange_failure(e)
+            _log_limit_order(f"limit_buy falló {err}")
+            return out_err(err, code)
+    else:
+        base_asset = _base_asset_from_pair(sym)
+        if base_asset is None:
+            return out_err("No se pudo determinar activo base del par", 400)
+        base_free = _free_asset_from_balances_payload(bal, base_asset)
+        if base_free is None:
+            return out_err(f"No se pudo determinar saldo libre de {base_asset}", 503)
+        if base_free + 1e-12 < amt:
+            return out_err(
+                f"{base_asset} libre insuficiente (libre≈{base_free:.12f}, pedido≈{amt})",
+                400,
+            )
+        _log_limit_order(f"limit_sell: symbol={sym} amount={amt} price={price}")
+        try:
+            raw = ex.create_limit_sell_order(sym, amt, price)
+        except Exception as e:
+            err = _safe_error(e)
+            code = _http_status_for_exchange_failure(e)
+            _log_limit_order(f"limit_sell falló {err}")
+            return out_err(err, code)
+
+    if not isinstance(raw, dict):
+        return out_err("Respuesta de orden inválida", 502)
+
+    summary = _summarize_ccxt_order(sym, side_l, raw, order_type="limit")
+    try:
+        _append_manual_testnet_order_record(
+            summary,
+            raw,
+            order_type="LIMIT",
+            limit_price=price,
+            amount=amt,
+        )
+    except Exception as e:
+        _log_limit_order(
+            f"orders_json: fallo persistencia (orden ya enviada en testnet): {_safe_error(e)}"
+        )
+
+    _log_limit_order(
+        f"OK order_id={summary.get('order_id')} status={summary.get('status')} symbol={sym}"
+    )
     return {
         "ok": True,
         "error": None,

@@ -349,6 +349,49 @@ function isCryptoTestnetOpenOrdersPayload(data: unknown): data is CryptoTestnetO
   );
 }
 
+/** POST /crypto/testnet/orders/cancel — cancelación manual (sandbox; sin auto-trading). */
+export type CryptoTestnetCancelOrderPayload = {
+  ok: boolean;
+  symbol: string;
+  order_id: string | number;
+  status?: string | null;
+  message?: string | null;
+  error?: string | null;
+  raw?: Record<string, unknown> | null;
+};
+
+export type CryptoTestnetCancelOrderBody = {
+  symbol: string;
+  order_id: number;
+};
+
+function isCryptoTestnetCancelOrderPayload(data: unknown): data is CryptoTestnetCancelOrderPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return o.ok === true && typeof o.symbol === "string" && (typeof o.order_id === "string" || typeof o.order_id === "number");
+}
+
+export async function postCryptoTestnetCancelOrder(
+  body: CryptoTestnetCancelOrderBody,
+): Promise<CryptoTestnetCancelOrderPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/orders/cancel`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({
+      symbol: body.symbol.trim(),
+      order_id: body.order_id,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetCancelOrderPayload(data)) {
+    throw new Error("Respuesta inesperada: POST /crypto/testnet/orders/cancel");
+  }
+  return data;
+}
+
 export async function getCryptoTestnetOpenOrders(symbol?: string | null): Promise<CryptoTestnetOpenOrdersPayload> {
   const q = new URLSearchParams();
   if (symbol != null && symbol.trim() !== "") q.set("symbol", symbol.trim());
@@ -464,13 +507,18 @@ export type CryptoTestnetExitProposal = {
   asset: string;
   symbol: string;
   side: "sell";
-  reason: "stop_loss" | "take_profit";
+  reason: "stop_loss" | "take_profit" | "trailing_stop";
+  exit_reason?: "stop_loss" | "take_profit" | "trailing_stop";
   amount_base: number;
   sell_quote_amount_usdt: number;
-  avg_entry_usdt: number;
+  avg_entry_usdt?: number;
   current_price_usdt: number;
-  pnl_pct: number;
+  current_price?: number;
+  pnl_pct?: number;
   value_usdt: number;
+  highest_price?: number;
+  trailing_stop_pct?: number;
+  trailing_stop_price?: number;
   source: string;
 };
 
@@ -487,6 +535,10 @@ export type CryptoTestnetExitEvaluatedRow = {
   local_inventory_base?: number | null;
   position_total_base?: number | null;
   free_base?: number | null;
+  highest_price?: number | null;
+  trailing_stop_pct?: number | null;
+  trailing_stop_price?: number | null;
+  exit_reason?: string | null;
 };
 
 export type CryptoTestnetProposeExitsPayload = {
@@ -495,6 +547,8 @@ export type CryptoTestnetProposeExitsPayload = {
   proposals: CryptoTestnetExitProposal[];
   evaluated: CryptoTestnetExitEvaluatedRow[];
   trailing_stop_status?: string;
+  trailing_stop_pct_effective?: number | null;
+  default_trailing_stop_pct?: number;
   stop_loss_pct?: number;
   take_profit_pct?: number;
   min_value_usdt?: number;
@@ -579,6 +633,14 @@ export type CryptoTestnetMonitorStatusPayload = {
   best_rejected_candidate?: CryptoCycleCandidate | null;
   last_entry_candidate?: CryptoCycleCandidate | null;
   last_primary_reason?: string | null;
+  last_scan_debug?: CryptoScanDebug | null;
+  last_watchlist_count?: number | null;
+  last_scan_count?: number | null;
+  last_candidates_count?: number | null;
+  last_exit_proposals_count?: number;
+  last_entry_proposal_generated?: boolean;
+  last_no_entry_reason?: string | null;
+  last_no_exit_reason?: string | null;
 };
 
 export type CryptoTestnetMonitorStartBody = {
@@ -653,6 +715,69 @@ export async function postCryptoTestnetMonitorStop(): Promise<CryptoTestnetMonit
   return data;
 }
 
+/** GET /crypto/testnet/monitor/cycles — historial JSONL de ciclos del monitor (auditoría). */
+export type CryptoTestnetMonitorCycleRow = {
+  timestamp?: string;
+  cycle_started_at?: string;
+  cycle_finished_at?: string;
+  duration_ms?: number;
+  interval_minutes?: number | null;
+  status?: string;
+  watchlist_count?: number | null;
+  scan_count?: number | null;
+  candidates_count?: number | null;
+  entry_proposal_generated?: boolean;
+  exit_proposals_count?: number;
+  no_entry_reason?: string | null;
+  no_exit_reason?: string | null;
+  scan_debug?: Record<string, unknown> | null;
+  entry_proposal?: {
+    symbol?: string;
+    side?: string;
+    signal?: string;
+    score?: number;
+    reason?: string;
+    quote_amount_usdt?: number;
+  } | null;
+  exit_proposals?: Array<{
+    asset?: string;
+    symbol?: string;
+    exit_reason?: string;
+    pnl_pct?: number;
+  }>;
+  errors?: string[];
+};
+
+export type CryptoTestnetMonitorCyclesPayload = {
+  ok: boolean;
+  error?: string;
+  cycles: CryptoTestnetMonitorCycleRow[];
+  total: number;
+};
+
+function isCryptoTestnetMonitorCyclesPayload(data: unknown): data is CryptoTestnetMonitorCyclesPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return typeof o.ok === "boolean" && Array.isArray(o.cycles);
+}
+
+export async function getCryptoTestnetMonitorCycles(limit = 20): Promise<CryptoTestnetMonitorCyclesPayload> {
+  const q = new URLSearchParams({ limit: String(Math.min(500, Math.max(1, limit))) });
+  const res = await fetch(`${BASE}/crypto/testnet/monitor/cycles?${q}`, {
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetMonitorCyclesPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/testnet/monitor/cycles");
+  }
+  const total =
+    typeof data.total === "number" && Number.isFinite(data.total) ? data.total : data.cycles.length;
+  return { ...data, total };
+}
+
 export async function getCryptoTestnetTicker(symbol: string): Promise<CryptoTestnetTickerPayload> {
   const q = new URLSearchParams({ symbol: symbol.trim() });
   const res = await fetch(`${BASE}/crypto/testnet/ticker?${q.toString()}`);
@@ -694,10 +819,21 @@ export type CryptoTestnetMarketOrderRow = {
   side: string;
   order_id: string | number | null;
   status: string | null;
+  order_type?: string | null;
+  type?: string | null;
+  price?: number | null;
+  amount?: number | null;
   filled: number | null;
   cost: number | null;
   average: number | null;
   timestamp: number | null;
+};
+
+export type CryptoTestnetLimitOrderBody = {
+  symbol: string;
+  side: "buy" | "sell";
+  quantity: number;
+  limit_price: number;
 };
 
 export type CryptoTestnetMarketOrderPayload = {
@@ -723,6 +859,24 @@ export async function postCryptoTestnetMarketOrder(
   return data as CryptoTestnetMarketOrderPayload;
 }
 
+export async function postCryptoTestnetLimitOrder(
+  body: CryptoTestnetLimitOrderBody,
+): Promise<CryptoTestnetMarketOrderPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/orders/limit`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object") throw new Error("Respuesta vacía tras orden limit testnet");
+  const o = data as Record<string, unknown>;
+  if (typeof o.ok !== "boolean" || !o.ok) throw new Error("Respuesta inesperada: orden limit testnet");
+  return data as CryptoTestnetMarketOrderPayload;
+}
+
 /** Historial persistido localmente (órdenes enviadas desde esta app). */
 export type CryptoTestnetStoredOrder = {
   created_at: string;
@@ -730,11 +884,18 @@ export type CryptoTestnetStoredOrder = {
   side?: string | null;
   order_id?: string | number | null;
   status?: string | null;
+  order_type?: string | null;
+  type?: string | null;
+  limit_price?: number | null;
+  amount?: number | null;
   filled?: number | null;
+  remaining?: number | null;
   cost?: number | null;
   average?: number | null;
+  price?: number | null;
   timestamp_exchange?: number | null;
   raw_status?: string | null;
+  updated_at?: string | null;
   source?: string;
 };
 
@@ -760,6 +921,49 @@ export async function getCryptoTestnetOrders(limit = 50): Promise<CryptoTestnetO
         ? o.orders.length
         : 0;
   return { orders: o.orders as CryptoTestnetStoredOrder[], total };
+}
+
+/** POST /crypto/testnet/orders/sync-history — actualiza LIMIT abiertas en historial local desde testnet. */
+export type CryptoTestnetSyncHistoryPayload = {
+  ok: boolean;
+  error?: string | null;
+  checked_count: number;
+  updated_count: number;
+  skipped_count: number;
+  errors_count: number;
+  errors?: Array<{ order_id?: string | number | null; symbol?: string | null; error?: string }>;
+  orders: CryptoTestnetStoredOrder[];
+  total: number;
+};
+
+function isCryptoTestnetSyncHistoryPayload(data: unknown): data is CryptoTestnetSyncHistoryPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.ok === "boolean" &&
+    typeof o.checked_count === "number" &&
+    typeof o.updated_count === "number" &&
+    typeof o.skipped_count === "number" &&
+    typeof o.errors_count === "number" &&
+    Array.isArray(o.orders)
+  );
+}
+
+export async function postCryptoTestnetSyncHistory(limit = 50): Promise<CryptoTestnetSyncHistoryPayload> {
+  const q = new URLSearchParams({ limit: String(Math.min(500, Math.max(1, limit))) });
+  const res = await fetch(`${BASE}/crypto/testnet/orders/sync-history?${q}`, { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetSyncHistoryPayload(data)) {
+    throw new Error("Respuesta inesperada: POST /crypto/testnet/orders/sync-history");
+  }
+  const total =
+    typeof data.total === "number" && Number.isFinite(data.total)
+      ? data.total
+      : data.orders.length;
+  return { ...data, total };
 }
 
 export async function getCryptoTicker(symbol: string): Promise<CryptoTicker> {
@@ -1462,12 +1666,68 @@ export type CryptoPaperBotAutoAction = CryptoPaperCycleAction & {
   message?: string | null;
 };
 
+export type CryptoScanDebug = {
+  timeframe?: string;
+  limit?: number;
+  watchlist_count?: number;
+  watchlist_sample?: string[];
+  scan_type?: string;
+  scan_count?: number;
+  scan_ok_count?: number;
+  scan_error_count?: number;
+  candidates_count?: number;
+  scan_error?: string | null;
+  scan_duration_ms?: number;
+  first_symbols_sample?: string[];
+  scan_diagnosis?: string | null;
+  scan_scenario?: string;
+  scan_scenario_label?: string;
+  scan_scenario_detail?: string;
+  total_scan_rows?: number;
+  rows_with_signal?: number;
+  rows_signal_compra_potencial?: number;
+  rows_signal_other?: number;
+  rows_missing_signal?: number;
+  unique_signals_detected?: string[];
+  signal_counts?: Record<string, number>;
+  sample_rows?: Array<Record<string, unknown>>;
+  entry_candidate_filter?: Record<string, unknown>;
+  evaluated_count_note?: string;
+  updated_at?: string;
+};
+
 export type CryptoCycleSummary = {
   evaluated_count: number;
   accepted_count: number;
   rejected_count: number;
   skipped_count?: number;
   reasons: Record<string, number>;
+  timeframe?: string;
+  limit?: number;
+  watchlist_sample?: string[];
+  scan_type?: string;
+  watchlist_count?: number;
+  scan_count?: number;
+  scan_ok_count?: number;
+  scan_error_count?: number;
+  candidates_count?: number;
+  scan_error?: string | null;
+  scan_duration_ms?: number;
+  first_symbols_sample?: string[];
+  scan_diagnosis?: string | null;
+  scan_scenario?: string;
+  scan_scenario_label?: string;
+  scan_scenario_detail?: string;
+  total_scan_rows?: number;
+  rows_with_signal?: number;
+  rows_signal_compra_potencial?: number;
+  rows_signal_other?: number;
+  rows_missing_signal?: number;
+  unique_signals_detected?: string[];
+  signal_counts?: Record<string, number>;
+  sample_rows?: Array<Record<string, unknown>>;
+  entry_candidate_filter?: Record<string, unknown>;
+  evaluated_count_note?: string;
 };
 
 export type CryptoCycleCandidate = {
@@ -1502,6 +1762,7 @@ export type CryptoPaperBotAutoStatus = {
   last_primary_reason?: string | null;
   last_entry_candidate?: CryptoCycleCandidate | null;
   last_cycle_summary?: CryptoCycleSummary | null;
+  last_scan_debug?: CryptoScanDebug | null;
   best_rejected_candidate?: CryptoCycleCandidate | null;
 };
 

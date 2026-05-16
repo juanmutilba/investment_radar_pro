@@ -7,12 +7,20 @@ No se arranca al importar la API; sólo tras POST .../monitor/start.
 from __future__ import annotations
 
 import copy
+import json
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 _LOG_PREFIX = "[CRYPTO_TESTNET_MONITOR]"
+_CYCLE_HISTORY_LOG_PREFIX = "[CRYPTO_TESTNET_MONITOR_CYCLE_HISTORY]"
+_MONITOR_CYCLES_JSONL = (
+    Path(__file__).resolve().parents[2] / "data" / "crypto_testnet_monitor_cycles.jsonl"
+)
+_MONITOR_CYCLES_READ_CAP = 50_000
+_MONITOR_CYCLES_FILE_MAX_LINES = 5000
 
 _LOCK = threading.Lock()
 _THREAD: threading.Thread | None = None
@@ -38,11 +46,23 @@ _STATE: dict[str, Any] = {
     "best_rejected_candidate": None,
     "last_entry_candidate": None,
     "last_primary_reason": None,
+    "last_scan_debug": None,
+    "last_watchlist_count": None,
+    "last_scan_count": None,
+    "last_candidates_count": None,
+    "last_exit_proposals_count": 0,
+    "last_entry_proposal_generated": False,
+    "last_no_entry_reason": None,
+    "last_no_exit_reason": None,
 }
 
 
 def _log(msg: str) -> None:
     print(f"{_LOG_PREFIX} {msg}", flush=True)
+
+
+def _log_cycle_history(msg: str) -> None:
+    print(f"{_CYCLE_HISTORY_LOG_PREFIX} {msg}", flush=True)
 
 
 def _utc_now_iso() -> str:
@@ -59,12 +79,22 @@ def _schedule_next_run_locked(interval_seconds: int) -> None:
 def _apply_entry_diagnostics(entry: dict[str, Any]) -> None:
     from services.crypto.cycle_diagnostics import (
         build_cycle_summary_from_evaluated,
+        merge_scan_meta_into_summary,
         pick_best_rejected_candidate,
         pick_entry_candidate_from_evaluated,
     )
 
     evaluated = [e for e in (entry.get("evaluated") or []) if isinstance(e, dict)]
-    _STATE["last_cycle_summary"] = build_cycle_summary_from_evaluated(evaluated)
+    summary = build_cycle_summary_from_evaluated(evaluated)
+    scan_meta = entry.get("scan_debug")
+    if isinstance(scan_meta, dict):
+        summary = merge_scan_meta_into_summary(summary, scan_meta)
+        full_dbg = dict(scan_meta)
+        full_dbg["updated_at"] = _utc_now_iso()
+        _STATE["last_scan_debug"] = full_dbg
+    else:
+        _STATE["last_scan_debug"] = None
+    _STATE["last_cycle_summary"] = summary
     _STATE["best_rejected_candidate"] = pick_best_rejected_candidate(evaluated)
     _STATE["last_primary_reason"] = entry.get("primary_reason")
     _STATE["last_entry_primary_reason"] = entry.get("primary_reason")
@@ -79,6 +109,226 @@ def _apply_entry_diagnostics(entry: dict[str, Any]) -> None:
         }
     else:
         _STATE["last_entry_candidate"] = pick_entry_candidate_from_evaluated(evaluated)
+
+
+def _slim_scan_debug_for_cycle_history(scan_debug: Any) -> dict[str, Any] | None:
+    """Subset de scan_debug sin filas OHLCV ni payloads pesados de Binance."""
+    if not isinstance(scan_debug, dict):
+        return None
+    keys = (
+        "watchlist_count",
+        "scan_count",
+        "scan_ok_count",
+        "scan_error_count",
+        "candidates_count",
+        "scan_error",
+        "scan_duration_ms",
+        "scan_scenario",
+        "scan_diagnosis",
+        "first_symbols_sample",
+        "updated_at",
+    )
+    out: dict[str, Any] = {}
+    for k in keys:
+        if k in scan_debug:
+            out[k] = scan_debug[k]
+    sample = out.get("first_symbols_sample")
+    if isinstance(sample, list):
+        out["first_symbols_sample"] = [str(s) for s in sample[:8]]
+    err = out.get("scan_error")
+    if isinstance(err, str) and len(err) > 240:
+        out["scan_error"] = err[:240] + "…"
+    return out or None
+
+
+def _summarize_entry_proposal_for_cycle(proposal: Any) -> dict[str, Any] | None:
+    if not isinstance(proposal, dict):
+        return None
+    sym = proposal.get("symbol")
+    if not sym:
+        return None
+    out: dict[str, Any] = {
+        "symbol": str(sym),
+        "side": proposal.get("side"),
+        "signal": proposal.get("signal"),
+        "score": proposal.get("score"),
+        "reason": proposal.get("reason"),
+    }
+    qa = proposal.get("quote_amount_usdt")
+    if isinstance(qa, (int, float)) and qa == qa:
+        out["quote_amount_usdt"] = round(float(qa), 4)
+    return out
+
+
+def _summarize_exit_proposals_for_cycle(proposals: Any) -> list[dict[str, Any]]:
+    if not isinstance(proposals, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for p in proposals[:20]:
+        if not isinstance(p, dict):
+            continue
+        asset = p.get("asset")
+        sym = p.get("symbol")
+        if not asset and not sym:
+            continue
+        row: dict[str, Any] = {
+            "asset": asset,
+            "symbol": sym,
+            "exit_reason": p.get("exit_reason") or p.get("reason"),
+        }
+        pnl = p.get("pnl_pct")
+        if isinstance(pnl, (int, float)) and pnl == pnl:
+            row["pnl_pct"] = round(float(pnl), 4)
+        out.append(row)
+    return out
+
+
+def _cycle_history_status(errs: list[str], entry: dict[str, Any] | None, exit_payload: dict[str, Any] | None) -> str:
+    if not errs:
+        return "ok"
+    if entry is None and exit_payload is None:
+        return "failed"
+    return "partial"
+
+
+def _build_monitor_cycle_history_record(
+    *,
+    timestamp: str,
+    cycle_started_at: str,
+    duration_ms: int,
+    params: dict[str, Any],
+    errs: list[str],
+    entry: dict[str, Any] | None,
+    exit_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    interval_min = params.get("interval_minutes")
+    try:
+        interval_min_f = float(interval_min) if interval_min is not None else None
+    except (TypeError, ValueError):
+        interval_min_f = None
+
+    entry_prop_raw = entry.get("proposal") if isinstance(entry, dict) else None
+    exit_props_raw = exit_payload.get("proposals") if isinstance(exit_payload, dict) else None
+    has_entry = bool(isinstance(entry_prop_raw, dict) and entry_prop_raw.get("symbol"))
+    exit_count = len(exit_props_raw) if isinstance(exit_props_raw, list) else 0
+
+    scan_dbg = None
+    if isinstance(entry, dict):
+        scan_dbg = _slim_scan_debug_for_cycle_history(entry.get("scan_debug"))
+    if scan_dbg is None:
+        scan_dbg = _slim_scan_debug_for_cycle_history(_STATE.get("last_scan_debug"))
+
+    no_entry = None if has_entry else (
+        entry.get("primary_reason") if isinstance(entry, dict) else _STATE.get("last_no_entry_reason")
+    )
+    no_exit = None
+    if isinstance(exit_payload, dict):
+        if exit_count == 0:
+            no_exit = str(exit_payload.get("primary_reason") or exit_payload.get("error") or "no_exit_proposals")
+    elif exit_payload is None:
+        no_exit = "exit_propose_failed"
+
+    watchlist = None
+    scan_count = None
+    candidates = None
+    if isinstance(scan_dbg, dict):
+        watchlist = scan_dbg.get("watchlist_count")
+        scan_count = scan_dbg.get("scan_count")
+        candidates = scan_dbg.get("candidates_count")
+    if watchlist is None:
+        watchlist = _STATE.get("last_watchlist_count")
+    if scan_count is None:
+        scan_count = _STATE.get("last_scan_count")
+    if candidates is None:
+        candidates = _STATE.get("last_candidates_count")
+
+    record: dict[str, Any] = {
+        "timestamp": timestamp,
+        "cycle_started_at": cycle_started_at,
+        "cycle_finished_at": timestamp,
+        "duration_ms": int(duration_ms),
+        "interval_minutes": interval_min_f,
+        "status": _cycle_history_status(errs, entry, exit_payload),
+        "watchlist_count": watchlist,
+        "scan_count": scan_count,
+        "candidates_count": candidates,
+        "entry_proposal_generated": has_entry,
+        "exit_proposals_count": exit_count,
+        "no_entry_reason": no_entry,
+        "no_exit_reason": no_exit,
+        "scan_debug": scan_dbg,
+        "entry_proposal": _summarize_entry_proposal_for_cycle(entry_prop_raw),
+        "exit_proposals": _summarize_exit_proposals_for_cycle(exit_props_raw),
+    }
+    if errs:
+        record["errors"] = errs[:5]
+    return record
+
+
+def _append_monitor_cycle_record(record: dict[str, Any]) -> None:
+    _MONITOR_CYCLES_JSONL.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
+    with _MONITOR_CYCLES_JSONL.open("a", encoding="utf-8", newline="\n") as f:
+        f.write(line)
+    try:
+        if _MONITOR_CYCLES_JSONL.stat().st_size > 4_000_000:
+            lines = _MONITOR_CYCLES_JSONL.read_text(encoding="utf-8").splitlines()
+            if len(lines) > _MONITOR_CYCLES_FILE_MAX_LINES:
+                tail = lines[-_MONITOR_CYCLES_FILE_MAX_LINES :]
+                _MONITOR_CYCLES_JSONL.write_text(
+                    "\n".join(tail) + ("\n" if tail else ""),
+                    encoding="utf-8",
+                )
+    except OSError:
+        pass
+    _log_cycle_history(
+        f"append status={record.get('status')} scan={record.get('scan_count')} "
+        f"entry={record.get('entry_proposal_generated')} exits={record.get('exit_proposals_count')}"
+    )
+
+
+def get_testnet_monitor_cycles(*, limit: int = 50) -> dict[str, Any]:
+    """Últimos ciclos del monitor (más reciente primero)."""
+    lim = max(1, min(int(limit), 500))
+    if not _MONITOR_CYCLES_JSONL.is_file():
+        return {"ok": True, "cycles": [], "total": 0}
+    try:
+        lines = _MONITOR_CYCLES_JSONL.read_text(encoding="utf-8").splitlines()
+    except OSError as e:
+        return {"ok": False, "error": str(e), "cycles": [], "total": 0}
+    total = 0
+    parsed: list[dict[str, Any]] = []
+    for line in lines[-_MONITOR_CYCLES_READ_CAP:]:
+        line = line.strip()
+        if not line:
+            continue
+        total += 1
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                parsed.append(obj)
+        except json.JSONDecodeError:
+            continue
+    tail = parsed[-lim:]
+    tail.reverse()
+    return {"ok": True, "cycles": tail, "total": total}
+
+
+def _apply_cycle_scan_counts(entry: dict[str, Any] | None) -> None:
+    scan_dbg = entry.get("scan_debug") if isinstance(entry, dict) else None
+    if isinstance(scan_dbg, dict):
+        _STATE["last_watchlist_count"] = scan_dbg.get("watchlist_count")
+        _STATE["last_scan_count"] = scan_dbg.get("scan_count")
+        _STATE["last_candidates_count"] = scan_dbg.get("candidates_count")
+        return
+    if not isinstance(entry, dict):
+        _STATE["last_watchlist_count"] = None
+        _STATE["last_scan_count"] = None
+        _STATE["last_candidates_count"] = None
+        return
+    _STATE["last_watchlist_count"] = entry.get("watchlist_count")
+    _STATE["last_scan_count"] = entry.get("scan_count") or entry.get("scanned_count")
+    _STATE["last_candidates_count"] = entry.get("candidates_count")
 
 
 def _run_cycle() -> None:
@@ -152,6 +402,12 @@ def _run_cycle() -> None:
                 _STATE["last_entry_proposal"] = copy.deepcopy(entry.get("proposal"))
                 _STATE["last_evaluated_entries"] = copy.deepcopy(entry.get("evaluated") or [])
                 _apply_entry_diagnostics(entry)
+                _apply_cycle_scan_counts(entry)
+                has_entry_prop = bool(entry.get("proposal"))
+                _STATE["last_entry_proposal_generated"] = has_entry_prop
+                _STATE["last_no_entry_reason"] = (
+                    None if has_entry_prop else entry.get("primary_reason")
+                )
             else:
                 _STATE["last_entry_proposal"] = None
                 _STATE["last_entry_primary_reason"] = None
@@ -160,15 +416,55 @@ def _run_cycle() -> None:
                 _STATE["best_rejected_candidate"] = None
                 _STATE["last_entry_candidate"] = None
                 _STATE["last_primary_reason"] = None
+                _STATE["last_scan_debug"] = None
+                _STATE["last_watchlist_count"] = None
+                _STATE["last_scan_count"] = None
+                _STATE["last_candidates_count"] = None
+                _STATE["last_entry_proposal_generated"] = False
+                _STATE["last_no_entry_reason"] = "entry_scan_failed"
 
             if exit_payload is not None:
-                _STATE["last_exit_proposals"] = copy.deepcopy(exit_payload.get("proposals") or [])
+                exit_props = exit_payload.get("proposals") or []
+                _STATE["last_exit_proposals"] = copy.deepcopy(exit_props)
                 _STATE["last_evaluated_exits"] = copy.deepcopy(exit_payload.get("evaluated") or [])
+                _STATE["last_exit_proposals_count"] = len(exit_props)
+                _STATE["last_no_exit_reason"] = (
+                    None
+                    if exit_props
+                    else str(exit_payload.get("primary_reason") or "no_exit_proposals")
+                )
             else:
                 _STATE["last_exit_proposals"] = []
                 _STATE["last_evaluated_exits"] = []
+                _STATE["last_exit_proposals_count"] = 0
+                _STATE["last_no_exit_reason"] = "exit_propose_failed"
 
             _STATE["last_error"] = "; ".join(errs) if errs else None
+
+            cycle_record = _build_monitor_cycle_history_record(
+                timestamp=now_iso,
+                cycle_started_at=cycle_started_iso,
+                duration_ms=duration_ms,
+                params=params,
+                errs=errs,
+                entry=entry,
+                exit_payload=exit_payload,
+            )
+
+            _log(
+                "ciclo testnet fin "
+                f"watchlist={_STATE.get('last_watchlist_count')} "
+                f"scan={_STATE.get('last_scan_count')} "
+                f"candidates={_STATE.get('last_candidates_count')} "
+                f"entry_prop={_STATE.get('last_entry_proposal_generated')} "
+                f"exit_props={_STATE.get('last_exit_proposals_count')} "
+                f"no_entry={_STATE.get('last_no_entry_reason')}"
+            )
+
+        try:
+            _append_monitor_cycle_record(cycle_record)
+        except Exception as e:
+            _log_cycle_history(f"append falló: {type(e).__name__}: {e}")
 
 
 def _worker_loop() -> None:
@@ -242,6 +538,7 @@ def start_testnet_monitor(
         _STATE["enabled"] = True
         _STATE["interval_seconds"] = interval_seconds
         _STATE["params"] = params
+        _schedule_next_run_locked(interval_seconds)
         need_spawn = _THREAD is None or not _THREAD.is_alive()
 
     _WAKE.set()
@@ -294,4 +591,12 @@ def get_testnet_monitor_status() -> dict[str, Any]:
             "best_rejected_candidate": copy.deepcopy(_STATE.get("best_rejected_candidate")),
             "last_entry_candidate": copy.deepcopy(_STATE.get("last_entry_candidate")),
             "last_primary_reason": _STATE.get("last_primary_reason"),
+            "last_scan_debug": copy.deepcopy(_STATE.get("last_scan_debug")),
+            "last_watchlist_count": _STATE.get("last_watchlist_count"),
+            "last_scan_count": _STATE.get("last_scan_count"),
+            "last_candidates_count": _STATE.get("last_candidates_count"),
+            "last_exit_proposals_count": int(_STATE.get("last_exit_proposals_count") or 0),
+            "last_entry_proposal_generated": bool(_STATE.get("last_entry_proposal_generated")),
+            "last_no_entry_reason": _STATE.get("last_no_entry_reason"),
+            "last_no_exit_reason": _STATE.get("last_no_exit_reason"),
         }

@@ -570,8 +570,8 @@ def crypto_testnet_strategy_propose_exits(
     min_value_usdt: float = Query(5, ge=0),
 ):
     """
-    SL/TP simples sobre posiciones testnet reales; sólo propone SELL (sin ejecutar).
-    Entrada media aproximada desde historial local de órdenes enviadas por esta app.
+    SL/TP (historial local) y trailing stop (estado en crypto_testnet_position_state.json);
+    sólo propone SELL (sin ejecutar).
     """
     from services.crypto import binance_testnet as tn
 
@@ -613,6 +613,14 @@ def crypto_testnet_monitor_status():
     from services.crypto import testnet_monitor as mon
 
     return mon.get_testnet_monitor_status()
+
+
+@app.get("/crypto/testnet/monitor/cycles")
+def crypto_testnet_monitor_cycles(limit: int = Query(50, ge=1, le=500)):
+    """Historial local de ciclos del monitor testnet (JSONL en disco)."""
+    from services.crypto import testnet_monitor as mon
+
+    return mon.get_testnet_monitor_cycles(limit=limit)
 
 
 @app.post("/crypto/testnet/monitor/start")
@@ -713,6 +721,82 @@ class CryptoTestnetMarketOrderBody(BaseModel):
         return self
 
 
+class CryptoTestnetCancelOrderBody(BaseModel):
+    """Cancelación manual de orden abierta en Binance Spot Testnet (sandbox)."""
+
+    symbol: str = Field(..., min_length=3, max_length=24)
+    order_id: int = Field(..., gt=0, description="ID de orden en Binance testnet")
+
+
+@app.post("/crypto/testnet/orders/cancel")
+def crypto_testnet_cancel_order(body: CryptoTestnetCancelOrderBody):
+    """Cancela una orden spot abierta en testnet; no persiste en historial local de trades."""
+    from services.crypto import binance_testnet as tn
+
+    try:
+        r = tn.cancel_testnet_order(body.symbol.strip(), body.order_id)
+    except Exception as e:
+        msg = str(e).strip()
+        if len(msg) > 600:
+            msg = msg[:600] + "…"
+        raise HTTPException(status_code=502, detail=msg or type(e).__name__) from e
+
+    if not r.get("ok"):
+        code = int(r.get("http_status") or 502)
+        if code not in (400, 502, 503):
+            code = 502
+        raise HTTPException(
+            status_code=code,
+            detail=str(r.get("error") or "Error al cancelar orden testnet"),
+        )
+    return {
+        "ok": True,
+        "symbol": r.get("symbol"),
+        "order_id": r.get("order_id"),
+        "status": r.get("status"),
+        "message": r.get("message"),
+        "raw": r.get("raw"),
+    }
+
+
+class CryptoTestnetLimitOrderBody(BaseModel):
+    """Orden limit spot manual en Binance Testnet (sandbox)."""
+
+    symbol: str = Field(..., min_length=3, max_length=24)
+    side: Literal["buy", "sell"]
+    quantity: float = Field(..., gt=0, description="Cantidad en activo base")
+    limit_price: float = Field(..., gt=0, description="Precio límite en USDT")
+
+
+@app.post("/crypto/testnet/orders/limit")
+def crypto_testnet_limit_order(body: CryptoTestnetLimitOrderBody):
+    """Spot limit testnet: envía al libro; no ejecuta automáticamente hasta match."""
+    from services.crypto import binance_testnet as tn
+
+    try:
+        r = tn.place_testnet_limit_order(
+            body.symbol.strip(),
+            str(body.side),
+            float(body.quantity),
+            float(body.limit_price),
+        )
+    except Exception as e:
+        msg = str(e).strip()
+        if len(msg) > 600:
+            msg = msg[:600] + "…"
+        raise HTTPException(status_code=502, detail=msg or type(e).__name__) from e
+
+    if not r.get("ok"):
+        code = int(r.get("http_status") or 502)
+        if code not in (400, 502, 503):
+            code = 502
+        raise HTTPException(
+            status_code=code,
+            detail=str(r.get("error") or "Error orden limit testnet"),
+        )
+    return {"ok": True, "order": r.get("order")}
+
+
 @app.post("/crypto/testnet/order/market")
 def crypto_testnet_market_order(body: CryptoTestnetMarketOrderBody):
     """Spot market testnet: BUY (USDT) o SELL (base o ~USDT); whitelist; sandbox."""
@@ -749,6 +833,20 @@ def crypto_testnet_orders(limit: int = Query(50, ge=1, le=500)):
     from services.crypto import binance_testnet as tn
 
     return tn.get_testnet_order_history(limit)
+
+
+@app.post("/crypto/testnet/orders/sync-history")
+def crypto_testnet_sync_order_history(limit: int = Query(50, ge=1, le=500)):
+    """Sincroniza estado de órdenes LIMIT abiertas del historial local contra Binance Spot Testnet."""
+    from services.crypto import binance_testnet as tn
+
+    try:
+        return tn.sync_testnet_order_history(history_limit=limit)
+    except Exception as e:
+        msg = str(e).strip()
+        if len(msg) > 600:
+            msg = msg[:600] + "…"
+        raise HTTPException(status_code=502, detail=msg or type(e).__name__) from e
 
 
 @app.get("/crypto/ticker")
