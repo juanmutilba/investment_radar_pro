@@ -2379,7 +2379,119 @@ table.radar-table thead .radar-table__sticky-col {
   gap: 1rem;
 }
 
+.crypto-testnet-panel-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.28);
+  position: sticky;
+  top: 0.35rem;
+  z-index: 2;
+  order: 0;
+}
+
+.crypto-testnet-panel-nav-link {
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.3;
+}
+
+.crypto-testnet-panel-nav-link:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.crypto-testnet-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  scroll-margin-top: 4.25rem;
+}
+
+.crypto-testnet-group--status {
+  order: 1;
+}
+
+.crypto-testnet-group--operate {
+  order: 2;
+}
+
+.crypto-testnet-group--proposals {
+  order: 3;
+}
+
+.crypto-testnet-group--monitor {
+  order: 4;
+}
+
+.crypto-testnet-group--orders {
+  order: 5;
+}
+
+.crypto-testnet-group-header {
+  margin: 0;
+}
+
+.crypto-testnet-group-header--collapsible {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+
+.crypto-testnet-group-header-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.crypto-testnet-group-toggle {
+  flex-shrink: 0;
+  font-size: 0.78rem !important;
+  padding: 0.22rem 0.55rem !important;
+  line-height: 1.25;
+}
+
+.crypto-testnet-group--collapsed {
+  gap: 0.35rem;
+}
+
+.crypto-testnet-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.crypto-testnet-group-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.crypto-testnet-group-lead {
+  margin: 0.3rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.crypto-testnet-group .card.crypto-testnet-section {
+  margin: 0;
+}
+
 .crypto-testnet-page-banner {
+  order: 0;
   padding: 0.75rem 1rem;
   border-radius: var(--radius);
   border: 1px solid rgba(194, 65, 12, 0.42);

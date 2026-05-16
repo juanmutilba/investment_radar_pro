@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { CycleDiagnosticsPanel } from "@/components/crypto/CycleDiagnosticsPanel";
 import { CryptoTimeframeField } from "@/components/crypto/CryptoTimeframeField";
 import { normalizeTimeframeString } from "@/components/crypto/cryptoTimeframe";
@@ -48,6 +56,76 @@ const MIN_TESTNET_ORDER_USDT = 0.01;
 const SMALL_USDT_WARN = 5;
 const PROPOSAL_PREFILL_MESSAGE =
   "Propuesta cargada en el formulario. Revisá y confirmá manualmente.";
+
+const TESTNET_PANEL_SECTIONS = [
+  { id: "crypto-testnet-section-status", label: "Estado" },
+  { id: "crypto-testnet-section-operate", label: "Operar" },
+  { id: "crypto-testnet-section-proposals", label: "Propuestas" },
+  { id: "crypto-testnet-section-monitor", label: "Monitor" },
+  { id: "crypto-testnet-section-orders", label: "Órdenes" },
+] as const;
+
+type TestnetPanelGroupKey = "status" | "operate" | "proposals" | "monitor" | "orders";
+
+type TestnetCollapsedGroups = Record<TestnetPanelGroupKey, boolean>;
+
+function defaultTestnetCollapsedGroups(monitorRunning: boolean): TestnetCollapsedGroups {
+  return {
+    status: false,
+    operate: false,
+    proposals: false,
+    monitor: !monitorRunning,
+    orders: false,
+  };
+}
+
+function TestnetPanelGroup({
+  sectionId,
+  orderClassName,
+  title,
+  lead,
+  collapsed,
+  onToggle,
+  groupKey,
+  children,
+}: {
+  sectionId: string;
+  orderClassName: string;
+  title: string;
+  lead: string;
+  collapsed: boolean;
+  onToggle: (key: TestnetPanelGroupKey) => void;
+  groupKey: TestnetPanelGroupKey;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      id={sectionId}
+      className={`crypto-testnet-group ${orderClassName}${collapsed ? " crypto-testnet-group--collapsed" : ""}`}
+    >
+      <header className="crypto-testnet-group-header crypto-testnet-group-header--collapsible">
+        <div className="crypto-testnet-group-header-text">
+          <h2 className="crypto-testnet-group-title">{title}</h2>
+          <p className="crypto-testnet-group-lead msg-muted">{lead}</p>
+        </div>
+        <button
+          type="button"
+          className="crypto-testnet-group-toggle radar-refresh-btn"
+          onClick={() => onToggle(groupKey)}
+          aria-expanded={!collapsed}
+          aria-controls={`${sectionId}-body`}
+        >
+          {collapsed ? "Mostrar" : "Ocultar"}
+        </button>
+      </header>
+      {!collapsed ? (
+        <div id={`${sectionId}-body`} className="crypto-testnet-group-body">
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function formatBaseQtyForInput(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "";
@@ -326,6 +404,10 @@ export function CryptoTestnetPanel() {
   const [monitorCyclesTotal, setMonitorCyclesTotal] = useState(0);
   const [monitorCyclesLoading, setMonitorCyclesLoading] = useState(false);
   const [monitorCyclesError, setMonitorCyclesError] = useState<string | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<TestnetCollapsedGroups>(() =>
+    defaultTestnetCollapsedGroups(false),
+  );
+  const monitorCollapseInitRef = useRef(false);
   const [monitorIntervalMin, setMonitorIntervalMin] = useState("5");
   const [monTf, setMonTf] = useState("1h");
   const [monQuote, setMonQuote] = useState("10");
@@ -354,6 +436,10 @@ export function CryptoTestnetPanel() {
   const scrollToManualOrderForm = useCallback(() => {
     const el = manualOrderSectionRef.current ?? document.getElementById("crypto-testnet-manual-order");
     el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  const scrollToTestnetSection = useCallback((sectionId: string) => {
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
   const applyEntryProposalToManualForm = useCallback(
@@ -1099,6 +1185,19 @@ export function CryptoTestnetPanel() {
     if (connected) void loadOrders();
   }, [loadBalances, loadOrders, connected]);
 
+  const toggleTestnetGroup = useCallback((key: TestnetPanelGroupKey) => {
+    setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
+  useEffect(() => {
+    if (monitorCollapseInitRef.current || monitorStatus == null) return;
+    monitorCollapseInitRef.current = true;
+    setCollapsedGroups((prev) => ({
+      ...prev,
+      monitor: !monitorStatus.running,
+    }));
+  }, [monitorStatus]);
+
   return (
     <div className="crypto-testnet-dashboard">
       <div className="crypto-testnet-page-banner" role="note">
@@ -1107,6 +1206,28 @@ export function CryptoTestnetPanel() {
         paper interno de la app.
       </div>
 
+      <nav className="crypto-testnet-panel-nav" aria-label="Navegación del panel testnet">
+        {TESTNET_PANEL_SECTIONS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className="crypto-testnet-panel-nav-link"
+            onClick={() => scrollToTestnetSection(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      <TestnetPanelGroup
+        groupKey="status"
+        sectionId="crypto-testnet-section-status"
+        orderClassName="crypto-testnet-group--status"
+        title="Estado y seguridad"
+        lead="Conexión testnet, checklist de seguridad y resumen de cartera."
+        collapsed={collapsedGroups.status}
+        onToggle={toggleTestnetGroup}
+      >
       {/* 1 — Estado Testnet */}
       <section className="card crypto-testnet-section">
         <div className="crypto-testnet-section-head">
@@ -1168,7 +1289,7 @@ export function CryptoTestnetPanel() {
         ) : null}
       </section>
 
-      <section className="card crypto-testnet-section crypto-testnet-security-card">
+      <section className="card crypto-testnet-section crypto-testnet-security-card crypto-testnet-section--nested">
         <div className="crypto-testnet-section-head">
           <h3 className="dashboard-section-title crypto-testnet-section-title" style={{ margin: 0 }}>
             Seguridad Testnet
@@ -1235,7 +1356,17 @@ export function CryptoTestnetPanel() {
           ) : null}
         </section>
       ) : null}
+      </TestnetPanelGroup>
 
+      <TestnetPanelGroup
+        groupKey="proposals"
+        sectionId="crypto-testnet-section-proposals"
+        orderClassName="crypto-testnet-group--proposals"
+        title="Propuestas asistidas"
+        lead="Búsqueda manual de entradas y salidas; confirmá o cargá el formulario con «Usar propuesta»."
+        collapsed={collapsedGroups.proposals}
+        onToggle={toggleTestnetGroup}
+      >
       {/* Propuesta asistida Testnet (estrategia propone; orden sólo si confirmás) */}
       <section className="card crypto-testnet-section">
         <h3 className="dashboard-section-title crypto-testnet-section-title">Propuesta asistida Testnet</h3>
@@ -1624,7 +1755,17 @@ export function CryptoTestnetPanel() {
           </details>
         ) : null}
       </section>
+      </TestnetPanelGroup>
 
+      <TestnetPanelGroup
+        groupKey="monitor"
+        sectionId="crypto-testnet-section-monitor"
+        orderClassName="crypto-testnet-group--monitor"
+        title="Monitor asistido"
+        lead="Ciclos periódicos de propuestas; historial en JSONL; sin órdenes automáticas."
+        collapsed={collapsedGroups.monitor}
+        onToggle={toggleTestnetGroup}
+      >
       {/* Monitor asistido Testnet */}
       <section className="card crypto-testnet-section">
         <h3 className="dashboard-section-title crypto-testnet-section-title">Monitor asistido Testnet</h3>
@@ -2128,6 +2269,22 @@ export function CryptoTestnetPanel() {
           )}
         </div>
       </section>
+      </TestnetPanelGroup>
+
+      <TestnetPanelGroup
+        groupKey="operate"
+        sectionId="crypto-testnet-section-operate"
+        orderClassName="crypto-testnet-group--operate"
+        title="Operación manual"
+        lead="MARKET/LIMIT, usar propuesta y confirmación explícita antes de enviar."
+        collapsed={collapsedGroups.operate}
+        onToggle={toggleTestnetGroup}
+      >
+      {!connected ? (
+        <p className="msg-muted crypto-testnet-note crypto-testnet-note--neutral" style={{ margin: 0 }}>
+          Conectá testnet en <strong>Estado</strong> para habilitar el formulario manual y las posiciones en vivo.
+        </p>
+      ) : null}
 
       {connected ? (
         <>
@@ -2542,7 +2699,17 @@ export function CryptoTestnetPanel() {
           ) : null}
         </section>
       ) : null}
+      </TestnetPanelGroup>
 
+      <TestnetPanelGroup
+        groupKey="orders"
+        sectionId="crypto-testnet-section-orders"
+        orderClassName="crypto-testnet-group--orders"
+        title="Órdenes e historial"
+        lead="Órdenes abiertas en testnet, cancelación, sync LIMIT e historial local de la app."
+        collapsed={collapsedGroups.orders}
+        onToggle={toggleTestnetGroup}
+      >
       {/* 5 — Órdenes abiertas */}
       {balances ? (
         <section className="card crypto-testnet-section">
@@ -2732,6 +2899,7 @@ export function CryptoTestnetPanel() {
           )}
         </section>
       ) : null}
+      </TestnetPanelGroup>
     </div>
   );
 }
