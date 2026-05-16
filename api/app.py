@@ -588,6 +588,72 @@ def crypto_testnet_strategy_propose_exits(
         raise HTTPException(status_code=502, detail=f"Propuesta salidas testnet: {e}") from e
 
 
+class CryptoTestnetMonitorStartBody(BaseModel):
+    """Arranca el monitor en memoria (sólo propuestas; sin órdenes automáticas)."""
+
+    interval_minutes: float = Field(default=5, ge=1, le=1440)
+    quote_amount_usdt: float = Field(default=10, gt=0)
+    timeframe: str = Field(default="1h", min_length=1, max_length=24)
+    limit: int = Field(default=200, ge=50, le=1000)
+    max_open_positions: int = Field(default=3, ge=1, le=50)
+    cooldown_minutes: int = Field(default=0, ge=0)
+    require_btc_trend_up: bool = False
+    min_entry_score: float = Field(default=0, ge=0, le=100)
+    stop_loss_pct: float = Field(default=2, ge=0)
+    take_profit_pct: float = Field(default=4, ge=0)
+    trailing_stop_pct: float | None = Field(default=None)
+    break_even_trigger_pct: float = Field(default=0, ge=0)
+    break_even_plus_pct: float = Field(default=0, ge=0)
+    min_exit_value_usdt: float = Field(default=5, ge=0)
+
+
+@app.get("/crypto/testnet/monitor/status")
+def crypto_testnet_monitor_status():
+    """Estado del monitor testnet asistido (en memoria)."""
+    from services.crypto import testnet_monitor as mon
+
+    return mon.get_testnet_monitor_status()
+
+
+@app.post("/crypto/testnet/monitor/start")
+def crypto_testnet_monitor_start(body: CryptoTestnetMonitorStartBody):
+    """Inicia o actualiza parámetros del monitor; no envía órdenes."""
+    from services.crypto import testnet_monitor as mon
+
+    try:
+        return mon.start_testnet_monitor(
+            interval_minutes=float(body.interval_minutes),
+            quote_amount_usdt=float(body.quote_amount_usdt),
+            timeframe=body.timeframe.strip(),
+            limit=int(body.limit),
+            max_open_positions=int(body.max_open_positions),
+            cooldown_minutes=int(body.cooldown_minutes),
+            require_btc_trend_up=bool(body.require_btc_trend_up),
+            min_entry_score=float(body.min_entry_score),
+            stop_loss_pct=float(body.stop_loss_pct),
+            take_profit_pct=float(body.take_profit_pct),
+            trailing_stop_pct=body.trailing_stop_pct,
+            break_even_trigger_pct=float(body.break_even_trigger_pct),
+            break_even_plus_pct=float(body.break_even_plus_pct),
+            min_exit_value_usdt=float(body.min_exit_value_usdt),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Monitor testnet: {e}") from e
+
+
+@app.post("/crypto/testnet/monitor/stop")
+def crypto_testnet_monitor_stop():
+    """Detiene el monitor testnet asistido."""
+    from services.crypto import testnet_monitor as mon
+
+    try:
+        return mon.stop_testnet_monitor()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Monitor testnet: {e}") from e
+
+
 @app.get("/crypto/testnet/ticker")
 def crypto_testnet_ticker(
     symbol: str = Query("BTC/USDT", min_length=3, description="Par spot CCXT, ej. BTC/USDT"),

@@ -540,6 +540,112 @@ export async function postCryptoTestnetProposeExits(
   return data;
 }
 
+/** GET /crypto/testnet/monitor/status — monitor en memoria (propuestas sin ejecución automática). */
+export type CryptoTestnetMonitorParamsSnapshot = {
+  interval_minutes?: number;
+  quote_amount_usdt?: number;
+  timeframe?: string;
+  limit?: number;
+  max_open_positions?: number;
+  cooldown_minutes?: number;
+  require_btc_trend_up?: boolean;
+  min_entry_score?: number;
+  stop_loss_pct?: number;
+  take_profit_pct?: number;
+  trailing_stop_pct?: number | null;
+  break_even_trigger_pct?: number;
+  break_even_plus_pct?: number;
+  min_exit_value_usdt?: number;
+};
+
+export type CryptoTestnetMonitorStatusPayload = {
+  ok: boolean;
+  enabled: boolean;
+  running: boolean;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_error: string | null;
+  last_entry_proposal: CryptoTestnetStrategyProposal | null;
+  last_entry_primary_reason: string | null;
+  last_exit_proposals: CryptoTestnetExitProposal[];
+  last_evaluated_entries: CryptoTestnetEvaluatedRow[];
+  last_evaluated_exits: CryptoTestnetExitEvaluatedRow[];
+  interval_seconds: number;
+  params: CryptoTestnetMonitorParamsSnapshot;
+};
+
+export type CryptoTestnetMonitorStartBody = {
+  interval_minutes?: number;
+  quote_amount_usdt?: number;
+  timeframe?: string;
+  limit?: number;
+  max_open_positions?: number;
+  cooldown_minutes?: number;
+  require_btc_trend_up?: boolean;
+  min_entry_score?: number;
+  stop_loss_pct?: number;
+  take_profit_pct?: number;
+  trailing_stop_pct?: number | null;
+  break_even_trigger_pct?: number;
+  break_even_plus_pct?: number;
+  min_exit_value_usdt?: number;
+};
+
+function isCryptoTestnetMonitorStatusPayload(data: unknown): data is CryptoTestnetMonitorStatusPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  if (typeof o.ok !== "boolean") return false;
+  if (typeof o.enabled !== "boolean") return false;
+  if (typeof o.running !== "boolean") return false;
+  if (!Array.isArray(o.last_exit_proposals)) return false;
+  if (!Array.isArray(o.last_evaluated_entries)) return false;
+  if (!Array.isArray(o.last_evaluated_exits)) return false;
+  return true;
+}
+
+export async function getCryptoTestnetMonitorStatus(): Promise<CryptoTestnetMonitorStatusPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/monitor/status`, { headers: { Accept: "application/json" } });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetMonitorStatusPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/testnet/monitor/status");
+  }
+  return data;
+}
+
+export async function postCryptoTestnetMonitorStart(body: CryptoTestnetMonitorStartBody): Promise<CryptoTestnetMonitorStatusPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/monitor/start`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetMonitorStatusPayload(data)) {
+    throw new Error("Respuesta inesperada: POST /crypto/testnet/monitor/start");
+  }
+  return data;
+}
+
+export async function postCryptoTestnetMonitorStop(): Promise<CryptoTestnetMonitorStatusPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/monitor/stop`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetMonitorStatusPayload(data)) {
+    throw new Error("Respuesta inesperada: POST /crypto/testnet/monitor/stop");
+  }
+  return data;
+}
+
 export async function getCryptoTestnetTicker(symbol: string): Promise<CryptoTestnetTickerPayload> {
   const q = new URLSearchParams({ symbol: symbol.trim() });
   const res = await fetch(`${BASE}/crypto/testnet/ticker?${q.toString()}`);
