@@ -5,13 +5,16 @@ No usa BINANCE_API_KEY / BINANCE_API_SECRET (cuenta real).
 """
 from __future__ import annotations
 
+import json
 import os
 import time as time_mod
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
 _LOG_PREFIX = "[CRYPTO_TESTNET]"
 _ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+_ORDERS_JSON = Path(__file__).resolve().parents[2] / "data" / "crypto_testnet_orders.json"
 _PROBE_SYMBOL = "BTC/USDT"
 UrlsApiSafe = Literal["sandbox", "testnet", "real", "unknown"]
 
@@ -743,6 +746,73 @@ def _summarize_ccxt_order(sym: str, side: str, raw: dict[str, Any]) -> dict[str,
     }
 
 
+_ORDER_HISTORY_LIMIT_CAP = 500
+
+
+def _load_testnet_orders_json() -> list[dict[str, Any]]:
+    if not _ORDERS_JSON.is_file():
+        return []
+    try:
+        raw = json.loads(_ORDERS_JSON.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if isinstance(raw, list):
+        return [row for row in raw if isinstance(row, dict)]
+    return []
+
+
+def _atomic_write_testnet_orders(rows: list[dict[str, Any]]) -> None:
+    _ORDERS_JSON.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _ORDERS_JSON.with_suffix(".tmp_write")
+    data = json.dumps(rows, ensure_ascii=False, indent=2)
+    tmp.write_text(data + ("\n" if not data.endswith("\n") else ""), encoding="utf-8")
+    tmp.replace(_ORDERS_JSON)
+
+
+def _normalize_raw_status_for_store(raw_status: Any) -> str | None:
+    if raw_status is None:
+        return None
+    if isinstance(raw_status, str):
+        return raw_status[:160]
+    if isinstance(raw_status, (int, float, bool)):
+        return str(raw_status)[:160]
+    return str(raw_status)[:160]
+
+
+def _append_manual_testnet_order_record(summary: dict[str, Any], raw_ccxt_order: dict[str, Any]) -> None:
+    """Persiste sólo campos permitidos (sin secrets)."""
+    row: dict[str, Any] = {
+        "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "symbol": summary.get("symbol"),
+        "side": summary.get("side"),
+        "order_id": summary.get("order_id"),
+        "status": summary.get("status"),
+        "filled": summary.get("filled"),
+        "cost": summary.get("cost"),
+        "average": summary.get("average"),
+        "timestamp_exchange": summary.get("timestamp"),
+        "raw_status": _normalize_raw_status_for_store(raw_ccxt_order.get("status")),
+        "source": "manual_testnet",
+    }
+
+    prev = _load_testnet_orders_json()
+    prev.append(row)
+    _atomic_write_testnet_orders(prev)
+
+
+def get_testnet_order_history(limit: int = 50) -> list[dict[str, Any]]:
+    """
+    Últimas órdenes persistidas desde esta app (archivo JSON local).
+    Orden descendente por tiempo de registro local (más reciente primero).
+    """
+    if limit < 1:
+        limit = 1
+    limit = min(limit, _ORDER_HISTORY_LIMIT_CAP)
+    all_rows = _load_testnet_orders_json()
+    tail = all_rows[-limit:] if len(all_rows) > limit else all_rows[:]
+    return list(reversed(tail))
+
+
 def place_testnet_market_order(
     symbol: str,
     side: str,
@@ -845,11 +915,17 @@ def place_testnet_market_order(
     if not isinstance(raw, dict):
         return out_err("Respuesta de orden inválida", 502)
 
+    summary = _summarize_ccxt_order(sym, "buy", raw)
+    try:
+        _append_manual_testnet_order_record(summary, raw)
+    except Exception as e:
+        _log(f"orders_json: fallo persistencia (orden ya ejecutada en exchange): {_safe_error(e)}")
+
     return {
         "ok": True,
         "error": None,
         "http_status": 200,
-        "order": _summarize_ccxt_order(sym, "buy", raw),
+        "order": summary,
     }
 
 

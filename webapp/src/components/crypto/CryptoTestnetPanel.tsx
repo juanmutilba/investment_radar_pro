@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   getCryptoTestnetBalances,
+  getCryptoTestnetOrders,
   getCryptoTestnetStatus,
   getCryptoTestnetTicker,
   postCryptoTestnetMarketOrder,
   type CryptoTestnetBalancesPayload,
   type CryptoTestnetMarketOrderRow,
+  type CryptoTestnetStoredOrder,
   type CryptoTestnetStatusPayload,
   type CryptoTestnetTickerPayload,
 } from "@/services/api";
@@ -25,6 +27,11 @@ function fmtNum(v: number | null | undefined): string {
 function fmtPct(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "—";
   return `${v >= 0 ? "+" : ""}${numFmt2.format(v)}%`;
+}
+
+function fmtIsoLocalShort(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("es-AR", { dateStyle: "short", timeStyle: "medium" });
 }
 
 function CryptoRefreshBadge({ active, label = "Actualizando…" }: { active: boolean; label?: string }) {
@@ -49,6 +56,9 @@ export function CryptoTestnetPanel() {
   const [orderBusy, setOrderBusy] = useState(false);
   const [orderFormError, setOrderFormError] = useState<string | null>(null);
   const [lastOrder, setLastOrder] = useState<CryptoTestnetMarketOrderRow | null>(null);
+  const [recentOrders, setRecentOrders] = useState<CryptoTestnetStoredOrder[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
 
   const loadStatus = useCallback(async (soft = false) => {
     if (!soft) setStatusLoading(true);
@@ -80,6 +90,19 @@ export function CryptoTestnetPanel() {
     }
   }, []);
 
+  const loadOrders = useCallback(async () => {
+    setOrdersLoading(true);
+    try {
+      const rows = await getCryptoTestnetOrders(50);
+      setRecentOrders(rows);
+      setOrdersError(null);
+    } catch (e: unknown) {
+      setOrdersError(e instanceof Error ? e.message : "Error al leer órdenes testnet locales");
+    } finally {
+      setOrdersLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadStatus(false);
   }, [loadStatus]);
@@ -87,6 +110,10 @@ export function CryptoTestnetPanel() {
   const connected =
     Boolean(status?.configured && status?.enabled && status?.can_read_balance);
   const showEnvHelp = status && !status.configured;
+
+  useEffect(() => {
+    if (connected) void loadOrders();
+  }, [connected, loadOrders]);
 
   const submitTestnetMarketBuy = useCallback(
     async (e: FormEvent) => {
@@ -111,7 +138,7 @@ export function CryptoTestnetPanel() {
           quote_amount_usdt: q,
         });
         if (res.order) setLastOrder(res.order);
-        await loadBalances();
+        await Promise.all([loadBalances(), loadOrders()]);
         setError(null);
       } catch (err: unknown) {
         setOrderFormError(err instanceof Error ? err.message : "Error al enviar orden testnet");
@@ -119,7 +146,7 @@ export function CryptoTestnetPanel() {
         setOrderBusy(false);
       }
     },
-    [connected, manualQuoteUsdt, manualSymbol, loadBalances],
+    [connected, manualQuoteUsdt, manualSymbol, loadBalances, loadOrders],
   );
 
   return (
@@ -325,53 +352,91 @@ export function CryptoTestnetPanel() {
           </form>
           {orderFormError ? <p className="msg-error" style={{ marginTop: "0.75rem", fontSize: "0.875rem" }}>{orderFormError}</p> : null}
           {lastOrder ? (
-            <div style={{ marginTop: "1rem" }}>
-              <p className="msg-muted" style={{ marginBottom: "0.5rem", fontSize: "0.85rem" }}>
-                Última respuesta (orden)
-              </p>
-              <div
-                className="table-wrap"
-                style={{ fontSize: "0.85rem", border: "1px solid var(--border-subtle, rgba(255,255,255,0.12))", borderRadius: 8, padding: "0.65rem" }}
-              >
-                <table>
-                  <tbody>
-                    <tr>
-                      <td className="msg-muted">Símbolo</td>
-                      <td style={{ textAlign: "right" }}>{lastOrder.symbol}</td>
-                    </tr>
-                    <tr>
-                      <td className="msg-muted">Lado</td>
-                      <td style={{ textAlign: "right" }}>{lastOrder.side}</td>
-                    </tr>
-                    <tr>
-                      <td className="msg-muted">order_id</td>
-                      <td style={{ textAlign: "right" }}>{String(lastOrder.order_id ?? "—")}</td>
-                    </tr>
-                    <tr>
-                      <td className="msg-muted">status</td>
-                      <td style={{ textAlign: "right" }}>{lastOrder.status ?? "—"}</td>
-                    </tr>
-                    <tr>
-                      <td className="msg-muted">filled</td>
-                      <td style={{ textAlign: "right" }}>{fmtNum(lastOrder.filled)}</td>
-                    </tr>
-                    <tr>
-                      <td className="msg-muted">cost</td>
-                      <td style={{ textAlign: "right" }}>{fmtNum(lastOrder.cost)}</td>
-                    </tr>
-                    <tr>
-                      <td className="msg-muted">average</td>
-                      <td style={{ textAlign: "right" }}>{fmtNum(lastOrder.average)}</td>
-                    </tr>
-                    <tr>
-                      <td className="msg-muted">timestamp</td>
-                      <td style={{ textAlign: "right" }}>{lastOrder.timestamp != null ? String(lastOrder.timestamp) : "—"}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+            <div
+              style={{
+                marginTop: "0.85rem",
+                padding: "0.55rem 0.65rem",
+                borderRadius: "var(--radius, 8px)",
+                border: "1px solid var(--border-subtle, rgba(255,255,255,0.12))",
+                fontSize: "0.88rem",
+              }}
+            >
+              <strong>Última orden enviada:</strong>{" "}
+              <span className="msg-muted">
+                {lastOrder.symbol} · <strong>{String(lastOrder.side)}</strong> · estado{" "}
+                <strong>{lastOrder.status ?? "—"}</strong> · filled {fmtNum(lastOrder.filled)} · cost {fmtNum(lastOrder.cost)}{" "}
+                USDT · avg {fmtNum(lastOrder.average)}
+              </span>
+              <span className="msg-muted" style={{ display: "block", marginTop: "0.35rem", fontSize: "0.8rem" }}>
+                Order ID {String(lastOrder.order_id ?? "—")}
+              </span>
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {connected ? (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: "0.65rem",
+              marginBottom: "0.65rem",
+            }}
+          >
+            <h3 className="dashboard-section-title" style={{ margin: 0, flex: "1 1 auto" }}>
+              Órdenes Testnet recientes
+            </h3>
+            <button type="button" className="radar-refresh-btn" onClick={() => void loadOrders()} disabled={ordersLoading}>
+              {ordersLoading ? "Refrescando…" : "Refrescar órdenes"}
+            </button>
+            <CryptoRefreshBadge active={ordersLoading} label="Órdenes locales…" />
+          </div>
+          <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.75rem", fontSize: "0.85rem" }}>
+            <strong>Historial local</strong>: sólo muestra órdenes enviadas desde esta app (archivo JSON en el servidor). No es
+            el historial completo de Binance.
+          </p>
+          {ordersError ? <p className="msg-error" style={{ fontSize: "0.875rem" }}>{ordersError}</p> : null}
+          {recentOrders.length > 0 ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Símbolo</th>
+                    <th>Lado</th>
+                    <th>Estado</th>
+                    <th style={{ textAlign: "right" }}>Filled</th>
+                    <th style={{ textAlign: "right" }}>Cost</th>
+                    <th style={{ textAlign: "right" }}>Average</th>
+                    <th>Order ID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentOrders.map((row, idx) => (
+                    <tr key={`${row.created_at}-${String(row.order_id)}-${idx}`}>
+                      <td style={{ whiteSpace: "nowrap", fontSize: "0.82rem" }}>{fmtIsoLocalShort(row.created_at)}</td>
+                      <td>{row.symbol ?? "—"}</td>
+                      <td>{row.side ?? "—"}</td>
+                      <td>{row.status ?? row.raw_status ?? "—"}</td>
+                      <td style={{ textAlign: "right" }}>{fmtNum(row.filled)}</td>
+                      <td style={{ textAlign: "right" }}>{fmtNum(row.cost)}</td>
+                      <td style={{ textAlign: "right" }}>{fmtNum(row.average)}</td>
+                      <td style={{ fontSize: "0.8rem", wordBreak: "break-all" }}>{String(row.order_id ?? "—")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : ordersLoading ? (
+            <p className="msg-muted" style={{ margin: 0, fontSize: "0.9rem" }}>Cargando historial…</p>
+          ) : (
+            <p className="msg-muted" style={{ margin: 0, fontSize: "0.9rem" }}>
+              Todavía no hay órdenes guardadas. Tras una compra testnet desde acá aparecerán en la tabla.
+            </p>
+          )}
         </div>
       ) : null}
 

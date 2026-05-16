@@ -314,6 +314,32 @@ export async function postCryptoTestnetMarketOrder(body: {
   return data as CryptoTestnetMarketOrderPayload;
 }
 
+/** Historial persistido localmente (órdenes enviadas desde esta app). */
+export type CryptoTestnetStoredOrder = {
+  created_at: string;
+  symbol?: string | null;
+  side?: string | null;
+  order_id?: string | number | null;
+  status?: string | null;
+  filled?: number | null;
+  cost?: number | null;
+  average?: number | null;
+  timestamp_exchange?: number | null;
+  raw_status?: string | null;
+  source?: string;
+};
+
+export async function getCryptoTestnetOrders(limit = 50): Promise<CryptoTestnetStoredOrder[]> {
+  const q = new URLSearchParams({ limit: String(Math.min(500, Math.max(1, limit))) });
+  const res = await fetch(`${BASE}/crypto/testnet/orders?${q}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!Array.isArray(data)) throw new Error("Respuesta inesperada: /crypto/testnet/orders");
+  return data as CryptoTestnetStoredOrder[];
+}
+
 export async function getCryptoTicker(symbol: string): Promise<CryptoTicker> {
   const q = new URLSearchParams({ symbol: symbol.trim() });
   const res = await fetch(`${BASE}/crypto/ticker?${q.toString()}`);

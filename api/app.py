@@ -542,6 +542,14 @@ def crypto_testnet_market_order(body: CryptoTestnetMarketOrderBody):
     return {"ok": True, "order": r.get("order")}
 
 
+@app.get("/crypto/testnet/orders")
+def crypto_testnet_orders(limit: int = Query(50, ge=1, le=500)):
+    """Historial local de órdenes enviadas desde esta app (data/crypto_testnet_orders.json)."""
+    from services.crypto import binance_testnet as tn
+
+    return tn.get_testnet_order_history(limit)
+
+
 @app.get("/crypto/ticker")
 def crypto_ticker(
     symbol: str = Query(..., min_length=3, description="Par spot CCXT, ej. BTC/USDT"),
