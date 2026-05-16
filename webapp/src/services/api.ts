@@ -277,18 +277,28 @@ export async function getCryptoTestnetTicker(symbol: string): Promise<CryptoTest
   return (await res.json()) as CryptoTestnetTickerPayload;
 }
 
-/** POST /crypto/testnet/order/market — testnet BUY (USDT) o SELL (cantidad base). */
+/** POST /crypto/testnet/order/market — testnet BUY (USDT) o SELL (cantidad base o ~USDT). */
 export type CryptoTestnetMarketOrderBuyBody = {
   symbol: string;
   side: "buy";
   quote_amount_usdt: number;
 };
 
-export type CryptoTestnetMarketOrderSellBody = {
+export type CryptoTestnetMarketOrderSellBodyExact = {
   symbol: string;
   side: "sell";
   amount_base: number;
 };
+
+export type CryptoTestnetMarketOrderSellBodyQuote = {
+  symbol: string;
+  side: "sell";
+  sell_quote_amount_usdt: number;
+};
+
+export type CryptoTestnetMarketOrderSellBody =
+  | CryptoTestnetMarketOrderSellBodyExact
+  | CryptoTestnetMarketOrderSellBodyQuote;
 
 export type CryptoTestnetMarketOrderRequestBody =
   | CryptoTestnetMarketOrderBuyBody
@@ -343,15 +353,28 @@ export type CryptoTestnetStoredOrder = {
   source?: string;
 };
 
-export async function getCryptoTestnetOrders(limit = 50): Promise<CryptoTestnetStoredOrder[]> {
+export type CryptoTestnetOrdersPayload = {
+  orders: CryptoTestnetStoredOrder[];
+  total: number;
+};
+
+export async function getCryptoTestnetOrders(limit = 50): Promise<CryptoTestnetOrdersPayload> {
   const q = new URLSearchParams({ limit: String(Math.min(500, Math.max(1, limit))) });
   const res = await fetch(`${BASE}/crypto/testnet/orders?${q}`);
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
   }
   const data: unknown = await res.json().catch(() => null);
-  if (!Array.isArray(data)) throw new Error("Respuesta inesperada: /crypto/testnet/orders");
-  return data as CryptoTestnetStoredOrder[];
+  if (data === null || typeof data !== "object") throw new Error("Respuesta inesperada: /crypto/testnet/orders");
+  const o = data as Record<string, unknown>;
+  if (!Array.isArray(o.orders)) throw new Error("Respuesta inesperada: /crypto/testnet/orders.orders");
+  const total =
+    typeof o.total === "number" && Number.isFinite(o.total)
+      ? o.total
+      : Array.isArray(o.orders)
+        ? o.orders.length
+        : 0;
+  return { orders: o.orders as CryptoTestnetStoredOrder[], total };
 }
 
 export async function getCryptoTicker(symbol: string): Promise<CryptoTicker> {

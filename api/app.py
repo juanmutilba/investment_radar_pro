@@ -517,12 +517,13 @@ def crypto_testnet_ticker(
 
 
 class CryptoTestnetMarketOrderBody(BaseModel):
-    """Spot market testnet: BUY por USDT (máx. 25) o SELL por cantidad base explícita. Sandbox únicamente."""
+    """Spot market testnet: BUY por USDT (máx. 25) o SELL por cantidad base o ~USDT a liquidar. Sandbox únicamente."""
 
     symbol: str = Field(..., min_length=3, max_length=24)
     side: Literal["buy", "sell"]
-    quote_amount_usdt: float | None = Field(default=None, description="Requerido si side=buy; máx. 25 USDT")
-    amount_base: float | None = Field(default=None, description="Requerido si side=sell; cantidad del activo base")
+    quote_amount_usdt: float | None = Field(default=None, description="BUY: monto USDT (máx. 25)")
+    amount_base: float | None = Field(default=None, description="SELL avanzado: cantidad del activo base")
+    sell_quote_amount_usdt: float | None = Field(default=None, description="SELL recomendado: ~USDT a recibir al vender")
 
     @model_validator(mode="after")
     def check_side_fields(self) -> "CryptoTestnetMarketOrderBody":
@@ -534,17 +535,32 @@ class CryptoTestnetMarketOrderBody(BaseModel):
                 raise ValueError("quote_amount_usdt debe ser ≥ 0.01")
             if q > 25:
                 raise ValueError("quote_amount_usdt máximo 25 USDT por orden")
+            if self.amount_base is not None or self.sell_quote_amount_usdt is not None:
+                raise ValueError("BUY no admite amount_base ni sell_quote_amount_usdt")
         else:
-            if self.amount_base is None:
-                raise ValueError("SELL requiere amount_base explícito (cantidad del activo base)")
-            if float(self.amount_base) <= 0:
-                raise ValueError("amount_base debe ser > 0")
+            has_base = self.amount_base is not None
+            has_sq = self.sell_quote_amount_usdt is not None
+            if has_base and has_sq:
+                raise ValueError("SELL: usá cantidad base o sell_quote_amount_usdt, no ambos")
+            if not has_base and not has_sq:
+                raise ValueError("SELL requiere amount_base o sell_quote_amount_usdt")
+            if self.quote_amount_usdt is not None:
+                raise ValueError("SELL no admite quote_amount_usdt")
+            if has_base:
+                if float(self.amount_base) <= 0:
+                    raise ValueError("amount_base debe ser > 0")
+            else:
+                sq = float(self.sell_quote_amount_usdt)
+                if sq < 0.01:
+                    raise ValueError("sell_quote_amount_usdt debe ser ≥ 0.01")
+                if sq > 25:
+                    raise ValueError("sell_quote_amount_usdt máximo 25 USDT por orden")
         return self
 
 
 @app.post("/crypto/testnet/order/market")
 def crypto_testnet_market_order(body: CryptoTestnetMarketOrderBody):
-    """Spot market testnet: BUY (USDT) o SELL (base); whitelist; sandbox."""
+    """Spot market testnet: BUY (USDT) o SELL (base o ~USDT); whitelist; sandbox."""
     from services.crypto import binance_testnet as tn
 
     try:
@@ -553,6 +569,7 @@ def crypto_testnet_market_order(body: CryptoTestnetMarketOrderBody):
             str(body.side),
             body.quote_amount_usdt,
             amount_base=body.amount_base,
+            sell_quote_amount_usdt=body.sell_quote_amount_usdt,
         )
     except Exception as e:
         msg = str(e).strip()
