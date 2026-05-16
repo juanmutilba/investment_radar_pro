@@ -1,5 +1,5 @@
 """
-Binance Spot Testnet (capa separada): lectura + orden market BUY acotada (testnet).
+Binance Spot Testnet (capa separada): lectura + órdenes market BUY / SELL acotadas (testnet).
 Credenciales dedicadas: BINANCE_TESTNET_API_KEY, BINANCE_TESTNET_API_SECRET, BINANCE_TESTNET_ENABLED.
 No usa BINANCE_API_KEY / BINANCE_API_SECRET (cuenta real).
 """
@@ -727,7 +727,29 @@ def _free_usdt_from_balances_payload(bal: dict[str, Any]) -> float | None:
     return 0.0
 
 
-def _summarize_ccxt_order(sym: str, side: str, raw: dict[str, Any]) -> dict[str, Any]:
+def _free_asset_from_balances_payload(bal: dict[str, Any], asset: str) -> float | None:
+    """Saldo libre de un activo (spot testnet desde get_testnet_balances)."""
+    if not bal.get("ok"):
+        return None
+    au = (asset or "").strip().upper()
+    if not au:
+        return None
+    for row in bal.get("balances") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("asset", "")).upper() == au:
+            try:
+                return float(row.get("free") or 0)
+            except (TypeError, ValueError):
+                return None
+    return 0.0
+
+
+def _base_asset_from_pair(sym: str) -> str | None:
+    parts = sym.split("/", 1)
+    if len(parts) != 2 or not parts[0].strip():
+        return None
+    return parts[0].strip().upper()
     oid = raw.get("id")
     status = raw.get("status")
     if isinstance(status, str):
@@ -816,13 +838,15 @@ def get_testnet_order_history(limit: int = 50) -> list[dict[str, Any]]:
 def place_testnet_market_order(
     symbol: str,
     side: str,
-    quote_amount_usdt: float | None,
+    quote_amount_usdt: float | None = None,
     *,
+    amount_base: float | None = None,
     max_quote_usdt: float = MAX_MARKET_ORDER_QUOTE_USDT,
 ) -> dict[str, Any]:
     """
-    Orden market sólo testnet. Fase actual: BUY por monto en USDT (quoteOrderQty vía ccxt).
-    SELL no implementado (rechazado).
+    Orden market sólo testnet (sandbox).
+    BUY: monto quote en USDT (create_market_buy_order_with_cost).
+    SELL: cantidad explícita del activo base (create_market_sell_order); amount_base obligatorio.
     """
     _ensure_dotenv()
     out_err = (
@@ -835,8 +859,8 @@ def place_testnet_market_order(
     )
 
     side_l = (side or "").strip().lower()
-    if side_l != "buy":
-        return out_err("Sólo BUY en testnet en esta fase; SELL no disponible.", 400)
+    if side_l not in ("buy", "sell"):
+        return out_err("side debe ser buy o sell", 400)
 
     if not _ccxt_available():
         return out_err("ccxt no instalado", 503)
@@ -854,35 +878,12 @@ def place_testnet_market_order(
             400,
         )
 
-    if quote_amount_usdt is None:
-        return out_err("quote_amount_usdt es obligatorio para BUY", 400)
-
-    try:
-        q_amt = float(quote_amount_usdt)
-    except (TypeError, ValueError):
-        return out_err("quote_amount_usdt inválido", 400)
-
-    if not (q_amt == q_amt) or q_amt <= 0:
-        return out_err("quote_amount_usdt debe ser > 0", 400)
-
-    if q_amt < MIN_MARKET_ORDER_QUOTE_USDT:
-        return out_err(f"Monto mínimo {MIN_MARKET_ORDER_QUOTE_USDT} USDT", 400)
-
-    if q_amt > max_quote_usdt:
-        return out_err(f"Monto máximo por orden {max_quote_usdt} USDT", 400)
-
     bal = get_testnet_balances()
     if not bal.get("ok"):
         return out_err(
             f"Lectura de balance requerida antes de operar: {bal.get('error')}",
             503,
         )
-
-    usdt_free = _free_usdt_from_balances_payload(bal)
-    if usdt_free is None:
-        return out_err("No se pudo determinar USDT libre", 503)
-    if usdt_free + 1e-9 < q_amt:
-        return out_err(f"USDT libre insuficiente (libre≈{usdt_free:.8f}, pedido={q_amt})", 400)
 
     ex = get_testnet_exchange()
     if ex is None:
@@ -893,29 +894,109 @@ def place_testnet_market_order(
     except RuntimeError as e:
         return out_err(str(e), 503)
 
-    cost = q_amt
-    ctp = getattr(ex, "cost_to_precision", None)
-    if callable(ctp):
+    raw: dict[str, Any]
+
+    if side_l == "buy":
+        if quote_amount_usdt is None:
+            return out_err("quote_amount_usdt es obligatorio para BUY", 400)
+
         try:
-            cost = float(ctp(sym, cost))
-        except Exception:
-            cost = q_amt
+            q_amt = float(quote_amount_usdt)
+        except (TypeError, ValueError):
+            return out_err("quote_amount_usdt inválido", 400)
 
-    if cost <= 0 or cost > max_quote_usdt + 1e-9:
-        return out_err("Monto tras precisión inválido", 400)
+        if not (q_amt == q_amt) or q_amt <= 0:
+            return out_err("quote_amount_usdt debe ser > 0", 400)
 
-    _log(f"market_buy: symbol={sym} quote_usdt={cost}")
-    try:
-        raw = ex.create_market_buy_order_with_cost(sym, cost)
-    except Exception as e:
-        err = _safe_error(e)
-        _log(f"market_buy falló {err}")
-        return out_err(err, 502)
+        if q_amt < MIN_MARKET_ORDER_QUOTE_USDT:
+            return out_err(f"Monto mínimo {MIN_MARKET_ORDER_QUOTE_USDT} USDT", 400)
 
-    if not isinstance(raw, dict):
-        return out_err("Respuesta de orden inválida", 502)
+        if q_amt > max_quote_usdt:
+            return out_err(f"Monto máximo por orden {max_quote_usdt} USDT", 400)
 
-    summary = _summarize_ccxt_order(sym, "buy", raw)
+        usdt_free = _free_usdt_from_balances_payload(bal)
+        if usdt_free is None:
+            return out_err("No se pudo determinar USDT libre", 503)
+        if usdt_free + 1e-9 < q_amt:
+            return out_err(f"USDT libre insuficiente (libre≈{usdt_free:.8f}, pedido={q_amt})", 400)
+
+        cost = q_amt
+        ctp = getattr(ex, "cost_to_precision", None)
+        if callable(ctp):
+            try:
+                cost = float(ctp(sym, cost))
+            except Exception:
+                cost = q_amt
+
+        if cost <= 0 or cost > max_quote_usdt + 1e-9:
+            return out_err("Monto tras precisión inválido", 400)
+
+        _log(f"market_buy: symbol={sym} quote_usdt={cost}")
+        try:
+            raw = ex.create_market_buy_order_with_cost(sym, cost)
+        except Exception as e:
+            err = _safe_error(e)
+            _log(f"market_buy falló {err}")
+            return out_err(err, 502)
+
+        if not isinstance(raw, dict):
+            return out_err("Respuesta de orden inválida", 502)
+
+        summary = _summarize_ccxt_order(sym, "buy", raw)
+
+    else:
+        if amount_base is None:
+            return out_err(
+                "amount_base es obligatorio para SELL (indicá una cantidad explícita del activo base)",
+                400,
+            )
+
+        try:
+            amt_in = float(amount_base)
+        except (TypeError, ValueError):
+            return out_err("amount_base inválido", 400)
+
+        if not (amt_in == amt_in) or amt_in <= 0:
+            return out_err("amount_base debe ser > 0", 400)
+
+        base_asset = _base_asset_from_pair(sym)
+        if base_asset is None:
+            return out_err("No se pudo determinar activo base del par", 400)
+
+        base_free = _free_asset_from_balances_payload(bal, base_asset)
+        if base_free is None:
+            return out_err(f"No se pudo determinar saldo libre de {base_asset}", 503)
+
+        amt = amt_in
+        atp = getattr(ex, "amount_to_precision", None)
+        if callable(atp):
+            try:
+                amt = float(atp(sym, amt_in))
+            except Exception:
+                amt = amt_in
+
+        if amt <= 0:
+            return out_err("Cantidad tras amount_to_precision inválida para SELL", 400)
+
+        if base_free + 1e-12 < amt:
+            return out_err(
+                f"{base_asset} libre insuficiente (libre≈{base_free:.12f}, pedido≈{amt})",
+                400,
+            )
+
+        _log(f"market_sell: symbol={sym} amount_base={amt}")
+        try:
+            raw = ex.create_market_sell_order(sym, amt)
+        except Exception as e:
+            err = _safe_error(e)
+            _log(f"market_sell falló {err}")
+            return out_err(err, 502)
+
+        if not isinstance(raw, dict):
+            return out_err("Respuesta de orden inválida", 502)
+
+        summary = _summarize_ccxt_order(sym, "sell", raw)
+
     try:
         _append_manual_testnet_order_record(summary, raw)
     except Exception as e:

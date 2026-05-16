@@ -277,7 +277,23 @@ export async function getCryptoTestnetTicker(symbol: string): Promise<CryptoTest
   return (await res.json()) as CryptoTestnetTickerPayload;
 }
 
-/** POST /crypto/testnet/order/market — BUY testnet sólo whitelist, máx. 25 USDT. */
+/** POST /crypto/testnet/order/market — testnet BUY (USDT) o SELL (cantidad base). */
+export type CryptoTestnetMarketOrderBuyBody = {
+  symbol: string;
+  side: "buy";
+  quote_amount_usdt: number;
+};
+
+export type CryptoTestnetMarketOrderSellBody = {
+  symbol: string;
+  side: "sell";
+  amount_base: number;
+};
+
+export type CryptoTestnetMarketOrderRequestBody =
+  | CryptoTestnetMarketOrderBuyBody
+  | CryptoTestnetMarketOrderSellBody;
+
 export type CryptoTestnetMarketOrderRow = {
   symbol: string;
   side: string;
@@ -294,11 +310,9 @@ export type CryptoTestnetMarketOrderPayload = {
   order?: CryptoTestnetMarketOrderRow;
 };
 
-export async function postCryptoTestnetMarketOrder(body: {
-  symbol: string;
-  side: "buy";
-  quote_amount_usdt: number;
-}): Promise<CryptoTestnetMarketOrderPayload> {
+export async function postCryptoTestnetMarketOrder(
+  body: CryptoTestnetMarketOrderRequestBody,
+): Promise<CryptoTestnetMarketOrderPayload> {
   const res = await fetch(`${BASE}/crypto/testnet/order/market`, {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },

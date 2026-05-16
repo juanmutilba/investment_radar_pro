@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 
@@ -14,7 +14,7 @@ if _ENV_FILE.is_file():
     load_dotenv(_ENV_FILE, override=True)
 
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from api.portfolio import router as portfolio_router
 from persistence.sqlite import init_database
@@ -517,22 +517,41 @@ def crypto_testnet_ticker(
 
 
 class CryptoTestnetMarketOrderBody(BaseModel):
-    """Orden spot market en testnet (BUY por quote USDT). No paper, no cuenta real."""
+    """Spot market testnet: BUY por USDT (máx. 25) o SELL por cantidad base explícita. Sandbox únicamente."""
 
     symbol: str = Field(..., min_length=3, max_length=24)
-    side: str = Field(..., min_length=3, max_length=4, description="buy (único soportado)")
-    quote_amount_usdt: float = Field(..., ge=0.01, le=25.0)
+    side: Literal["buy", "sell"]
+    quote_amount_usdt: float | None = Field(default=None, description="Requerido si side=buy; máx. 25 USDT")
+    amount_base: float | None = Field(default=None, description="Requerido si side=sell; cantidad del activo base")
+
+    @model_validator(mode="after")
+    def check_side_fields(self) -> "CryptoTestnetMarketOrderBody":
+        if self.side == "buy":
+            if self.quote_amount_usdt is None:
+                raise ValueError("BUY requiere quote_amount_usdt")
+            q = float(self.quote_amount_usdt)
+            if q < 0.01:
+                raise ValueError("quote_amount_usdt debe ser ≥ 0.01")
+            if q > 25:
+                raise ValueError("quote_amount_usdt máximo 25 USDT por orden")
+        else:
+            if self.amount_base is None:
+                raise ValueError("SELL requiere amount_base explícito (cantidad del activo base)")
+            if float(self.amount_base) <= 0:
+                raise ValueError("amount_base debe ser > 0")
+        return self
 
 
 @app.post("/crypto/testnet/order/market")
 def crypto_testnet_market_order(body: CryptoTestnetMarketOrderBody):
-    """Spot market testnet: sólo BUY whitelist, máx. 25 USDT por orden."""
+    """Spot market testnet: BUY (USDT) o SELL (base); whitelist; sandbox."""
     from services.crypto import binance_testnet as tn
 
     r = tn.place_testnet_market_order(
         body.symbol.strip(),
-        body.side.strip(),
+        body.side,
         body.quote_amount_usdt,
+        amount_base=body.amount_base,
     )
     if not r.get("ok"):
         raise HTTPException(
