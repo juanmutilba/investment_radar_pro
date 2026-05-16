@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { CycleDiagnosticsPanel } from "@/components/crypto/CycleDiagnosticsPanel";
 import {
   getCryptoTestnetBalances,
   getCryptoTestnetMonitorStatus,
@@ -1263,6 +1264,18 @@ export function CryptoTestnetPanel() {
             {monitorBannerError}
           </p>
         ) : null}
+
+        <CycleDiagnosticsPanel
+          startedAt={monitorStatus?.last_cycle_started_at}
+          finishedAt={monitorStatus?.last_cycle_finished_at}
+          durationMs={monitorStatus?.last_cycle_duration_ms}
+          primaryReason={monitorStatus?.last_primary_reason ?? monitorStatus?.last_entry_primary_reason}
+          summary={monitorStatus?.last_cycle_summary}
+          bestRejected={monitorStatus?.best_rejected_candidate}
+          entryCandidate={monitorStatus?.last_entry_candidate}
+          primaryReasonLabel={assistedPrimaryReasonLabel}
+          emptyHint="Sin datos de ciclo todavía. Iniciá el monitor y esperá la primera revisión."
+        />
 
         <div className="crypto-testnet-toolbar crypto-testnet-block-start" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
           <button

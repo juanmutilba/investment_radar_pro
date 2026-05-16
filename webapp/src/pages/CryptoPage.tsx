@@ -12,6 +12,7 @@ import {
   saveFavoriteSymbols,
   saveUseFavoritesForSignals,
 } from "@/components/crypto/cryptoPrincipalPrefs";
+import { CycleDiagnosticsPanel } from "@/components/crypto/CycleDiagnosticsPanel";
 import { PaperSimEquityCurvePanel } from "@/components/crypto/PaperSimEquityCurvePanel";
 import { CryptoTestnetPanel } from "@/components/crypto/CryptoTestnetPanel";
 import type { CSSProperties } from "react";
@@ -1963,11 +1964,18 @@ export function CryptoPage() {
             {autoError}
           </p>
         ) : null}
-        {autoStatus?.enabled && (autoStatus.last_actions?.length ?? 0) > 0 ? (
-          <p className="msg-muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-            Último ciclo: {autoStatus.last_actions.length} acción(es) registrada(s).
-          </p>
-        ) : null}
+        <CycleDiagnosticsPanel
+          startedAt={autoStatus?.last_cycle_started_at}
+          finishedAt={autoStatus?.last_cycle_finished_at}
+          durationMs={autoStatus?.last_cycle_duration_ms}
+          primaryReason={autoStatus?.last_primary_reason}
+          summary={autoStatus?.last_cycle_summary}
+          bestRejected={autoStatus?.best_rejected_candidate}
+          entryCandidate={autoStatus?.last_entry_candidate}
+          phases={autoStatus?.last_cycle_phases}
+          primaryReasonLabel={strategyPrimaryReasonLabel}
+          emptyHint="Sin datos de ciclo todavía. Iniciá el auto-run y esperá la primera revisión (entradas o salidas)."
+        />
         </div>
       </div>
 

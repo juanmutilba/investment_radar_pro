@@ -572,6 +572,13 @@ export type CryptoTestnetMonitorStatusPayload = {
   last_evaluated_exits: CryptoTestnetExitEvaluatedRow[];
   interval_seconds: number;
   params: CryptoTestnetMonitorParamsSnapshot;
+  last_cycle_started_at?: string | null;
+  last_cycle_finished_at?: string | null;
+  last_cycle_duration_ms?: number | null;
+  last_cycle_summary?: CryptoCycleSummary | null;
+  best_rejected_candidate?: CryptoCycleCandidate | null;
+  last_entry_candidate?: CryptoCycleCandidate | null;
+  last_primary_reason?: string | null;
 };
 
 export type CryptoTestnetMonitorStartBody = {
@@ -1455,6 +1462,21 @@ export type CryptoPaperBotAutoAction = CryptoPaperCycleAction & {
   message?: string | null;
 };
 
+export type CryptoCycleSummary = {
+  evaluated_count: number;
+  accepted_count: number;
+  rejected_count: number;
+  skipped_count?: number;
+  reasons: Record<string, number>;
+};
+
+export type CryptoCycleCandidate = {
+  symbol: string;
+  score?: number | null;
+  reason?: string | null;
+  signal?: string | null;
+};
+
 export type CryptoPaperBotAutoStatus = {
   enabled: boolean;
   running: boolean;
@@ -1468,6 +1490,14 @@ export type CryptoPaperBotAutoStatus = {
   auto_session_last_sell_symbol: string | null;
   strategy_interval_seconds: number;
   exits_interval_seconds: number;
+  last_cycle_started_at?: string | null;
+  last_cycle_finished_at?: string | null;
+  last_cycle_duration_ms?: number | null;
+  last_cycle_phases?: string[];
+  last_primary_reason?: string | null;
+  last_entry_candidate?: CryptoCycleCandidate | null;
+  last_cycle_summary?: CryptoCycleSummary | null;
+  best_rejected_candidate?: CryptoCycleCandidate | null;
 };
 
 export type CryptoPaperBotAutoStartParams = CryptoPaperStrategyParams & {

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -30,6 +31,13 @@ _STATE: dict[str, Any] = {
     "last_evaluated_exits": [],
     "interval_seconds": 300,
     "params": {},
+    "last_cycle_started_at": None,
+    "last_cycle_finished_at": None,
+    "last_cycle_duration_ms": None,
+    "last_cycle_summary": None,
+    "best_rejected_candidate": None,
+    "last_entry_candidate": None,
+    "last_primary_reason": None,
 }
 
 
@@ -48,16 +56,43 @@ def _schedule_next_run_locked(interval_seconds: int) -> None:
     ).isoformat(timespec="seconds")
 
 
+def _apply_entry_diagnostics(entry: dict[str, Any]) -> None:
+    from services.crypto.cycle_diagnostics import (
+        build_cycle_summary_from_evaluated,
+        pick_best_rejected_candidate,
+        pick_entry_candidate_from_evaluated,
+    )
+
+    evaluated = [e for e in (entry.get("evaluated") or []) if isinstance(e, dict)]
+    _STATE["last_cycle_summary"] = build_cycle_summary_from_evaluated(evaluated)
+    _STATE["best_rejected_candidate"] = pick_best_rejected_candidate(evaluated)
+    _STATE["last_primary_reason"] = entry.get("primary_reason")
+    _STATE["last_entry_primary_reason"] = entry.get("primary_reason")
+
+    proposal = entry.get("proposal")
+    if isinstance(proposal, dict) and proposal.get("symbol"):
+        _STATE["last_entry_candidate"] = {
+            "symbol": str(proposal.get("symbol")),
+            "score": proposal.get("score"),
+            "reason": str(proposal.get("reason") or ""),
+            "signal": str(proposal.get("signal") or ""),
+        }
+    else:
+        _STATE["last_entry_candidate"] = pick_entry_candidate_from_evaluated(evaluated)
+
+
 def _run_cycle() -> None:
     from services.crypto.binance_testnet import propose_testnet_exits
     from services.crypto.bot_runner import propose_testnet_entry_from_strategy
 
+    cycle_started_iso = _utc_now_iso()
+    cycle_started_mono = time.monotonic()
+
     with _LOCK:
         params = dict(_STATE["params"])
         interval_sec = max(30, int(_STATE["interval_seconds"]))
-
-    with _LOCK:
         _STATE["running"] = True
+        _STATE["last_cycle_started_at"] = cycle_started_iso
 
     errs: list[str] = []
     entry: dict[str, Any] | None = None
@@ -105,19 +140,26 @@ def _run_cycle() -> None:
         _log(f"ciclo error {errs[-1]}")
     finally:
         now_iso = _utc_now_iso()
+        duration_ms = int((time.monotonic() - cycle_started_mono) * 1000)
         with _LOCK:
             _STATE["running"] = False
             _STATE["last_run_at"] = now_iso
+            _STATE["last_cycle_finished_at"] = now_iso
+            _STATE["last_cycle_duration_ms"] = duration_ms
             _schedule_next_run_locked(interval_sec)
 
             if entry is not None:
                 _STATE["last_entry_proposal"] = copy.deepcopy(entry.get("proposal"))
-                _STATE["last_entry_primary_reason"] = entry.get("primary_reason")
                 _STATE["last_evaluated_entries"] = copy.deepcopy(entry.get("evaluated") or [])
+                _apply_entry_diagnostics(entry)
             else:
                 _STATE["last_entry_proposal"] = None
                 _STATE["last_entry_primary_reason"] = None
                 _STATE["last_evaluated_entries"] = []
+                _STATE["last_cycle_summary"] = None
+                _STATE["best_rejected_candidate"] = None
+                _STATE["last_entry_candidate"] = None
+                _STATE["last_primary_reason"] = None
 
             if exit_payload is not None:
                 _STATE["last_exit_proposals"] = copy.deepcopy(exit_payload.get("proposals") or [])
@@ -245,4 +287,11 @@ def get_testnet_monitor_status() -> dict[str, Any]:
             "last_evaluated_exits": copy.deepcopy(_STATE["last_evaluated_exits"]),
             "interval_seconds": int(_STATE["interval_seconds"]),
             "params": copy.deepcopy(_STATE["params"]),
+            "last_cycle_started_at": _STATE.get("last_cycle_started_at"),
+            "last_cycle_finished_at": _STATE.get("last_cycle_finished_at"),
+            "last_cycle_duration_ms": _STATE.get("last_cycle_duration_ms"),
+            "last_cycle_summary": copy.deepcopy(_STATE.get("last_cycle_summary")),
+            "best_rejected_candidate": copy.deepcopy(_STATE.get("best_rejected_candidate")),
+            "last_entry_candidate": copy.deepcopy(_STATE.get("last_entry_candidate")),
+            "last_primary_reason": _STATE.get("last_primary_reason"),
         }

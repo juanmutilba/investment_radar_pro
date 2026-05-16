@@ -33,6 +33,14 @@ _state: dict[str, Any] = {
     "strategy_params": None,
     "_last_exits_mono": None,
     "_last_strategy_mono": None,
+    "last_cycle_started_at": None,
+    "last_cycle_finished_at": None,
+    "last_cycle_duration_ms": None,
+    "last_cycle_phases": [],
+    "last_primary_reason": None,
+    "last_entry_candidate": None,
+    "last_cycle_summary": None,
+    "best_rejected_candidate": None,
 }
 
 
@@ -93,9 +101,36 @@ def _refresh_next_run_at() -> None:
         ).isoformat()
 
 
+def _apply_strategy_diagnostics(result: dict[str, Any]) -> None:
+    from services.crypto.cycle_diagnostics import (
+        build_cycle_summary_from_evaluated,
+        pick_best_rejected_candidate,
+        pick_entry_candidate_from_action,
+        pick_entry_candidate_from_evaluated,
+    )
+
+    evaluated = [e for e in (result.get("evaluated") or []) if isinstance(e, dict)]
+    _state["last_cycle_summary"] = build_cycle_summary_from_evaluated(evaluated)
+    _state["best_rejected_candidate"] = pick_best_rejected_candidate(evaluated)
+    _state["last_primary_reason"] = result.get("primary_reason")
+
+    entry_cand: dict[str, Any] | None = None
+    for a in result.get("actions") or []:
+        if isinstance(a, dict):
+            entry_cand = pick_entry_candidate_from_action(a)
+            if entry_cand:
+                break
+    if entry_cand is None:
+        entry_cand = pick_entry_candidate_from_evaluated(evaluated)
+    _state["last_entry_candidate"] = entry_cand
+
+
 def _run_cycle() -> None:
     if not _cycle_lock.acquire(blocking=False):
         return
+    cycle_started_iso = _utc_iso()
+    cycle_started_mono = time.monotonic()
+    phases_ran: list[str] = []
     try:
         with _state_lock:
             if not _state["enabled"]:
@@ -103,6 +138,7 @@ def _run_cycle() -> None:
             if _state["running"]:
                 return
             _state["running"] = True
+            _state["last_cycle_started_at"] = cycle_started_iso
             exits_iv = int(_state["exits_interval_seconds"])
             strat_iv = int(_state["strategy_interval_seconds"])
             last_exits = _state.get("_last_exits_mono")
@@ -119,6 +155,7 @@ def _run_cycle() -> None:
         actions_accum: list[dict[str, Any]] = []
 
         if do_exits:
+            phases_ran.append("exits")
             from services.crypto.paper_portfolio import review_paper_positions_for_exit
 
             for a in review_paper_positions_for_exit():
@@ -129,6 +166,7 @@ def _run_cycle() -> None:
                 _state["_last_exits_mono"] = now
 
         if do_strategy:
+            phases_ran.append("strategy")
             from services.crypto.bot_runner import execute_paper_strategy
 
             result = execute_paper_strategy(**params)
@@ -143,19 +181,30 @@ def _run_cycle() -> None:
                     "opened_count": result.get("opened_count"),
                     "primary_reason": result.get("primary_reason"),
                     "message": result.get("message"),
+                    "scanned_count": result.get("scanned_count"),
+                    "candidates_count": result.get("candidates_count"),
                 }
             )
             with _state_lock:
                 _state["_last_strategy_mono"] = now
+                _apply_strategy_diagnostics(result)
 
+        duration_ms = int((time.monotonic() - cycle_started_mono) * 1000)
         with _state_lock:
             _state["last_run_at"] = _utc_iso()
+            _state["last_cycle_finished_at"] = _utc_iso()
+            _state["last_cycle_duration_ms"] = duration_ms
+            _state["last_cycle_phases"] = list(phases_ran)
             _state["last_actions"] = actions_accum[-_MAX_LAST_ACTIONS:]
             _accumulate_auto_session_counts(actions_accum)
             _state["last_error"] = None
     except Exception as e:
+        duration_ms = int((time.monotonic() - cycle_started_mono) * 1000)
         with _state_lock:
             _state["last_error"] = str(e)
+            _state["last_cycle_finished_at"] = _utc_iso()
+            _state["last_cycle_duration_ms"] = duration_ms
+            _state["last_cycle_phases"] = list(phases_ran)
     finally:
         with _state_lock:
             _state["running"] = False
@@ -248,4 +297,12 @@ def get_paper_bot_scheduler_status() -> dict[str, Any]:
             "auto_session_last_sell_symbol": _state.get("auto_session_last_sell_symbol"),
             "strategy_interval_seconds": int(_state["strategy_interval_seconds"]),
             "exits_interval_seconds": int(_state["exits_interval_seconds"]),
+            "last_cycle_started_at": _state.get("last_cycle_started_at"),
+            "last_cycle_finished_at": _state.get("last_cycle_finished_at"),
+            "last_cycle_duration_ms": _state.get("last_cycle_duration_ms"),
+            "last_cycle_phases": list(_state.get("last_cycle_phases") or []),
+            "last_primary_reason": _state.get("last_primary_reason"),
+            "last_entry_candidate": _state.get("last_entry_candidate"),
+            "last_cycle_summary": _state.get("last_cycle_summary"),
+            "best_rejected_candidate": _state.get("best_rejected_candidate"),
         }
