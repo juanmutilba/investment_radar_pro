@@ -31,6 +31,10 @@ CRYPTO_WATCHLIST: list[str] = [
     "APT/USDT",
     "INJ/USDT",
     "ARB/USDT",
+    "OP/USDT",
+    "SUI/USDT",
+    "PEPE/USDT",
+    "WIF/USDT",
 ]
 
 
@@ -64,7 +68,7 @@ def _error_row(symbol: str, timeframe: str, error: str) -> dict[str, Any]:
     }
 
 
-def _scan_one(symbol: str, timeframe: str, limit: int) -> dict[str, Any]:
+def _scan_one(symbol: str, timeframe: str, limit: int, strategy_mode: str | None = None) -> dict[str, Any]:
     sym = symbol.strip()
     tf = (timeframe or "1h").strip() or "1h"
     try:
@@ -81,7 +85,7 @@ def _scan_one(symbol: str, timeframe: str, limit: int) -> dict[str, Any]:
         return _error_row(sym, tf, msg)
 
     try:
-        analysis = analyze_ohlcv(candles)
+        analysis = analyze_ohlcv(candles, timeframe=tf, strategy_mode=strategy_mode)
     except ValueError as e:
         _log(f"{sym}: analyze_ohlcv {e}")
         return _error_row(sym, tf, str(e))
@@ -89,7 +93,10 @@ def _scan_one(symbol: str, timeframe: str, limit: int) -> dict[str, Any]:
         _log(f"{sym}: analyze_ohlcv fallo {type(e).__name__}: {e}")
         return _error_row(sym, tf, f"{type(e).__name__}: {e}")
 
-    _log(f"{sym}: OK score={analysis.get('score')} signal={analysis.get('signal')}")
+    _log(
+        f"{sym}: OK mode={analysis.get('strategy_mode')} score={analysis.get('score')} "
+        f"signal={analysis.get('signal')} setup={analysis.get('setup_type')}"
+    )
     return {
         "symbol": sym,
         "timeframe": tf,
@@ -101,6 +108,14 @@ def _scan_one(symbol: str, timeframe: str, limit: int) -> dict[str, Any]:
         "risk": analysis["risk"],
         "rsi_14": analysis["rsi_14"],
         "macd_hist": analysis["macd_hist"],
+        "strategy_mode": analysis.get("strategy_mode"),
+        "setup_type": analysis.get("setup_type"),
+        "entry_eligible": analysis.get("entry_eligible"),
+        "trend_context": analysis.get("trend_context"),
+        "rsi_context": analysis.get("rsi_context"),
+        "macd_context": analysis.get("macd_context"),
+        "volume_context": analysis.get("volume_context"),
+        "btc_context": analysis.get("btc_context"),
         "error": None,
     }
 
@@ -113,22 +128,29 @@ def _sort_scan_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return ok + bad
 
 
-def scan_crypto_watchlist(timeframe: str = "1h", limit: int = 200) -> list[dict[str, Any]]:
+def scan_crypto_watchlist(
+    timeframe: str = "1h",
+    limit: int = 200,
+    strategy_mode: str | None = None,
+) -> list[dict[str, Any]]:
     """
     Escanea todos los símbolos de la watchlist.
     Un fallo por símbolo no interrumpe el resto.
     """
+    from services.crypto.strategy_modes import normalize_strategy_mode
+
     tf = (timeframe or "1h").strip() or "1h"
     lim = max(50, min(int(limit), 1000))
+    mode = normalize_strategy_mode(strategy_mode)
     symbols = get_crypto_watchlist()
     wl_count = len(symbols)
-    _log(f"inicio symbols={wl_count} timeframe={tf} limit={lim}")
+    _log(f"inicio symbols={wl_count} timeframe={tf} limit={lim} strategy_mode={mode}")
     if wl_count == 0:
         _log("watchlist vacía: CRYPTO_WATCHLIST sin símbolos")
         return []
     rows: list[dict[str, Any]] = []
     for sym in symbols:
-        rows.append(_scan_one(sym, tf, lim))
+        rows.append(_scan_one(sym, tf, lim, strategy_mode=mode))
     out = _sort_scan_rows(rows)
     ok_n = sum(1 for r in out if not r.get("error"))
     _log(f"fin ok={ok_n} errores={len(out) - ok_n}")

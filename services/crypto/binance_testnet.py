@@ -63,11 +63,67 @@ def _ensure_dotenv() -> None:
 
 _HIGHLIGHT_ASSETS = ("USDT", "BTC", "ETH", "BNB", "SOL")
 
-MARKET_ORDER_SYMBOL_WHITELIST: frozenset[str] = frozenset(
-    {"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"}
+# Core conservador + ampliación intradía líquida (solo USDT spot testnet).
+_TESTNET_WHITELIST_CORE: tuple[str, ...] = (
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "BNB/USDT",
 )
+_TESTNET_WHITELIST_INTRADAY: tuple[str, ...] = (
+    "XRP/USDT",
+    "DOGE/USDT",
+    "ADA/USDT",
+    "LINK/USDT",
+    "AVAX/USDT",
+    "LTC/USDT",
+    "ARB/USDT",
+    "OP/USDT",
+    "SUI/USDT",
+    "NEAR/USDT",
+)
+_TESTNET_WHITELIST_OPTIONAL_MEME: tuple[str, ...] = (
+    "PEPE/USDT",
+    "WIF/USDT",
+)
+
+MARKET_ORDER_SYMBOL_WHITELIST: frozenset[str] = frozenset(
+    _TESTNET_WHITELIST_CORE + _TESTNET_WHITELIST_INTRADAY + _TESTNET_WHITELIST_OPTIONAL_MEME
+)
+
+
+def testnet_whitelist_symbols_sorted() -> list[str]:
+    return sorted(MARKET_ORDER_SYMBOL_WHITELIST)
+
+
+def testnet_whitelist_base_assets() -> frozenset[str]:
+    return frozenset(sym.split("/", 1)[0] for sym in MARKET_ORDER_SYMBOL_WHITELIST if "/" in sym)
+
+
+def format_testnet_app_position_duplicate_rejection(symbol: str | None = None) -> str:
+    sym = (symbol or "").strip().upper()
+    if sym:
+        return f"Ya existe una posición Testnet registrada por la app para {sym}."
+    return "Ya existe una posición Testnet registrada por la app para este activo."
+
+
+def format_testnet_whitelist_rejection(
+    symbol: str,
+    setup_type: str | None = None,
+) -> str:
+    sym = (symbol or "").strip().upper()
+    setup = (setup_type or "").strip()
+    if setup:
+        return f"{sym} ({setup}) no está habilitado en la whitelist Testnet."
+    return f"{sym} no está habilitado en la whitelist Testnet."
 MAX_MARKET_ORDER_QUOTE_USDT: float = 25.0
 MIN_MARKET_ORDER_QUOTE_USDT: float = 0.01
+
+# Cupo max_open_positions (propuestas/monitor): historial local, no saldos sandbox.
+TESTNET_POSITION_SOURCE = "testnet_local_app_positions"
+TESTNET_POSITION_SOURCE_LABEL = "Posiciones Testnet registradas por la app"
+TESTNET_POSITION_COUNT_SOURCE = "crypto_testnet_orders_json_fifo"
+_TESTNET_APP_POSITION_BASE_EPS = 1e-8
 
 
 def _log(msg: str) -> None:
@@ -1246,6 +1302,30 @@ def _load_testnet_orders_json() -> list[dict[str, Any]]:
     if isinstance(raw, list):
         return [row for row in raw if isinstance(row, dict)]
     return []
+
+
+def get_testnet_app_position_symbols() -> list[str]:
+    """
+    Posiciones abiertas según historial local (BUY MARKET/LIMIT con fill menos SELL).
+    No usa saldos ficticios iniciales del sandbox.
+    """
+    all_rows = _load_testnet_orders_json()
+    if not all_rows:
+        return []
+
+    symbols: set[str] = set()
+    for row in all_rows:
+        sym = str(row.get("symbol") or "").strip().upper().replace(" ", "")
+        if sym and sym in MARKET_ORDER_SYMBOL_WHITELIST:
+            symbols.add(sym)
+
+    open_syms: list[str] = []
+    for sym in sorted(symbols):
+        rows = _local_orders_for_symbol(all_rows, sym)
+        base_inv, _, _ = _fifo_base_cost_after_orders(rows)
+        if base_inv > _TESTNET_APP_POSITION_BASE_EPS:
+            open_syms.append(sym)
+    return open_syms
 
 
 def _fifo_base_cost_after_orders(rows_chrono: list[dict[str, Any]]) -> tuple[float, float, bool]:

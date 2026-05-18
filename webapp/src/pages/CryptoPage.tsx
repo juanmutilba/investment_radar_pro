@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
   CryptoFavoritesSection,
   CryptoPrincipalTickerCard,
@@ -12,7 +12,12 @@ import {
   saveFavoriteSymbols,
   saveUseFavoritesForSignals,
 } from "@/components/crypto/cryptoPrincipalPrefs";
+import {
+  CryptoCandidateOpportunityPanel,
+  mergeCandidateOpportunitiesWithEvaluated,
+} from "@/components/crypto/CryptoCandidateOpportunityPanel";
 import { CycleDiagnosticsPanel } from "@/components/crypto/CycleDiagnosticsPanel";
+import { primaryReasonLabel as cryptoPrimaryReasonLabel } from "@/components/crypto/cryptoStrategyMessages";
 import { CryptoTimeframeField } from "@/components/crypto/CryptoTimeframeField";
 import { normalizeTimeframeString } from "@/components/crypto/cryptoTimeframe";
 import { PaperSimEquityCurvePanel } from "@/components/crypto/PaperSimEquityCurvePanel";
@@ -22,6 +27,7 @@ import {
   closeCryptoPaperPosition,
   getCryptoAnalysis,
   executeCryptoPaperStrategy,
+  getCryptoCompareStrategies,
   getCryptoPaperBotAutoStatus,
   reviewCryptoPaperExits,
   startCryptoPaperBotAuto,
@@ -47,6 +53,8 @@ import {
   type CryptoPaperPosition,
   type CryptoScanRow,
   type CryptoStatusPayload,
+  type CryptoStrategyCompareResponse,
+  type CryptoStrategyMode,
   type CryptoTicker,
 } from "@/services/api";
 
@@ -60,9 +68,95 @@ const STRATEGY_DEFAULT_TAKE_PROFIT = 4;
 const STRATEGY_DEFAULT_TRAILING = 1.5;
 const STRATEGY_DEFAULT_MAX_POSITIONS = 3;
 const STRATEGY_DEFAULT_REQUIRE_BTC_TREND_UP = true;
+const STRATEGY_MODE_TREND_SWING_HINT =
+  "Conservador: tendencia a favor, score alto (~70), filtro BTC activo, menos operaciones. Timeframes 1h–4h, SL/TP más amplios.";
+const STRATEGY_MODE_DAILY_INTRADAY_HINT =
+  "Diario/intradía: setups pullback, rebound, momentum y reversal controlado; tendencia corta según TF; BTC flexible en pullbacks; más candidatos con score ~55–62.";
 const AUTO_DEFAULT_EXITS_INTERVAL_MIN = 5;
+
+function applyStrategyModePreset(mode: CryptoStrategyMode): {
+  tf: string;
+  stopLoss: string;
+  takeProfit: string;
+  trailing: string;
+  maxPositions: string;
+  cooldown: string;
+  minScore: string;
+  requireBtc: boolean;
+} {
+  if (mode === "daily_intraday") {
+    return {
+      tf: "30m",
+      stopLoss: "1.2",
+      takeProfit: "2",
+      trailing: "1",
+      maxPositions: "5",
+      cooldown: "45",
+      minScore: "58",
+      requireBtc: false,
+    };
+  }
+  return {
+    tf: "1h",
+    stopLoss: String(STRATEGY_DEFAULT_STOP_LOSS),
+    takeProfit: String(STRATEGY_DEFAULT_TAKE_PROFIT),
+    trailing: String(STRATEGY_DEFAULT_TRAILING),
+    maxPositions: String(STRATEGY_DEFAULT_MAX_POSITIONS),
+    cooldown: "120",
+    minScore: "70",
+    requireBtc: STRATEGY_DEFAULT_REQUIRE_BTC_TREND_UP,
+  };
+}
 const AUTO_DEFAULT_STRATEGY_INTERVAL_MIN = 30;
 const AUTO_STATUS_POLL_MS = 20_000;
+
+function strategyModeLabelEs(mode: string | null | undefined): string {
+  if (mode === "daily_intraday") return "Daily / Intradía";
+  if (mode === "trend_swing") return "Trend / Swing";
+  return mode?.trim() ? mode : "—";
+}
+
+function formatSignalCounts(counts: Record<string, number> | undefined): string {
+  if (!counts || Object.keys(counts).length === 0) return "—";
+  return Object.entries(counts)
+    .map(([k, n]) => `${k}=${n}`)
+    .join(", ");
+}
+
+function formatDailySetups(counts: Record<string, number> | undefined): string {
+  if (!counts || Object.keys(counts).length === 0) return "—";
+  return Object.entries(counts)
+    .map(([k, n]) => `${k} (${n})`)
+    .join(", ");
+}
+
+function formatNonCandidateReasons(reasons: Record<string, number> | undefined): string {
+  if (!reasons || Object.keys(reasons).length === 0) return "—";
+  const labels: Record<string, string> = {
+    signal_not_compra_potencial: "sin compra_potencial",
+    setup_not_eligible: "setup no elegible",
+    compra_not_entry_eligible: "compra sin elegibilidad",
+    no_daily_setup: "sin setup daily",
+    setup_other: "setup otro",
+    other: "otro",
+  };
+  return Object.entries(reasons)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([k, n]) => `${labels[k] ?? k}: ${n}`)
+    .join(" · ");
+}
+
+function formatBestCandidate(
+  best: CryptoStrategyCompareResponse["modes"][number]["best_candidate"],
+): string {
+  if (!best?.symbol) return "—";
+  const parts = [best.symbol];
+  if (best.score != null) parts.push(`score ${best.score}`);
+  if (best.setup_type) parts.push(String(best.setup_type));
+  else if (best.signal) parts.push(String(best.signal));
+  return parts.join(" · ");
+}
 
 type CryptoPageTab = "principal" | "bot" | "historial" | "testnet";
 
@@ -298,24 +392,11 @@ function paperProbableExit(pos: CryptoPaperPosition): { label: string; title: st
   };
 }
 
-function strategyPrimaryReasonLabel(reason: string | null | undefined): string {
-  if (!reason) return "—";
-  const labels: Record<string, string> = {
-    no_opportunity: "Sin oportunidades (compra_potencial)",
-    watchlist_empty: "Watchlist vacía",
-    scanner_empty: "Scanner sin filas",
-    scanner_error: "Error de scanner",
-    score_below_min: "Score por debajo del mínimo",
-    already_open: "Posición ya abierta en el símbolo",
-    cooldown_symbol: "Cooldown activo para el símbolo",
-    btc_trend_filter: "BTC sin tendencia alcista",
-    opened: "Se abrió posición",
-    max_one_per_run: "Máximo 1 entrada por ejecución",
-    max_open_positions: "Máximo de posiciones abiertas",
-    no_entry: "Sin entrada tras evaluar candidatos",
-    candidates_present: "Hay candidatos con señal",
-  };
-  return labels[reason] ?? reason;
+function strategyPrimaryReasonLabel(
+  reason: string | null | undefined,
+  strategyMode?: string | null,
+): string {
+  return cryptoPrimaryReasonLabel(reason, strategyMode);
 }
 
 function strategyResultBannerStyle(
@@ -623,6 +704,7 @@ export function CryptoPage() {
   const [paperReason, setPaperReason] = useState("");
   const [paperOpening, setPaperOpening] = useState(false);
   const [paperClosingId, setPaperClosingId] = useState<string | null>(null);
+  const [strategyMode, setStrategyMode] = useState<CryptoStrategyMode>("trend_swing");
   const [strategyTf, setStrategyTf] = useState("1h");
   const [strategyAmountUsdt, setStrategyAmountUsdt] = useState(String(STRATEGY_DEFAULT_AMOUNT));
   const [strategyCycle, setStrategyCycle] = useState<CryptoPaperCycleResponse | null>(null);
@@ -642,6 +724,11 @@ export function CryptoPage() {
   );
   const [strategyMinEntryScore, setStrategyMinEntryScore] = useState("0");
   const [strategyReviewing, setStrategyReviewing] = useState(false);
+  const [strategyCompareLoading, setStrategyCompareLoading] = useState(false);
+  const [strategyCompareError, setStrategyCompareError] = useState<string | null>(null);
+  const [strategyCompareResult, setStrategyCompareResult] = useState<CryptoStrategyCompareResponse | null>(
+    null,
+  );
   const [autoStatus, setAutoStatus] = useState<CryptoPaperBotAutoStatus | null>(null);
   const [autoStatusLoading, setAutoStatusLoading] = useState(false);
   const [autoStarting, setAutoStarting] = useState(false);
@@ -1001,6 +1088,7 @@ export function CryptoPage() {
         cooldownMinutes: risk.cooldownMinutes,
         requireBtcTrendUp: risk.requireBtcTrendUp,
         minEntryScore: risk.minEntryScore,
+        strategyMode,
         exitsIntervalMinutes: exitsMin,
         strategyIntervalMinutes: strategyMin,
       });
@@ -1018,6 +1106,7 @@ export function CryptoPage() {
     autoStrategyIntervalMin,
     loadPaper,
     parseStrategyRiskParams,
+    strategyMode,
     strategyTf,
   ]);
 
@@ -1034,6 +1123,24 @@ export function CryptoPage() {
       setAutoStopping(false);
     }
   }, [autoStarting, autoStopping]);
+
+  const handleCompareStrategies = useCallback(async () => {
+    if (strategyCompareLoading || strategyExecuting || strategyReviewing) return;
+    setStrategyCompareLoading(true);
+    setStrategyCompareError(null);
+    try {
+      const data = await getCryptoCompareStrategies(
+        normalizeTimeframeString(strategyTf),
+        ANALYSIS_LIMIT,
+      );
+      setStrategyCompareResult(data);
+    } catch (e: unknown) {
+      setStrategyCompareError(e instanceof Error ? e.message : "Error al comparar estrategias");
+      setStrategyCompareResult(null);
+    } finally {
+      setStrategyCompareLoading(false);
+    }
+  }, [strategyCompareLoading, strategyExecuting, strategyReviewing, strategyTf]);
 
   const handleExecutePaperStrategy = useCallback(async () => {
     if (strategyExecuting || strategyReviewing) return;
@@ -1058,6 +1165,7 @@ export function CryptoPage() {
         cooldownMinutes: risk.cooldownMinutes,
         requireBtcTrendUp: risk.requireBtcTrendUp,
         minEntryScore: risk.minEntryScore,
+        strategyMode,
       });
       setStrategyLastMode("execute");
       setStrategyCycle(data);
@@ -1071,6 +1179,7 @@ export function CryptoPage() {
     loadPaper,
     parseStrategyRiskParams,
     strategyExecuting,
+    strategyMode,
     strategyReviewing,
     strategyTf,
   ]);
@@ -1272,6 +1381,36 @@ export function CryptoPage() {
   const paperBusy = paperInitialLoading || paperRefreshing;
   const pageBusy = initialLoading || refreshing || paperRefreshing;
   const autoRunActive = Boolean(autoStatus?.enabled);
+
+  const strategyOpportunities = useMemo(
+    () =>
+      strategyCycle
+        ? mergeCandidateOpportunitiesWithEvaluated(
+            strategyCycle.candidate_opportunities,
+            strategyCycle.candidates,
+            strategyCycle.evaluated,
+          )
+        : [],
+    [strategyCycle],
+  );
+
+  const handleStrategyModeChange = useCallback(
+    (ev: ChangeEvent<HTMLSelectElement>) => {
+      if (autoRunActive) return;
+      const mode = ev.target.value === "daily_intraday" ? "daily_intraday" : "trend_swing";
+      setStrategyMode(mode);
+      const preset = applyStrategyModePreset(mode);
+      setStrategyTf(preset.tf);
+      setStrategyStopLossPct(preset.stopLoss);
+      setStrategyTakeProfitPct(preset.takeProfit);
+      setStrategyTrailingPct(preset.trailing);
+      setStrategyMaxPositions(preset.maxPositions);
+      setStrategyCooldownMinutes(preset.cooldown);
+      setStrategyMinEntryScore(preset.minScore);
+      setStrategyRequireBtcTrendUp(preset.requireBtc);
+    },
+    [autoRunActive],
+  );
 
   return (
     <>
@@ -1565,6 +1704,35 @@ export function CryptoPage() {
           </p>
         ) : null}
         <div className="radar-toolbar" style={{ marginBottom: "0.75rem" }}>
+          <label className="radar-toolbar__field">
+            <span
+              className="radar-toolbar__label"
+              style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}
+            >
+              Modo estrategia
+              <button
+                type="button"
+                className="crypto-testnet-field-hint-btn"
+                title={
+                  strategyMode === "daily_intraday"
+                    ? STRATEGY_MODE_DAILY_INTRADAY_HINT
+                    : STRATEGY_MODE_TREND_SWING_HINT
+                }
+                aria-label="Ayuda modo estrategia"
+              >
+                ?
+              </button>
+            </span>
+            <select
+              className="radar-toolbar__input"
+              value={strategyMode}
+              onChange={handleStrategyModeChange}
+              disabled={autoRunActive}
+            >
+              <option value="trend_swing">Trend / Swing</option>
+              <option value="daily_intraday">Daily / Intradía</option>
+            </select>
+          </label>
           <CryptoTimeframeField
             value={strategyTf}
             onChange={setStrategyTf}
@@ -1709,19 +1877,122 @@ export function CryptoPage() {
             type="button"
             className="radar-refresh-btn"
             onClick={() => void handleReviewPaperExits()}
-            disabled={strategyExecuting || strategyReviewing || pageBusy}
+            disabled={strategyExecuting || strategyReviewing || strategyCompareLoading || pageBusy}
           >
             {strategyReviewing ? "Revisando…" : "Revisar salidas paper"}
           </button>
           <button
             type="button"
             className="radar-refresh-btn"
+            onClick={() => void handleCompareStrategies()}
+            disabled={strategyExecuting || strategyReviewing || strategyCompareLoading || pageBusy}
+            title="Escanea la watchlist con Trend/Swing y Daily/Intradía (sin órdenes)"
+          >
+            {strategyCompareLoading ? "Comparando…" : "Comparar estrategias"}
+          </button>
+          <button
+            type="button"
+            className="radar-refresh-btn"
             onClick={() => void handleExecutePaperStrategy()}
-            disabled={strategyExecuting || strategyReviewing || pageBusy}
+            disabled={strategyExecuting || strategyReviewing || strategyCompareLoading || pageBusy}
           >
             {strategyExecuting ? "Ejecutando…" : "Ejecutar estrategia paper"}
           </button>
         </div>
+        {strategyCompareError ? (
+          <p className="msg-error" style={{ fontSize: "0.875rem", marginBottom: "0.65rem" }}>
+            {strategyCompareError}
+          </p>
+        ) : null}
+        {strategyCompareResult ? (
+          <div
+            className="crypto-testnet-note crypto-testnet-note--blue"
+            style={{ marginBottom: "0.75rem", fontSize: "0.85rem" }}
+          >
+            <p style={{ margin: "0 0 0.5rem" }}>
+              <strong>Comparación ({strategyCompareResult.timeframe})</strong> — {strategyCompareResult.note}
+            </p>
+            <p className="msg-muted" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>
+              Watchlist: {strategyCompareResult.watchlist_count} símbolos ·{" "}
+              {strategyCompareResult.comparison.daily_more_candidates
+                ? `Daily tiene +${strategyCompareResult.comparison.candidates_delta} candidato(s) vs Trend.`
+                : strategyCompareResult.comparison.same_candidates
+                  ? "Misma cantidad de candidatos en ambos modos."
+                  : `Trend tiene +${-strategyCompareResult.comparison.candidates_delta} candidato(s) vs Daily.`}
+            </p>
+            <div className="table-wrap">
+              <table style={{ fontSize: "0.82rem" }}>
+                <thead>
+                  <tr>
+                    <th>Modo</th>
+                    <th style={{ textAlign: "right" }}>Escaneados</th>
+                    <th style={{ textAlign: "right" }}>OK</th>
+                    <th style={{ textAlign: "right" }}>Candidatos</th>
+                    <th>Setups daily</th>
+                    <th>Mejor candidato</th>
+                    <th>Señales</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {strategyCompareResult.modes.map((row) => (
+                    <tr key={row.strategy_mode}>
+                      <td>{strategyModeLabelEs(row.strategy_mode)}</td>
+                      <td style={{ textAlign: "right" }}>{row.scan_count}</td>
+                      <td style={{ textAlign: "right" }}>{row.scan_ok_count}</td>
+                      <td style={{ textAlign: "right" }}>
+                        <strong>{row.candidates_count}</strong>
+                      </td>
+                      <td style={{ maxWidth: "10rem", fontSize: "0.78rem" }}>
+                        {formatDailySetups(row.daily_setup_counts)}
+                      </td>
+                      <td style={{ maxWidth: "12rem", fontSize: "0.78rem" }}>
+                        {formatBestCandidate(row.best_candidate)}
+                      </td>
+                      <td style={{ maxWidth: "10rem", fontSize: "0.78rem" }}>
+                        {formatSignalCounts(row.signal_counts)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {strategyCompareResult.modes.some(
+              (r) => r.non_candidate_reasons && Object.keys(r.non_candidate_reasons).length > 0,
+            ) ? (
+              <ul
+                className="msg-muted"
+                style={{ margin: "0.5rem 0 0", paddingLeft: "1.1rem", fontSize: "0.78rem" }}
+              >
+                {strategyCompareResult.modes.map((row) => (
+                  <li key={`reason-${row.strategy_mode}`}>
+                    <strong>{strategyModeLabelEs(row.strategy_mode)}</strong> (filas OK sin candidato):{" "}
+                    {formatNonCandidateReasons(row.non_candidate_reasons)}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {strategyCompareResult.modes.some(
+              (r) => (r.candidate_opportunities?.length ?? 0) > 0,
+            ) ? (
+              <div style={{ marginTop: "0.75rem" }}>
+                {strategyCompareResult.modes.map((row) =>
+                  (row.candidate_opportunities?.length ?? 0) > 0 ? (
+                    <details key={`opp-${row.strategy_mode}`} style={{ marginBottom: "0.5rem" }}>
+                      <summary style={{ cursor: "pointer", fontSize: "0.82rem" }}>
+                        <strong>{strategyModeLabelEs(row.strategy_mode)}</strong> —{" "}
+                        {row.candidate_opportunities!.length} oportunidad(es)
+                      </summary>
+                      <CryptoCandidateOpportunityPanel
+                        opportunities={row.candidate_opportunities!}
+                        hideWhenEmpty
+                      />
+                    </details>
+                  ) : null,
+                )}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {strategyError ? (
           <p className="msg-error" style={{ fontSize: "0.875rem", marginBottom: "0.65rem" }}>
             {strategyError}
@@ -1735,6 +2006,20 @@ export function CryptoPage() {
               {strategyCycle.candidates_count ?? strategyCycle.candidates.length} · Abiertas en ciclo:{" "}
               {strategyCycle.opened_count ?? 0}
             </p>
+            {strategyCycle.position_limits ? (
+              <p style={{ margin: "0.35rem 0 0", fontSize: "0.82rem", opacity: 0.92 }}>
+                Cupo usado por:{" "}
+                {strategyCycle.position_limits.position_source_label ?? "Posiciones paper abiertas"} —{" "}
+                {strategyCycle.position_limits.open_positions_count}/
+                {strategyCycle.position_limits.max_open_positions}
+                {(strategyCycle.position_limits.open_position_symbols?.length ?? 0) > 0
+                  ? ` (${strategyCycle.position_limits.open_position_symbols.join(", ")})`
+                  : " (ninguna)"}
+                {(strategyCycle.position_limits.rejected_by_max_open_positions_count ?? 0) > 0
+                  ? ` · rechazos cupo: ${strategyCycle.position_limits.rejected_by_max_open_positions_count}`
+                  : ""}
+              </p>
+            ) : null}
             {strategyLastMode === "execute" ? (
               <p style={{ margin: "0.35rem 0 0", fontSize: "0.85rem", opacity: 0.95 }}>
                 {(strategyCycle.opened_count ?? 0) > 0 ? (
@@ -1750,7 +2035,12 @@ export function CryptoPage() {
                 ) : (
                   <>
                     Sin nueva entrada · motivo principal:{" "}
-                    <strong>{strategyPrimaryReasonLabel(strategyCycle.primary_reason)}</strong>
+                    <strong>
+                      {strategyPrimaryReasonLabel(
+                        strategyCycle.primary_reason,
+                        strategyCycle.strategy_mode ?? strategyMode,
+                      )}
+                    </strong>
                   </>
                 )}
               </p>
@@ -1802,7 +2092,10 @@ export function CryptoPage() {
                 </tbody>
               </table>
             </div>
+            <CryptoCandidateOpportunityPanel opportunities={strategyOpportunities} />
           </>
+        ) : strategyOpportunities.length > 0 ? (
+          <CryptoCandidateOpportunityPanel opportunities={strategyOpportunities} />
         ) : null}
         {strategyCycle && strategyCycle.actions.length > 0 ? (
           <>
@@ -1976,7 +2269,9 @@ export function CryptoPage() {
           bestRejected={autoStatus?.best_rejected_candidate}
           entryCandidate={autoStatus?.last_entry_candidate}
           phases={autoStatus?.last_cycle_phases}
-          primaryReasonLabel={strategyPrimaryReasonLabel}
+          primaryReasonLabel={(code) =>
+            strategyPrimaryReasonLabel(code, strategyCycle?.strategy_mode ?? strategyMode)
+          }
           emptyHint="Sin datos de ciclo todavía. Iniciá el auto-run y esperá la primera revisión (entradas o salidas)."
           paperSchedule={
             autoStatus?.enabled

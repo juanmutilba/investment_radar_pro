@@ -2619,6 +2619,95 @@ table.radar-table thead .radar-table__sticky-col {
   padding-bottom: 0.85rem;
 }
 
+.crypto-testnet-security-card--collapsed {
+  padding-bottom: 0.65rem;
+}
+
+.crypto-testnet-security-card-header {
+  margin: 0;
+}
+
+.crypto-testnet-security-card-header-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.65rem;
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.crypto-testnet-security-card-body {
+  margin-top: 0.35rem;
+}
+
+.crypto-testnet-security-card-lead {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.crypto-testnet-portfolio-disclaimer {
+  margin: 0.35rem 0 0.5rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.crypto-testnet-portfolio-badge {
+  border-color: rgba(148, 163, 184, 0.45);
+  color: var(--text-muted);
+}
+
+.crypto-testnet-kpi--clickable {
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  width: 100%;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.crypto-testnet-kpi--clickable:hover {
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.crypto-testnet-kpi--clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.crypto-testnet-kpi-chevron {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-left: 0.15rem;
+}
+
+.crypto-testnet-portfolio-assets {
+  margin-top: 0.65rem;
+}
+
+.crypto-testnet-portfolio-assets-lead {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.crypto-testnet-table--compact {
+  font-size: 0.82rem;
+}
+
+.crypto-testnet-table--compact th,
+.crypto-testnet-table--compact td {
+  padding: 0.35rem 0.45rem;
+}
+
+.crypto-testnet-help-text {
+  margin: 0.65rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
 .crypto-testnet-security-list {
   margin: 0.55rem 0 0;
   padding: 0;
@@ -2707,6 +2796,12 @@ table.radar-table thead .radar-table__sticky-col {
 .crypto-testnet-field-hint-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.crypto-testnet-field-suggestion {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.25;
 }
 
 .crypto-testnet-fieldset {

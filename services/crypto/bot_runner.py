@@ -7,6 +7,14 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from services.crypto.strategy_modes import (
+    DAILY_SETUP_TYPES,
+    STRATEGY_MODE_DAILY_INTRADAY,
+    STRATEGY_MODE_TREND_SWING,
+    normalize_strategy_mode,
+    is_entry_candidate_row,
+)
+
 _LOG_PREFIX = "[CRYPTO_BOT]"
 _SCAN_DEBUG_PREFIX = "[CRYPTO_BOT_SCAN_DEBUG]"
 
@@ -37,6 +45,7 @@ def log_scan_debug_snapshot(
     scan_error: str | None,
     scan_duration_ms: int,
     context: str = "execute_paper_strategy",
+    strategy_mode: str | None = None,
 ) -> dict[str, Any]:
     """Log + dict reutilizable para last_scan_debug (sin alterar trading)."""
     scan_ok_count, scan_error_count = _scan_ok_error_counts(scan_results)
@@ -57,6 +66,7 @@ def log_scan_debug_snapshot(
         candidates_count=candidates_count,
         scan_error=scan_error,
         breakdown=breakdown_preview,
+        strategy_mode=strategy_mode,
     )
     _log_scan_debug(
         f"context={context} timeframe={timeframe!r} limit={limit} "
@@ -71,17 +81,20 @@ def log_scan_debug_snapshot(
         f"rows_other_signal={breakdown_preview.get('rows_signal_other')} "
         f"entry_filter=row[{ENTRY_CANDIDATE_SIGNAL_FIELD!r}]=={ENTRY_CANDIDATE_SIGNAL_VALUE!r}"
     )
+    mode = normalize_strategy_mode(strategy_mode)
     dbg = _build_scan_debug(
         scan_results,
         watchlist_count=watchlist_count,
         candidates_count=candidates_count,
         scan_duration_ms=scan_duration_ms,
         scan_error=scan_error,
+        strategy_mode=mode,
     )
     dbg["timeframe"] = timeframe
     dbg["limit"] = limit
     dbg["watchlist_sample"] = sample
     dbg["scan_type"] = scan_type
+    dbg["strategy_mode"] = mode
     return dbg
 
 
@@ -157,30 +170,57 @@ def _evaluated_row(
     *,
     status: str,
     reason: str,
+    rejection_reason: str | None = None,
+    btc_context: str | None = None,
 ) -> dict[str, Any]:
+    from services.crypto.candidate_diagnostics import build_candidate_opportunity_diagnostic
+
     price = row.get("price")
+    rej = rejection_reason or reason
+    btc_ctx = btc_context if btc_context is not None else row.get("btc_context")
+    diag = build_candidate_opportunity_diagnostic(
+        row,
+        btc_context=btc_ctx if isinstance(btc_ctx, str) else None,
+        evaluation_status=status,
+        evaluation_reason=rej,
+    )
     return {
         "symbol": row.get("symbol"),
         "signal": row.get("signal"),
         "score": row.get("score"),
         "status": status,
         "reason": reason,
+        "rejection_reason": rej,
         "price": price if price is None or isinstance(price, (int, float)) else None,
+        **diag,
     }
 
 
-def evaluate_entry_candidates(scan_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Candidatos con signal compra_potencial; no abre posiciones."""
-    out = [
-        r
-        for r in scan_results
-        if isinstance(r, dict)
-        and not r.get("error")
-        and r.get(ENTRY_CANDIDATE_SIGNAL_FIELD) == ENTRY_CANDIDATE_SIGNAL_VALUE
-    ]
+def _should_apply_btc_entry_filter(
+    *,
+    require_btc_trend_up: bool,
+    strategy_mode: str,
+    row: dict[str, Any],
+) -> bool:
+    if not require_btc_trend_up:
+        return False
+    if normalize_strategy_mode(strategy_mode) == STRATEGY_MODE_DAILY_INTRADAY:
+        setup = row.get("setup_type")
+        if setup in ("pullback", "rebound", "reversal_controlled"):
+            return False
+    return True
+
+
+def evaluate_entry_candidates(
+    scan_results: list[dict[str, Any]],
+    strategy_mode: str | None = None,
+) -> list[dict[str, Any]]:
+    """Candidatos según strategy_mode (trend_swing: compra_potencial; daily: + setups)."""
+    mode = normalize_strategy_mode(strategy_mode)
+    out = [r for r in scan_results if isinstance(r, dict) and is_entry_candidate_row(r, mode)]
     _log(
-        f"evaluate_entry_candidates: {len(out)} candidatos "
-        f"(filtro: row[{ENTRY_CANDIDATE_SIGNAL_FIELD!r}]=={ENTRY_CANDIDATE_SIGNAL_VALUE!r}, sin error)"
+        f"evaluate_entry_candidates mode={mode}: {len(out)} candidatos "
+        f"(trend: signal==compra_potencial; daily: + setup_type entry_eligible)"
     )
     return out
 
@@ -215,12 +255,20 @@ def evaluate_open_positions(portfolio: dict[str, Any]) -> list[dict[str, Any]]:
     return review
 
 
-def _cycle_message_search(scanned_count: int, candidates_count: int) -> str:
+def _cycle_message_search(
+    scanned_count: int,
+    candidates_count: int,
+    *,
+    strategy_mode: str | None = None,
+) -> str:
+    from services.crypto.strategy_modes import message_cycle_search_complete
+
     if candidates_count == 0:
         return "Sin oportunidades válidas en la watchlist actual."
-    return (
-        f"Búsqueda completada: {candidates_count} candidato(s) compra_potencial "
-        f"de {scanned_count} activos escaneados."
+    return message_cycle_search_complete(
+        strategy_mode=strategy_mode,
+        candidates_count=candidates_count,
+        scanned_count=scanned_count,
     )
 
 
@@ -411,8 +459,15 @@ def _derive_scan_scenario(
     candidates_count: int,
     scan_error: str | None,
     breakdown: dict[str, Any],
+    strategy_mode: str | None = None,
 ) -> dict[str, str]:
-    """A=scanner OK sin compra_potencial; B=scanner no corre; C=posible desajuste filtro/campo."""
+    """A=scanner OK sin candidatos; B=scanner no corre; C=posible desajuste filtro/campo."""
+    from services.crypto.strategy_modes import (
+        scan_scenario_candidates_ok_label,
+        scan_scenario_no_candidate_label,
+    )
+
+    mode = normalize_strategy_mode(strategy_mode)
     if scan_error or watchlist_count <= 0 or scan_count == 0:
         return {
             "scan_scenario": "B",
@@ -435,7 +490,7 @@ def _derive_scan_scenario(
         if compra == candidates_count:
             return {
                 "scan_scenario": "OK",
-                "scan_scenario_label": "Candidatos compra_potencial",
+                "scan_scenario_label": scan_scenario_candidates_ok_label(mode),
                 "scan_scenario_detail": f"{candidates_count} fila(s) pasan el filtro de señal",
             }
         return {
@@ -468,7 +523,7 @@ def _derive_scan_scenario(
     high = int(breakdown.get("rows_high_score_not_compra") or 0)
     return {
         "scan_scenario": "A",
-        "scan_scenario_label": "Scanner OK, sin compra_potencial",
+        "scan_scenario_label": scan_scenario_no_candidate_label(mode),
         "scan_scenario_detail": (
             f"señales detectadas: {unique}; filas score>=70 sin compra_potencial: {high}"
         ),
@@ -503,6 +558,7 @@ def _build_scan_debug(
     candidates_count: int,
     scan_duration_ms: int,
     scan_error: str | None,
+    strategy_mode: str | None = None,
 ) -> dict[str, Any]:
     scanned_count = len(scan_results)
     scan_ok_count, scan_error_count = _scan_ok_error_counts(scan_results)
@@ -514,6 +570,13 @@ def _build_scan_debug(
         scan_error=scan_error,
     )
     breakdown = _build_scan_signal_breakdown(scan_results)
+    daily_setups: dict[str, int] = {}
+    for row in scan_results:
+        if not isinstance(row, dict) or row.get("error"):
+            continue
+        st = row.get("setup_type")
+        if st:
+            daily_setups[str(st)] = daily_setups.get(str(st), 0) + 1
     scenario = _derive_scan_scenario(
         watchlist_count=watchlist_count,
         scan_count=scanned_count,
@@ -521,6 +584,7 @@ def _build_scan_debug(
         candidates_count=candidates_count,
         scan_error=scan_error,
         breakdown=breakdown,
+        strategy_mode=strategy_mode,
     )
     out: dict[str, Any] = {
         "watchlist_count": int(watchlist_count),
@@ -532,6 +596,8 @@ def _build_scan_debug(
         "scan_duration_ms": int(scan_duration_ms),
         "first_symbols_sample": _first_symbols_sample(scan_results),
         "scan_diagnosis": diagnosis,
+        "strategy_mode": normalize_strategy_mode(strategy_mode),
+        "daily_setup_counts": daily_setups,
         **breakdown,
         **scenario,
     }
@@ -582,23 +648,43 @@ def _strategy_result_base(
     return out
 
 
-def run_crypto_paper_cycle(timeframe: str = "1h", limit: int = 200) -> dict[str, Any]:
+def run_crypto_paper_cycle(
+    timeframe: str = "1h",
+    limit: int = 200,
+    strategy_mode: str | None = None,
+) -> dict[str, Any]:
     """Escanea watchlist completa vía scan_crypto_watchlist; sin aperturas."""
-    from services.crypto.paper_portfolio import get_paper_portfolio
+    from services.crypto.paper_portfolio import (
+        get_paper_portfolio,
+        load_portfolio,
+        paper_position_limits_snapshot,
+    )
     from services.crypto.watchlist import scan_crypto_watchlist
 
     tf = (timeframe or "1h").strip() or "1h"
     lim = max(50, min(int(limit), 1000))
-    _log(f"run_crypto_paper_cycle: inicio timeframe={tf} limit={lim} (watchlist completa)")
+    mode = normalize_strategy_mode(strategy_mode)
+    _log(f"run_crypto_paper_cycle: inicio timeframe={tf} limit={lim} mode={mode}")
 
-    scan_results = scan_crypto_watchlist(timeframe=tf, limit=lim)
+    pf_snap = load_portfolio()
+    position_limits = paper_position_limits_snapshot(3, pf_snap, evaluated=[])
+
+    scan_results = scan_crypto_watchlist(timeframe=tf, limit=lim, strategy_mode=mode)
     scanned_count = len(scan_results)
-    candidates = evaluate_entry_candidates(scan_results)
+    raw_candidates = evaluate_entry_candidates(scan_results, strategy_mode=mode)
+    from services.crypto.candidate_diagnostics import enrich_entry_candidates
+
+    candidates = enrich_entry_candidates(
+        raw_candidates,
+        scan_results,
+        strategy_mode=mode,
+        scan_by_sym=_scan_by_symbol(scan_results),
+    )
     candidates_count = len(candidates)
     portfolio = get_paper_portfolio()
     positions_review = evaluate_open_positions(portfolio)
 
-    message = _cycle_message_search(scanned_count, candidates_count)
+    message = _cycle_message_search(scanned_count, candidates_count, strategy_mode=mode)
     _log(
         f"run_crypto_paper_cycle: fin scanned_count={scanned_count} "
         f"candidates_count={candidates_count}"
@@ -606,15 +692,18 @@ def run_crypto_paper_cycle(timeframe: str = "1h", limit: int = 200) -> dict[str,
     return {
         "timeframe": tf,
         "limit": lim,
+        "strategy_mode": mode,
         "scanned_count": scanned_count,
         "candidates_count": candidates_count,
         "opened_count": 0,
         "message": message,
         "candidates": candidates,
+        "candidate_opportunities": candidates,
         "evaluated": [],
         "primary_reason": None,
         "positions_review": positions_review,
         "actions": [],
+        "position_limits": position_limits,
     }
 
 
@@ -631,6 +720,7 @@ def execute_paper_strategy(
     cooldown_minutes: int = 0,
     require_btc_trend_up: bool = False,
     min_entry_score: float = 0.0,
+    strategy_mode: str | None = None,
 ) -> dict[str, Any]:
     """
     Revisa salidas, escanea watchlist y abre como máximo 1 posición nueva por ejecución.
@@ -640,7 +730,9 @@ def execute_paper_strategy(
     from services.crypto.paper_portfolio import (
         _count_open_positions,
         get_paper_portfolio,
+        list_open_paper_position_symbols,
         load_portfolio,
+        paper_position_limits_snapshot,
         open_paper_position_market_by_amount,
         review_paper_positions_for_exit,
     )
@@ -648,6 +740,7 @@ def execute_paper_strategy(
 
     tf = (timeframe or "1h").strip() or "1h"
     lim = max(50, min(int(limit), 1000))
+    mode = normalize_strategy_mode(strategy_mode)
     watchlist_symbols = get_crypto_watchlist()
     watchlist_count = len(watchlist_symbols)
 
@@ -672,7 +765,7 @@ def execute_paper_strategy(
     min_score = float(min_entry_score) if math.isfinite(min_entry_score) and min_entry_score > 0 else 0.0
 
     _log(
-        f"execute_paper_strategy: inicio timeframe={tf} limit={lim} max_open={max_pos} "
+        f"execute_paper_strategy: inicio mode={mode} timeframe={tf} limit={lim} max_open={max_pos} "
         f"cooldown={cooldown_m} btc_filter={require_btc_trend_up} min_score={min_score} "
         f"watchlist_count={watchlist_count}"
     )
@@ -683,7 +776,7 @@ def execute_paper_strategy(
     scan_results: list[dict[str, Any]] = []
     t_scan = time.monotonic()
     try:
-        scan_results = scan_crypto_watchlist(timeframe=tf, limit=lim)
+        scan_results = scan_crypto_watchlist(timeframe=tf, limit=lim, strategy_mode=mode)
     except Exception as e:
         scan_error = f"{type(e).__name__}: {e}"
         _log(f"execute: scan_crypto_watchlist falló {scan_error}")
@@ -697,7 +790,15 @@ def execute_paper_strategy(
         )
 
     scan_by_sym = _scan_by_symbol(scan_results)
-    candidates = evaluate_entry_candidates(scan_results)
+    raw_candidates = evaluate_entry_candidates(scan_results, strategy_mode=mode)
+    from services.crypto.candidate_diagnostics import enrich_entry_candidates
+
+    candidates = enrich_entry_candidates(
+        raw_candidates,
+        scan_results,
+        strategy_mode=mode,
+        scan_by_sym=scan_by_sym,
+    )
     candidates_count = len(candidates)
     scan_debug = log_scan_debug_snapshot(
         timeframe=tf,
@@ -709,6 +810,7 @@ def execute_paper_strategy(
         candidates_count=candidates_count,
         scan_error=scan_error,
         scan_duration_ms=scan_duration_ms,
+        strategy_mode=mode,
     )
     scan_debug["timeframe"] = tf
     scan_debug["limit"] = lim
@@ -716,9 +818,15 @@ def execute_paper_strategy(
     pf = load_portfolio()
     trades = pf.get("trades") or []
     open_count = _count_open_positions(pf)
+    open_symbols = list_open_paper_position_symbols(pf)
     opened_count = 0
     evaluated: list[dict[str, Any]] = []
     primary_reason: str | None = None
+
+    _log(
+        f"execute: position_limits open_count={open_count} max_open_positions={max_pos} "
+        f"open_symbols={open_symbols} (paper JSON status=open; evaluate_entry_candidates no aplica este tope)"
+    )
 
     if not candidates:
         portfolio = get_paper_portfolio()
@@ -735,7 +843,7 @@ def execute_paper_strategy(
             f"execute strategy scanned_count={scanned_count} watchlist={watchlist_count} "
             f"candidates_count=0 primary_reason={primary_reason} scan_error={scan_error}"
         )
-        return _strategy_result_base(
+        out_empty = _strategy_result_base(
             timeframe=tf,
             limit=lim,
             amount_usdt=float(amount_usdt),
@@ -746,22 +854,38 @@ def execute_paper_strategy(
             message="Sin oportunidades válidas en la watchlist actual.",
             primary_reason=primary_reason,
             candidates=[],
+            candidate_opportunities=[],
             evaluated=[],
+            strategy_mode=mode,
             positions_review=evaluate_open_positions(portfolio),
             actions=actions,
         )
+        out_empty["position_limits"] = paper_position_limits_snapshot(max_pos, pf, evaluated=[])
+        return out_empty
 
     btc_ok = _btc_trend_favorable(scan_by_sym) if require_btc_trend_up else True
+    btc_ctx_label = (
+        "favorable" if btc_ok else "unfavorable" if require_btc_trend_up else "not_required"
+    )
 
     for c in candidates:
         sym = str(c.get("symbol") or "").strip()
         if not sym:
             continue
         score = c.get("score")
+        row_btc_ctx = btc_ctx_label if not _is_btc_symbol(sym) else "n/a"
 
         def _append(status: str, reason: str) -> None:
             nonlocal primary_reason
-            evaluated.append(_evaluated_row(c, status=status, reason=reason))
+            evaluated.append(
+                _evaluated_row(
+                    c,
+                    status=status,
+                    reason=reason,
+                    rejection_reason=reason,
+                    btc_context=row_btc_ctx,
+                )
+            )
             if primary_reason is None and status in ("rejected", "skipped"):
                 primary_reason = reason
 
@@ -835,7 +959,11 @@ def execute_paper_strategy(
             )
             continue
 
-        if require_btc_trend_up and not _is_btc_symbol(sym) and not btc_ok:
+        if _should_apply_btc_entry_filter(
+            require_btc_trend_up=require_btc_trend_up,
+            strategy_mode=mode,
+            row=c,
+        ) and not _is_btc_symbol(sym) and not btc_ok:
             _append("rejected", "btc_trend_filter")
             actions.append(
                 {
@@ -848,7 +976,12 @@ def execute_paper_strategy(
             )
             continue
 
-        reason = f"estrategia_paper score={score}" if score is not None else "estrategia_paper"
+        setup = c.get("setup_type")
+        reason = (
+            f"estrategia_paper setup={setup} score={score}"
+            if setup
+            else (f"estrategia_paper score={score}" if score is not None else "estrategia_paper")
+        )
         try:
             open_paper_position_market_by_amount(
                 symbol=sym,
@@ -866,7 +999,14 @@ def execute_paper_strategy(
             opened_count += 1
             open_count += 1
             primary_reason = "opened"
-            evaluated.append(_evaluated_row(c, status="accepted", reason=reason))
+            evaluated.append(
+                _evaluated_row(
+                    c,
+                    status="accepted",
+                    reason=reason,
+                    btc_context=row_btc_ctx,
+                )
+            )
             actions.append(
                 {
                     "action": "entry",
@@ -921,12 +1061,17 @@ def execute_paper_strategy(
         message = "Sin oportunidades válidas en la watchlist actual."
         primary_reason = "no_opportunity"
 
+    rejected_max = sum(
+        1 for e in evaluated if isinstance(e, dict) and str(e.get("reason") or "") == "max_open_positions"
+    )
+    limits = paper_position_limits_snapshot(max_pos, pf, evaluated=evaluated)
     _log(
         f"execute strategy scanned_count={scanned_count} watchlist={watchlist_count} "
         f"candidates_count={candidates_count} opened_count={opened_count} "
-        f"evaluated_count={len(evaluated)} primary_reason={primary_reason}"
+        f"evaluated_count={len(evaluated)} primary_reason={primary_reason} "
+        f"rejected_max_open_positions={rejected_max} open_symbols={limits.get('open_position_symbols')}"
     )
-    return _strategy_result_base(
+    out = _strategy_result_base(
         timeframe=tf,
         limit=lim,
         amount_usdt=float(amount_usdt),
@@ -937,10 +1082,14 @@ def execute_paper_strategy(
         message=message,
         primary_reason=primary_reason,
         candidates=candidates,
+        candidate_opportunities=candidates,
         evaluated=evaluated,
+        strategy_mode=mode,
         positions_review=positions_review,
         actions=actions,
     )
+    out["position_limits"] = limits
+    return out
 
 
 def propose_testnet_entry_from_strategy(
@@ -956,6 +1105,7 @@ def propose_testnet_entry_from_strategy(
     cooldown_minutes: int = 0,
     require_btc_trend_up: bool = False,
     min_entry_score: float = 0.0,
+    strategy_mode: str | None = None,
 ) -> dict[str, Any]:
     """
     Ejecuta el mismo escaneo y filtros de entrada que execute_paper_strategy, pero sin abrir posición paper
@@ -967,6 +1117,7 @@ def propose_testnet_entry_from_strategy(
         MARKET_ORDER_SYMBOL_WHITELIST,
         MAX_MARKET_ORDER_QUOTE_USDT,
         MIN_MARKET_ORDER_QUOTE_USDT,
+        format_testnet_whitelist_rejection,
         get_testnet_balances,
         testnet_symbol_in_local_order_cooldown,
     )
@@ -982,10 +1133,11 @@ def propose_testnet_entry_from_strategy(
 
     tf = (timeframe or "1h").strip() or "1h"
     lim = max(50, min(int(limit), 1000))
+    mode = normalize_strategy_mode(strategy_mode)
     watchlist_symbols = get_crypto_watchlist()
     watchlist_count = len(watchlist_symbols)
     _log(
-        f"propose_testnet_entry: timeframe={tf} limit={lim} quote={q_use} max_open={max_pos} "
+        f"propose_testnet_entry: mode={mode} timeframe={tf} limit={lim} quote={q_use} max_open={max_pos} "
         f"cooldown={cooldown_m} btc_filter={require_btc_trend_up} min_score={min_score} "
         f"watchlist_count={watchlist_count}"
     )
@@ -994,7 +1146,7 @@ def propose_testnet_entry_from_strategy(
     scan_results: list[dict[str, Any]] = []
     t_scan = time.monotonic()
     try:
-        scan_results = scan_crypto_watchlist(timeframe=tf, limit=lim)
+        scan_results = scan_crypto_watchlist(timeframe=tf, limit=lim, strategy_mode=mode)
     except Exception as e:
         scan_error = f"{type(e).__name__}: {e}"
         _log(f"propose_testnet_entry: scan falló {scan_error}")
@@ -1006,7 +1158,16 @@ def propose_testnet_entry_from_strategy(
         )
 
     scan_by_sym = _scan_by_symbol(scan_results)
-    candidates = evaluate_entry_candidates(scan_results)
+    raw_candidates = evaluate_entry_candidates(scan_results, strategy_mode=mode)
+    from services.crypto.candidate_diagnostics import enrich_entry_candidates
+
+    candidate_opportunities = enrich_entry_candidates(
+        raw_candidates,
+        scan_results,
+        strategy_mode=mode,
+        scan_by_sym=scan_by_sym,
+    )
+    candidates = candidate_opportunities
     candidates_count = len(candidates)
     scan_debug = log_scan_debug_snapshot(
         timeframe=tf,
@@ -1019,6 +1180,7 @@ def propose_testnet_entry_from_strategy(
         scan_error=scan_error,
         scan_duration_ms=scan_duration_ms,
         context="propose_testnet_entry_from_strategy",
+        strategy_mode=mode,
     )
     scan_debug["timeframe"] = tf
     scan_debug["limit"] = lim
@@ -1040,6 +1202,7 @@ def propose_testnet_entry_from_strategy(
         "scan_count": scanned_count,
         "candidates_count": candidates_count,
         "scan_debug": scan_debug,
+        "strategy_mode": mode,
     }
 
     if not candidates:
@@ -1048,6 +1211,8 @@ def propose_testnet_entry_from_strategy(
             "proposal": None,
             "primary_reason": "no_opportunity",
             "evaluated": [],
+            "candidate_opportunities": [],
+            "position_limits": _testnet_position_limits_meta(max_pos),
             **base_evaluated_meta,
         }
 
@@ -1068,40 +1233,24 @@ def propose_testnet_entry_from_strategy(
             "proposal": None,
             "primary_reason": "testnet_balances_unavailable",
             "evaluated": evaluated_offline,
+            "candidate_opportunities": candidate_opportunities,
+            "position_limits": _testnet_position_limits_meta(max_pos),
             **base_evaluated_meta,
         }
 
     btc_ok = _btc_trend_favorable(scan_by_sym) if require_btc_trend_up else True
+    btc_ctx_label = (
+        "favorable" if btc_ok else "unfavorable" if require_btc_trend_up else "not_required"
+    )
 
-    def free_base_asset(sym_pair: str) -> float:
-        parts = sym_pair.split("/", 1)
-        base = parts[0].strip().upper() if parts else ""
-        if not base:
-            return 0.0
-        for row in bal.get("balances") or []:
-            if str(row.get("asset") or "").upper() == base:
-                try:
-                    return float(row.get("free") or 0)
-                except (TypeError, ValueError):
-                    return 0.0
-        return 0.0
+    from services.crypto.binance_testnet import (
+        format_testnet_app_position_duplicate_rejection,
+        get_testnet_app_position_symbols,
+    )
 
-    def count_whitelist_base_positions() -> int:
-        bases_in_whitelist = {"BTC", "ETH", "SOL", "BNB"}
-        n = 0
-        for row in bal.get("balances") or []:
-            au = str(row.get("asset") or "").upper()
-            if au not in bases_in_whitelist:
-                continue
-            try:
-                free_b = float(row.get("free") or 0)
-            except (TypeError, ValueError):
-                continue
-            if free_b > 1e-6:
-                n += 1
-        return n
-
-    open_style_count = count_whitelist_base_positions()
+    app_open_syms = get_testnet_app_position_symbols()
+    app_open_set = frozenset(app_open_syms)
+    open_style_count = len(app_open_syms)
 
     evaluated: list[dict[str, Any]] = []
     proposal: dict[str, Any] | None = None
@@ -1115,12 +1264,34 @@ def propose_testnet_entry_from_strategy(
             continue
         score = c.get("score")
 
+        row_btc_ctx = btc_ctx_label if not _is_btc_symbol(sym) else "n/a"
+
         def _append(status: str, reason: str) -> None:
-            evaluated.append(_evaluated_row(c, status=status, reason=reason))
+            evaluated.append(
+                _evaluated_row(
+                    c,
+                    status=status,
+                    reason=reason,
+                    rejection_reason=reason,
+                    btc_context=row_btc_ctx,
+                )
+            )
 
         sym_u = _norm_symbol(sym)
         if sym_u not in MARKET_ORDER_SYMBOL_WHITELIST:
-            _append("rejected", "not_whitelisted_testnet")
+            wl_msg = format_testnet_whitelist_rejection(
+                sym_u,
+                str(c.get("setup_type") or "") or None,
+            )
+            evaluated.append(
+                _evaluated_row(
+                    c,
+                    status="rejected",
+                    reason="not_whitelisted_testnet",
+                    rejection_reason=wl_msg,
+                    btc_context=row_btc_ctx,
+                )
+            )
             continue
 
         if proposal is not None:
@@ -1140,15 +1311,28 @@ def propose_testnet_entry_from_strategy(
                 _append("rejected", "score_below_min")
                 continue
 
-        if free_base_asset(sym_u) > 1e-6:
-            _append("rejected", "already_hold_base_testnet")
+        if sym_u in app_open_set:
+            dup_msg = format_testnet_app_position_duplicate_rejection(sym_u)
+            evaluated.append(
+                _evaluated_row(
+                    c,
+                    status="rejected",
+                    reason="already_hold_base_testnet",
+                    rejection_reason=dup_msg,
+                    btc_context=row_btc_ctx,
+                )
+            )
             continue
 
         if cooldown_m > 0 and testnet_symbol_in_local_order_cooldown(sym_u, cooldown_m):
             _append("rejected", "cooldown_symbol")
             continue
 
-        if require_btc_trend_up and not _is_btc_symbol(sym_u) and not btc_ok:
+        if _should_apply_btc_entry_filter(
+            require_btc_trend_up=require_btc_trend_up,
+            strategy_mode=mode,
+            row=c,
+        ) and not _is_btc_symbol(sym_u) and not btc_ok:
             _append("rejected", "btc_trend_filter")
             continue
 
@@ -1180,13 +1364,215 @@ def propose_testnet_entry_from_strategy(
         if primary_reason is None:
             primary_reason = "no_entry"
 
-    _log(f"propose_testnet_entry: fin has_proposal={proposal is not None} primary_reason={primary_reason}")
+    limits = testnet_position_limits_snapshot(max_pos, bal, evaluated=evaluated)
+    _log(
+        f"propose_testnet_entry: fin has_proposal={proposal is not None} primary_reason={primary_reason} "
+        f"position_source={limits.get('position_source')} open={limits.get('open_positions_count')}/"
+        f"{limits.get('max_open_positions')} symbols={limits.get('open_position_symbols')} "
+        f"rejected_max={limits.get('rejected_by_max_open_positions_count')}"
+    )
 
     out: dict[str, Any] = {
         "ok": True,
         "proposal": proposal,
         "primary_reason": primary_reason if proposal is None else None,
         "evaluated": evaluated,
+        "candidate_opportunities": candidate_opportunities,
+        "position_limits": limits,
         **base_evaluated_meta,
     }
     return out
+
+
+def testnet_position_limits_snapshot(
+    max_open_positions: int,
+    balances_payload: dict[str, Any] | None = None,
+    *,
+    evaluated: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Diagnóstico de cupo max_open_positions (posiciones desde historial local de la app)."""
+    from services.crypto.binance_testnet import (
+        TESTNET_POSITION_COUNT_SOURCE,
+        TESTNET_POSITION_SOURCE,
+        TESTNET_POSITION_SOURCE_LABEL,
+        get_testnet_app_position_symbols,
+    )
+
+    _ = balances_payload  # saldos sandbox no definen cupo de entradas
+    open_syms = get_testnet_app_position_symbols()
+    open_count = len(open_syms)
+    max_pos = max(1, int(max_open_positions))
+    rejected = 0
+    if evaluated:
+        rejected = sum(
+            1
+            for e in evaluated
+            if isinstance(e, dict) and str(e.get("reason") or "") == "max_open_positions"
+        )
+    return {
+        "open_positions_count": open_count,
+        "max_open_positions": max_pos,
+        "open_position_symbols": open_syms,
+        "open_slots_remaining": max(0, max_pos - open_count),
+        "rejected_by_max_open_positions_count": rejected,
+        "count_source": TESTNET_POSITION_COUNT_SOURCE,
+        "position_source": TESTNET_POSITION_SOURCE,
+        "position_source_label": TESTNET_POSITION_SOURCE_LABEL,
+    }
+
+
+def _testnet_position_limits_meta(max_open_positions: int) -> dict[str, Any]:
+    """Límites cuando aún no hay lectura de balances (cupo sigue historial local)."""
+    from services.crypto.binance_testnet import (
+        TESTNET_POSITION_COUNT_SOURCE,
+        TESTNET_POSITION_SOURCE,
+        TESTNET_POSITION_SOURCE_LABEL,
+        get_testnet_app_position_symbols,
+    )
+
+    max_pos = max(1, int(max_open_positions))
+    open_syms = get_testnet_app_position_symbols()
+    open_count = len(open_syms)
+    return {
+        "open_positions_count": open_count,
+        "max_open_positions": max_pos,
+        "open_position_symbols": open_syms,
+        "open_slots_remaining": max(0, max_pos - open_count),
+        "rejected_by_max_open_positions_count": 0,
+        "count_source": TESTNET_POSITION_COUNT_SOURCE,
+        "position_source": TESTNET_POSITION_SOURCE,
+        "position_source_label": TESTNET_POSITION_SOURCE_LABEL,
+    }
+
+
+def _pick_best_scan_candidate(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    best: dict[str, Any] | None = None
+    best_score = float("-inf")
+    for c in candidates:
+        if not isinstance(c, dict):
+            continue
+        sym = str(c.get("symbol") or "").strip()
+        if not sym:
+            continue
+        score_raw = c.get("score")
+        try:
+            sc = float(score_raw) if score_raw is not None else float("-inf")
+        except (TypeError, ValueError):
+            sc = float("-inf")
+        if sc > best_score:
+            best_score = sc
+            best = dict(c) if isinstance(c, dict) else {}
+            best.setdefault("symbol", sym)
+            best.setdefault("score", score_raw if isinstance(score_raw, (int, float)) else sc)
+    return best
+
+
+def _non_candidate_reasons(
+    scan_results: list[dict[str, Any]],
+    strategy_mode: str,
+) -> dict[str, int]:
+    """Resumen de filas OK que no pasan is_entry_candidate_row (solo diagnóstico)."""
+    mode = normalize_strategy_mode(strategy_mode)
+    reasons: dict[str, int] = {}
+    for row in scan_results:
+        if not isinstance(row, dict) or row.get("error"):
+            continue
+        if is_entry_candidate_row(row, mode):
+            continue
+        key: str
+        if mode == STRATEGY_MODE_TREND_SWING:
+            key = "signal_not_compra_potencial"
+        else:
+            setup = row.get("setup_type")
+            sig = str(row.get("signal") or "")
+            if setup in DAILY_SETUP_TYPES and not row.get("entry_eligible"):
+                key = "setup_not_eligible"
+            elif sig == "compra_potencial" and not row.get("entry_eligible"):
+                key = "compra_not_entry_eligible"
+            elif setup in DAILY_SETUP_TYPES:
+                key = "setup_other"
+            elif sig != "compra_potencial":
+                key = "no_daily_setup"
+            else:
+                key = "other"
+        reasons[key] = reasons.get(key, 0) + 1
+    return reasons
+
+
+def compare_crypto_strategies(
+    timeframe: str = "1h",
+    limit: int = 200,
+) -> dict[str, Any]:
+    """
+    Escanea la watchlist con trend_swing y daily_intraday; sin paper, testnet ni órdenes.
+    """
+    from services.crypto.watchlist import get_crypto_watchlist, scan_crypto_watchlist
+
+    tf = (timeframe or "1h").strip() or "1h"
+    lim = max(50, min(int(limit), 1000))
+    watchlist = get_crypto_watchlist()
+    watchlist_count = len(watchlist)
+    _log(f"compare_crypto_strategies: timeframe={tf} limit={lim} watchlist={watchlist_count}")
+
+    modes_out: list[dict[str, Any]] = []
+    for mode in (STRATEGY_MODE_TREND_SWING, STRATEGY_MODE_DAILY_INTRADAY):
+        scan_error: str | None = None
+        scan_results: list[dict[str, Any]] = []
+        t0 = time.monotonic()
+        try:
+            scan_results = scan_crypto_watchlist(timeframe=tf, limit=lim, strategy_mode=mode)
+        except Exception as e:
+            scan_error = f"{type(e).__name__}: {e}"
+        scan_duration_ms = int((time.monotonic() - t0) * 1000)
+        raw_candidates = evaluate_entry_candidates(scan_results, strategy_mode=mode)
+        from services.crypto.candidate_diagnostics import enrich_entry_candidates
+
+        scan_by = _scan_by_symbol(scan_results)
+        candidates = enrich_entry_candidates(
+            raw_candidates,
+            scan_results,
+            strategy_mode=mode,
+            scan_by_sym=scan_by,
+        )
+        candidates_count = len(candidates)
+        scan_debug = _build_scan_debug(
+            scan_results,
+            watchlist_count=watchlist_count,
+            candidates_count=candidates_count,
+            scan_duration_ms=scan_duration_ms,
+            scan_error=scan_error,
+            strategy_mode=mode,
+        )
+        modes_out.append(
+            {
+                "strategy_mode": mode,
+                "scan_count": scan_debug.get("scan_count", 0),
+                "scan_ok_count": scan_debug.get("scan_ok_count", 0),
+                "scan_error_count": scan_debug.get("scan_error_count", 0),
+                "candidates_count": candidates_count,
+                "daily_setup_counts": scan_debug.get("daily_setup_counts") or {},
+                "signal_counts": scan_debug.get("signal_counts") or {},
+                "best_candidate": _pick_best_scan_candidate(candidates),
+                "candidate_opportunities": candidates,
+                "non_candidate_reasons": _non_candidate_reasons(scan_results, mode),
+                "scan_duration_ms": scan_duration_ms,
+                "scan_diagnosis": scan_debug.get("scan_diagnosis"),
+                "scan_error": scan_error,
+            }
+        )
+
+    trend_c = int(modes_out[0].get("candidates_count") or 0)
+    daily_c = int(modes_out[1].get("candidates_count") or 0)
+    return {
+        "ok": True,
+        "timeframe": tf,
+        "limit": lim,
+        "watchlist_count": watchlist_count,
+        "note": "Diagnóstico solamente. No ejecuta órdenes.",
+        "modes": modes_out,
+        "comparison": {
+            "candidates_delta": daily_c - trend_c,
+            "daily_more_candidates": daily_c > trend_c,
+            "same_candidates": daily_c == trend_c,
+        },
+    }

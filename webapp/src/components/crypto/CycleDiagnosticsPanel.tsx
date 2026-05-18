@@ -1,3 +1,9 @@
+import {
+  isDailyIntradayMode,
+  scanDiagnosisNoOpportunityHint,
+  scanNoOpportunityHint,
+} from "@/components/crypto/cryptoStrategyMessages";
+
 export type CycleSummaryShape = {
   evaluated_count: number;
   accepted_count: number;
@@ -26,6 +32,15 @@ export type CycleSummaryShape = {
   sample_rows?: Array<Record<string, unknown>>;
   entry_candidate_filter?: Record<string, unknown>;
   evaluated_count_note?: string;
+  strategy_mode?: string;
+  daily_setup_counts?: Record<string, number>;
+  open_positions_count?: number;
+  max_open_positions?: number;
+  open_position_symbols?: string[];
+  rejected_by_max_open_positions_count?: number;
+  positions_in_file_total?: number;
+  position_source?: string;
+  position_source_label?: string;
   timeframe?: string;
   limit?: number;
   watchlist_sample?: string[];
@@ -59,6 +74,8 @@ export type ScanDebugShape = {
   sample_rows?: Array<Record<string, unknown>>;
   entry_candidate_filter?: Record<string, unknown>;
   evaluated_count_note?: string;
+  strategy_mode?: string;
+  daily_setup_counts?: Record<string, number>;
   updated_at?: string;
 };
 
@@ -67,6 +84,9 @@ export type CycleCandidateShape = {
   score?: number | null;
   reason?: string | null;
   signal?: string | null;
+  setup_type?: string | null;
+  rejection_reason?: string | null;
+  strategy_mode?: string | null;
 };
 
 export type PaperCyclePhase = "exits_only" | "strategy" | "both";
@@ -98,7 +118,7 @@ const REASON_CHIP_LABELS: Record<string, string> = {
   btc_trend_filter: "Filtro BTC",
   cooldown_symbol: "Cooldown",
   already_open: "Ya abierto",
-  already_hold_base_testnet: "Ya en cartera",
+  already_hold_base_testnet: "Posición app",
   max_open_positions: "Máx. posiciones",
   max_one_per_run: "1 por ciclo",
   not_whitelisted_testnet: "No whitelist",
@@ -115,20 +135,39 @@ const SCAN_DIAGNOSIS_HINTS: Record<string, string> = {
   watchlist_empty: "La watchlist configurada está vacía; no hay símbolos para escanear.",
   scanner_empty: "El scanner no devolvió filas (respuesta vacía).",
   scanner_error: "Error al escanear la watchlist (revisá conexión Binance o logs del servidor).",
-  no_opportunity:
-    "El scanner corrió, pero ningún activo tuvo señal compra_potencial en este timeframe.",
   candidates_present: "Hay candidatos con señal; revisá filtros de entrada (score, BTC, cooldown, etc.).",
   strategy_exception:
     "La estrategia falló antes o durante el escaneo (revisá last_error del auto-run y logs [CRYPTO_BOT_SCAN_DEBUG]).",
   strategy_precheck_failed: "Parámetros inválidos (p. ej. amount_usdt); el escaneo no se ejecutó.",
 };
 
-const SCAN_SCENARIO_HINTS: Record<string, string> = {
-  A: "El scanner corrió (hay filas OK) pero ninguna fila tiene signal=compra_potencial exacto.",
+const SCAN_SCENARIO_HINTS_BASE: Record<string, string> = {
   B: "El scanner no produjo filas útiles (error global, watchlist vacía o todas las filas con error).",
   C: "Hay indicios de señal en otro campo/casing o desajuste entre filas y candidates_count.",
-  OK: "Hay candidatos compra_potencial; evaluated_count>0 solo si pasan filtros de entrada.",
 };
+
+function scanDiagnosisHintText(code: string | null | undefined, strategyMode?: string | null): string {
+  const key = (code ?? "").trim();
+  if (!key) return "";
+  if (key === "no_opportunity") return scanDiagnosisNoOpportunityHint(strategyMode);
+  return SCAN_DIAGNOSIS_HINTS[key] ?? "";
+}
+
+function scanScenarioHintText(scenario: string | null | undefined, strategyMode?: string | null): string {
+  const sc = (scenario ?? "").trim().toUpperCase();
+  if (!sc) return "";
+  if (sc === "A") {
+    return isDailyIntradayMode(strategyMode)
+      ? "El scanner corrió (hay filas OK) pero ningún setup intradía fue elegible."
+      : "El scanner corrió (hay filas OK) pero ninguna fila tiene signal=compra_potencial exacto.";
+  }
+  if (sc === "OK") {
+    return isDailyIntradayMode(strategyMode)
+      ? "Hay candidatos intradía elegibles; evaluated_count>0 solo si pasan filtros de entrada."
+      : "Hay candidatos compra_potencial; evaluated_count>0 solo si pasan filtros de entrada.";
+  }
+  return SCAN_SCENARIO_HINTS_BASE[sc] ?? "";
+}
 
 function scanFieldsFrom(
   summary: CycleSummaryShape | null | undefined,
@@ -163,6 +202,15 @@ function scanFieldsFrom(
     sample_rows: d.sample_rows ?? s.sample_rows,
     entry_candidate_filter: d.entry_candidate_filter ?? s.entry_candidate_filter,
     evaluated_count_note: d.evaluated_count_note ?? s.evaluated_count_note,
+    strategy_mode: d.strategy_mode ?? s.strategy_mode,
+    daily_setup_counts: d.daily_setup_counts ?? s.daily_setup_counts,
+    open_positions_count: s.open_positions_count,
+    max_open_positions: s.max_open_positions,
+    open_position_symbols: s.open_position_symbols,
+    rejected_by_max_open_positions_count: s.rejected_by_max_open_positions_count,
+    positions_in_file_total: s.positions_in_file_total,
+    position_source: s.position_source,
+    position_source_label: s.position_source_label,
   };
 }
 
@@ -406,6 +454,35 @@ export function CycleDiagnosticsPanel({
         ) : null}
       </div>
 
+      {summary?.open_positions_count !== undefined && summary.max_open_positions !== undefined ? (
+        <div
+          className="crypto-testnet-note"
+          style={{ marginBottom: "0.65rem", fontSize: "0.82rem" }}
+        >
+          <strong>
+            {summary.position_source_label
+              ? `Cupo usado por: ${summary.position_source_label}`
+              : "Cupo posiciones paper"}
+          </strong>
+          {": "}
+          {summary.open_positions_count} / {summary.max_open_positions} abiertas
+          {(summary.open_position_symbols?.length ?? 0) > 0
+            ? ` — ${summary.open_position_symbols!.join(", ")}`
+            : " — ninguna"}
+          {(summary.rejected_by_max_open_positions_count ?? 0) > 0 ? (
+            <span className="msg-muted" style={{ display: "block", marginTop: "0.25rem" }}>
+              Rechazos por cupo en este ciclo: {summary.rejected_by_max_open_positions_count}
+            </span>
+          ) : null}
+          {summary.positions_in_file_total != null &&
+          summary.positions_in_file_total > (summary.open_positions_count ?? 0) ? (
+            <span className="msg-muted" style={{ display: "block", marginTop: "0.25rem" }}>
+              Hay {summary.positions_in_file_total} filas en el JSON; solo cuentan las con status=open.
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
       {showScanProbe ? (
         <div
           className="crypto-testnet-note crypto-testnet-note--blue"
@@ -424,7 +501,9 @@ export function CycleDiagnosticsPanel({
               {scan.scan_scenario_detail ? (
                 <span className="msg-muted" style={{ display: "block", marginTop: "0.2rem", fontSize: "0.78rem" }}>
                   {scan.scan_scenario_detail}
-                  {SCAN_SCENARIO_HINTS[scan.scan_scenario] ? ` ${SCAN_SCENARIO_HINTS[scan.scan_scenario]}` : ""}
+                  {scanScenarioHintText(scan.scan_scenario, scan.strategy_mode ?? summary?.strategy_mode)
+                    ? ` ${scanScenarioHintText(scan.scan_scenario, scan.strategy_mode ?? summary?.strategy_mode)}`
+                    : ""}
                 </span>
               ) : null}
             </p>
@@ -466,6 +545,16 @@ export function CycleDiagnosticsPanel({
               </span>
             </div>
             <div className="crypto-testnet-kpi">
+              <span className="crypto-testnet-kpi-label">Modo estrategia</span>
+              <span className="crypto-testnet-kpi-value" style={{ fontSize: "0.75rem", fontWeight: 500 }}>
+                {scan.strategy_mode === "daily_intraday"
+                  ? "Daily / Intradía"
+                  : scan.strategy_mode === "trend_swing"
+                    ? "Trend / Swing"
+                    : scan.strategy_mode ?? summary?.strategy_mode ?? "—"}
+              </span>
+            </div>
+            <div className="crypto-testnet-kpi">
               <span className="crypto-testnet-kpi-label">Candidatos señal</span>
               <span className="crypto-testnet-kpi-value">{scan.candidates_count ?? "—"}</span>
             </div>
@@ -486,6 +575,14 @@ export function CycleDiagnosticsPanel({
               <span className="crypto-testnet-kpi-value">{scan.rows_missing_signal ?? "—"}</span>
             </div>
           </div>
+          {scan.daily_setup_counts && Object.keys(scan.daily_setup_counts).length > 0 ? (
+            <p className="msg-muted" style={{ margin: "0.45rem 0 0", fontSize: "0.78rem" }}>
+              <strong>Setups daily:</strong>{" "}
+              {Object.entries(scan.daily_setup_counts)
+                .map(([k, n]) => `${k}=${n}`)
+                .join(", ")}
+            </p>
+          ) : null}
           {(scan.unique_signals_detected?.length ?? 0) > 0 ? (
             <p className="msg-muted" style={{ margin: "0.45rem 0 0", fontSize: "0.78rem" }}>
               <strong>Señales en filas OK:</strong> {scan.unique_signals_detected!.join(", ")}
@@ -553,8 +650,11 @@ export function CycleDiagnosticsPanel({
             </p>
           ) : null}
           <p className="msg-muted" style={{ margin: "0.35rem 0 0" }}>
-            {SCAN_DIAGNOSIS_HINTS[scan.scan_diagnosis ?? primaryReason ?? ""] ??
-              SCAN_DIAGNOSIS_HINTS[primaryReason ?? ""] ??
+            {scanDiagnosisHintText(
+              scan.scan_diagnosis ?? primaryReason,
+              scan.strategy_mode ?? summary?.strategy_mode,
+            ) ||
+              scanDiagnosisHintText(primaryReason, scan.strategy_mode ?? summary?.strategy_mode) ||
               primaryReasonLabel(primaryReason)}
           </p>
           {lastScanDebug ? (
@@ -598,7 +698,7 @@ export function CycleDiagnosticsPanel({
             <strong>Motivo principal (última estrategia):</strong> {primaryReasonLabel(primaryReason)}
             {summary && summary.evaluated_count === 0 && primaryReason === "no_opportunity" ? (
               <span className="msg-muted" style={{ display: "block", marginTop: "0.25rem" }}>
-                El escaneo corrió; no hubo señales compra_potencial en la watchlist.
+                {scanNoOpportunityHint(scan.strategy_mode ?? summary?.strategy_mode)}
               </span>
             ) : null}
             {summary && summary.evaluated_count > 0 && summary.accepted_count === 0 && primaryReason !== "opened" ? (
@@ -635,8 +735,9 @@ export function CycleDiagnosticsPanel({
               <strong>Mejor candidato rechazado:</strong> {bestRejected.symbol}
               {bestRejected.score != null ? ` · score ${bestRejected.score}` : ""}
               {bestRejected.signal ? ` · ${bestRejected.signal}` : ""}
+              {bestRejected.setup_type ? ` · setup ${bestRejected.setup_type}` : ""}
               <span className="msg-muted" style={{ display: "block", marginTop: "0.2rem" }}>
-                {primaryReasonLabel(bestRejected.reason)}
+                {primaryReasonLabel(bestRejected.rejection_reason ?? bestRejected.reason)}
               </span>
             </div>
           ) : null}

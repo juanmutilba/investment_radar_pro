@@ -435,6 +435,19 @@ export type CryptoTestnetEvaluatedRow = {
   status: string;
   reason: string;
   price?: number | null;
+  setup_type?: string | null;
+  rsi?: number | null;
+  rsi_context?: string | null;
+  macd_context?: string | null;
+  trend_context?: string | null;
+  volume_context?: string | null;
+  btc_context?: string | null;
+  entry_eligible?: boolean;
+  scan_acceptance_reason?: string | null;
+  evaluation_status?: string | null;
+  evaluation_reason?: string | null;
+  evaluation_outcome?: string | null;
+  rejection_reason?: string;
 };
 
 export type CryptoTestnetProposeEntryPayload = {
@@ -442,10 +455,14 @@ export type CryptoTestnetProposeEntryPayload = {
   proposal: CryptoTestnetStrategyProposal | null;
   primary_reason: string | null;
   evaluated: CryptoTestnetEvaluatedRow[];
+  candidate_opportunities?: CryptoCandidateOpportunity[];
   scanned_count?: number;
   candidates_count?: number;
   timeframe?: string;
   quote_amount_usdt?: number;
+  strategy_mode?: string;
+  scan_debug?: CryptoScanDebug | null;
+  position_limits?: CryptoPositionLimitsSnapshot;
 };
 
 export type CryptoTestnetProposeEntryParams = {
@@ -461,6 +478,7 @@ export type CryptoTestnetProposeEntryParams = {
   cooldown_minutes?: number;
   require_btc_trend_up?: boolean;
   min_entry_score?: number;
+  strategyMode?: CryptoStrategyMode;
 };
 
 function isCryptoTestnetProposeEntryPayload(data: unknown): data is CryptoTestnetProposeEntryPayload {
@@ -488,6 +506,7 @@ export async function postCryptoTestnetProposeEntry(
   if (params.cooldown_minutes != null) q.set("cooldown_minutes", String(params.cooldown_minutes));
   if (params.require_btc_trend_up != null) q.set("require_btc_trend_up", params.require_btc_trend_up ? "true" : "false");
   if (params.min_entry_score != null) q.set("min_entry_score", String(params.min_entry_score));
+  if (params.strategyMode != null) q.set("strategy_mode", params.strategyMode);
   const res = await fetch(`${BASE}/crypto/testnet/strategy/propose-entry?${q.toString()}`, {
     method: "POST",
     headers: { Accept: "application/json" },
@@ -610,6 +629,7 @@ export type CryptoTestnetMonitorParamsSnapshot = {
   break_even_trigger_pct?: number;
   break_even_plus_pct?: number;
   min_exit_value_usdt?: number;
+  strategy_mode?: string;
 };
 
 export type CryptoTestnetMonitorStatusPayload = {
@@ -658,6 +678,7 @@ export type CryptoTestnetMonitorStartBody = {
   break_even_trigger_pct?: number;
   break_even_plus_pct?: number;
   min_exit_value_usdt?: number;
+  strategy_mode?: CryptoStrategyMode;
 };
 
 function isCryptoTestnetMonitorStatusPayload(data: unknown): data is CryptoTestnetMonitorStatusPayload {
@@ -722,6 +743,7 @@ export type CryptoTestnetMonitorCycleRow = {
   cycle_finished_at?: string;
   duration_ms?: number;
   interval_minutes?: number | null;
+  strategy_mode?: string;
   status?: string;
   watchlist_count?: number | null;
   scan_count?: number | null;
@@ -1504,19 +1526,36 @@ export async function closeCryptoPaperPosition(payload: CryptoPaperClosePayload)
   return data;
 }
 
-export type CryptoPaperCycleCandidate = {
+export type CryptoStrategyMode = "trend_swing" | "daily_intraday";
+
+export type CryptoCandidateOpportunity = {
   symbol: string;
+  strategy_mode?: CryptoStrategyMode | string;
+  setup_type?: string | null;
+  score?: number | null;
+  rsi?: number | null;
+  rsi_14?: number | null;
+  signal?: string | null;
+  trend_context?: string | null;
+  rsi_context?: string | null;
+  macd_context?: string | null;
+  volume_context?: string | null;
+  btc_context?: string | null;
+  entry_eligible?: boolean;
+  scan_acceptance_reason?: string | null;
+  evaluation_status?: string | null;
+  evaluation_reason?: string | null;
+  evaluation_outcome?: string | null;
   timeframe?: string;
   price?: number | null;
-  score?: number | null;
-  signal?: string | null;
   trend?: string | null;
   momentum?: string | null;
   risk?: string | null;
-  rsi_14?: number | null;
   macd_hist?: number | null;
   error?: string | null;
 };
+
+export type CryptoPaperCycleCandidate = CryptoCandidateOpportunity;
 
 export type CryptoPaperCyclePositionReview = {
   id?: string;
@@ -1546,6 +1585,18 @@ export type CryptoPaperEvaluatedCandidate = {
   status: "accepted" | "rejected" | "skipped";
   reason?: string;
   price?: number | null;
+  setup_type?: string | null;
+  rsi?: number | null;
+  rsi_context?: string | null;
+  macd_context?: string | null;
+  trend_context?: string | null;
+  volume_context?: string | null;
+  btc_context?: string | null;
+  entry_eligible?: boolean;
+  scan_acceptance_reason?: string | null;
+  evaluation_status?: string | null;
+  evaluation_reason?: string | null;
+  evaluation_outcome?: string | null;
 };
 
 export type CryptoPaperStrategyParams = {
@@ -1561,6 +1612,7 @@ export type CryptoPaperStrategyParams = {
   cooldownMinutes?: number;
   requireBtcTrendUp?: boolean;
   minEntryScore?: number;
+  strategyMode?: CryptoStrategyMode;
 };
 
 export type CryptoPaperReviewExitsResponse = {
@@ -1568,6 +1620,21 @@ export type CryptoPaperReviewExitsResponse = {
 };
 
 export type CryptoPaperCycleStatus = "opened" | "no_opportunity" | "skipped" | "error";
+
+export type CryptoPositionLimitsSnapshot = {
+  open_positions_count: number;
+  max_open_positions: number;
+  open_position_symbols: string[];
+  open_slots_remaining?: number;
+  positions_in_file_total?: number;
+  rejected_by_max_open_positions_count: number;
+  count_source?: string;
+  position_source?: string;
+  position_source_label?: string;
+};
+
+/** @deprecated Alias; usar CryptoPositionLimitsSnapshot */
+export type CryptoPaperPositionLimits = CryptoPositionLimitsSnapshot;
 
 export type CryptoPaperCycleResponse = {
   timeframe: string;
@@ -1579,10 +1646,13 @@ export type CryptoPaperCycleResponse = {
   status?: CryptoPaperCycleStatus;
   message?: string | null;
   primary_reason?: string | null;
+  strategy_mode?: CryptoStrategyMode | string;
   candidates: CryptoPaperCycleCandidate[];
+  candidate_opportunities?: CryptoCandidateOpportunity[];
   evaluated?: CryptoPaperEvaluatedCandidate[];
   positions_review: CryptoPaperCyclePositionReview[];
   actions: CryptoPaperCycleAction[];
+  position_limits?: CryptoPaperPositionLimits;
 };
 
 function isCryptoPaperCycleResponse(data: unknown): data is CryptoPaperCycleResponse {
@@ -1598,13 +1668,74 @@ function isCryptoPaperCycleResponse(data: unknown): data is CryptoPaperCycleResp
 
 const CRYPTO_PAPER_CYCLE_LIMIT = 200;
 
+export type CryptoStrategyCompareBestCandidate = CryptoCandidateOpportunity;
+
+export type CryptoStrategyCompareModeRow = {
+  strategy_mode: CryptoStrategyMode;
+  scan_count: number;
+  scan_ok_count: number;
+  scan_error_count?: number;
+  candidates_count: number;
+  daily_setup_counts: Record<string, number>;
+  signal_counts: Record<string, number>;
+  best_candidate: CryptoStrategyCompareBestCandidate | null;
+  candidate_opportunities?: CryptoCandidateOpportunity[];
+  non_candidate_reasons: Record<string, number>;
+  scan_duration_ms?: number;
+  scan_diagnosis?: string | null;
+  scan_error?: string | null;
+};
+
+export type CryptoStrategyCompareResponse = {
+  ok: boolean;
+  timeframe: string;
+  limit: number;
+  watchlist_count: number;
+  note: string;
+  modes: CryptoStrategyCompareModeRow[];
+  comparison: {
+    candidates_delta: number;
+    daily_more_candidates: boolean;
+    same_candidates: boolean;
+  };
+};
+
+function isCryptoStrategyCompareResponse(data: unknown): data is CryptoStrategyCompareResponse {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  if (typeof o.ok !== "boolean") return false;
+  if (!Array.isArray(o.modes)) return false;
+  return true;
+}
+
+export async function getCryptoCompareStrategies(
+  timeframe = "1h",
+  limit = CRYPTO_PAPER_CYCLE_LIMIT,
+): Promise<CryptoStrategyCompareResponse> {
+  const q = new URLSearchParams({
+    timeframe: timeframe.trim(),
+    limit: String(limit),
+  });
+  const res = await fetch(`${BASE}/crypto/bot/compare-strategies?${q.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoStrategyCompareResponse(data)) {
+    throw new Error("Respuesta inesperada: /crypto/bot/compare-strategies");
+  }
+  return data;
+}
+
 export async function getCryptoPaperCycle(
   timeframe = "1h",
   limit = CRYPTO_PAPER_CYCLE_LIMIT,
+  strategyMode: CryptoStrategyMode = "trend_swing",
 ): Promise<CryptoPaperCycleResponse> {
   const q = new URLSearchParams({
     timeframe: timeframe.trim(),
     limit: String(limit),
+    strategy_mode: strategyMode,
   });
   const res = await fetch(`${BASE}/crypto/bot/paper-cycle?${q.toString()}`);
   if (!res.ok) {
@@ -1633,6 +1764,7 @@ export async function executeCryptoPaperStrategy(
     cooldown_minutes: String(params.cooldownMinutes ?? 0),
     require_btc_trend_up: String(params.requireBtcTrendUp ?? false),
     min_entry_score: String(params.minEntryScore ?? 0),
+    strategy_mode: params.strategyMode ?? "trend_swing",
   });
   const res = await fetch(`${BASE}/crypto/bot/execute-paper-strategy?${q.toString()}`, {
     method: "POST",
@@ -1693,6 +1825,8 @@ export type CryptoScanDebug = {
   sample_rows?: Array<Record<string, unknown>>;
   entry_candidate_filter?: Record<string, unknown>;
   evaluated_count_note?: string;
+  strategy_mode?: string;
+  daily_setup_counts?: Record<string, number>;
   updated_at?: string;
 };
 
@@ -1735,6 +1869,9 @@ export type CryptoCycleCandidate = {
   score?: number | null;
   reason?: string | null;
   signal?: string | null;
+  setup_type?: string | null;
+  rejection_reason?: string | null;
+  strategy_mode?: string | null;
 };
 
 export type CryptoPaperBotAutoStatus = {
@@ -1830,6 +1967,7 @@ export async function startCryptoPaperBotAuto(
     cooldown_minutes: params.cooldownMinutes ?? 0,
     require_btc_trend_up: params.requireBtcTrendUp ?? false,
     min_entry_score: params.minEntryScore ?? 0,
+    strategy_mode: params.strategyMode ?? "trend_swing",
   };
   const res = await fetch(`${BASE}/crypto/bot/auto-start`, {
     method: "POST",

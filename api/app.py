@@ -535,6 +535,7 @@ def crypto_testnet_strategy_propose_entry(
     cooldown_minutes: int = Query(0, ge=0),
     require_btc_trend_up: bool = Query(False),
     min_entry_score: float = Query(0, ge=0, le=100),
+    strategy_mode: str = Query("trend_swing"),
 ):
     """
     Escaneo + filtros alineados a execute-paper-strategy; sólo propone BUY testnet (sin paper ni orden automática).
@@ -555,6 +556,7 @@ def crypto_testnet_strategy_propose_entry(
             cooldown_minutes=cooldown_minutes,
             require_btc_trend_up=require_btc_trend_up,
             min_entry_score=min_entry_score,
+            strategy_mode=strategy_mode,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -605,6 +607,7 @@ class CryptoTestnetMonitorStartBody(BaseModel):
     break_even_trigger_pct: float = Field(default=0, ge=0)
     break_even_plus_pct: float = Field(default=0, ge=0)
     min_exit_value_usdt: float = Field(default=5, ge=0)
+    strategy_mode: str = Field(default="trend_swing")
 
 
 @app.get("/crypto/testnet/monitor/status")
@@ -644,6 +647,7 @@ def crypto_testnet_monitor_start(body: CryptoTestnetMonitorStartBody):
             break_even_trigger_pct=float(body.break_even_trigger_pct),
             break_even_plus_pct=float(body.break_even_plus_pct),
             min_exit_value_usdt=float(body.min_exit_value_usdt),
+            strategy_mode=body.strategy_mode,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1004,6 +1008,7 @@ class CryptoPaperBotAutoStartBody(BaseModel):
     cooldown_minutes: int = Field(default=0, ge=0)
     require_btc_trend_up: bool = False
     min_entry_score: float = Field(default=0, ge=0, le=100)
+    strategy_mode: str = Field(default="trend_swing")
 
 
 @app.get("/crypto/paper/portfolio")
@@ -1112,14 +1117,29 @@ def crypto_paper_open_market_amount(body: CryptoPaperOpenMarketAmountBody):
 def crypto_bot_paper_cycle(
     timeframe: str = Query("1h"),
     limit: int = Query(200, ge=50, le=1000),
+    strategy_mode: str = Query("trend_swing"),
 ):
     """Ciclo bot paper (solo evaluación; sin trading real ni acciones automáticas)."""
     from services.crypto.bot_runner import run_crypto_paper_cycle
 
     try:
-        return run_crypto_paper_cycle(timeframe=timeframe, limit=limit)
+        return run_crypto_paper_cycle(timeframe=timeframe, limit=limit, strategy_mode=strategy_mode)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Bot paper cycle: {e}") from e
+
+
+@app.get("/crypto/bot/compare-strategies")
+def crypto_bot_compare_strategies(
+    timeframe: str = Query("1h", min_length=1, max_length=16),
+    limit: int = Query(200, ge=50, le=1000),
+):
+    """Compara escaneo trend_swing vs daily_intraday; sin órdenes ni paper."""
+    from services.crypto.bot_runner import compare_crypto_strategies
+
+    try:
+        return compare_crypto_strategies(timeframe=timeframe.strip(), limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Comparar estrategias: {e}") from e
 
 
 @app.post("/crypto/bot/review-paper-exits")
@@ -1148,6 +1168,7 @@ def crypto_bot_execute_paper_strategy(
     cooldown_minutes: int = Query(0, ge=0),
     require_btc_trend_up: bool = Query(False),
     min_entry_score: float = Query(0, ge=0, le=100),
+    strategy_mode: str = Query("trend_swing"),
 ):
     """Ejecuta estrategia paper con gestión de riesgo (simulación; sin órdenes reales)."""
     from services.crypto.bot_runner import execute_paper_strategy
@@ -1166,6 +1187,7 @@ def crypto_bot_execute_paper_strategy(
             cooldown_minutes=cooldown_minutes,
             require_btc_trend_up=require_btc_trend_up,
             min_entry_score=min_entry_score,
+            strategy_mode=strategy_mode,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1201,6 +1223,7 @@ def crypto_bot_auto_start(body: CryptoPaperBotAutoStartBody):
         "cooldown_minutes": body.cooldown_minutes,
         "require_btc_trend_up": body.require_btc_trend_up,
         "min_entry_score": body.min_entry_score,
+        "strategy_mode": body.strategy_mode,
     }
     try:
         return start_paper_bot_scheduler(

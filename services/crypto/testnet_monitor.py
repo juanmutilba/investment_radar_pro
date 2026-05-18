@@ -127,6 +127,7 @@ def _slim_scan_debug_for_cycle_history(scan_debug: Any) -> dict[str, Any] | None
         "scan_diagnosis",
         "first_symbols_sample",
         "updated_at",
+        "strategy_mode",
     )
     out: dict[str, Any] = {}
     for k in keys:
@@ -231,7 +232,9 @@ def _build_monitor_cycle_history_record(
     watchlist = None
     scan_count = None
     candidates = None
+    strat_from_scan = None
     if isinstance(scan_dbg, dict):
+        strat_from_scan = scan_dbg.get("strategy_mode")
         watchlist = scan_dbg.get("watchlist_count")
         scan_count = scan_dbg.get("scan_count")
         candidates = scan_dbg.get("candidates_count")
@@ -242,12 +245,18 @@ def _build_monitor_cycle_history_record(
     if candidates is None:
         candidates = _STATE.get("last_candidates_count")
 
+    strat = (
+        str(params.get("strategy_mode") or strat_from_scan or "trend_swing").strip()
+        or "trend_swing"
+    )
+
     record: dict[str, Any] = {
         "timestamp": timestamp,
         "cycle_started_at": cycle_started_at,
         "cycle_finished_at": timestamp,
         "duration_ms": int(duration_ms),
         "interval_minutes": interval_min_f,
+        "strategy_mode": strat,
         "status": _cycle_history_status(errs, entry, exit_payload),
         "watchlist_count": watchlist,
         "scan_count": scan_count,
@@ -373,6 +382,7 @@ def _run_cycle() -> None:
             cooldown_minutes=int(params.get("cooldown_minutes") or 0),
             require_btc_trend_up=bool(params.get("require_btc_trend_up")),
             min_entry_score=float(params.get("min_entry_score") or 0),
+            strategy_mode=str(params.get("strategy_mode") or "trend_swing"),
         )
 
         exit_payload = propose_testnet_exits(
@@ -509,8 +519,11 @@ def start_testnet_monitor(
     break_even_trigger_pct: float,
     break_even_plus_pct: float,
     min_exit_value_usdt: float,
+    strategy_mode: str = "trend_swing",
 ) -> dict[str, Any]:
     """Arranca o reanuda el monitor; actualiza parámetros si ya estaba activo."""
+    from services.crypto.strategy_modes import normalize_strategy_mode
+
     if interval_minutes < 1 or interval_minutes > 1440:
         raise ValueError("interval_minutes debe estar entre 1 y 1440")
     interval_seconds = max(30, int(interval_minutes * 60))
@@ -530,6 +543,7 @@ def start_testnet_monitor(
         "break_even_trigger_pct": float(break_even_trigger_pct),
         "break_even_plus_pct": float(break_even_plus_pct),
         "min_exit_value_usdt": float(min_exit_value_usdt),
+        "strategy_mode": normalize_strategy_mode(strategy_mode),
     }
 
     global _THREAD
@@ -550,7 +564,10 @@ def start_testnet_monitor(
                 _THREAD = t
                 t.start()
 
-    _log(f"start interval_s={interval_seconds} timeframe={params['timeframe']}")
+    _log(
+        f"start interval_s={interval_seconds} timeframe={params['timeframe']} "
+        f"strategy_mode={params.get('strategy_mode')}"
+    )
     return get_testnet_monitor_status()
 
 

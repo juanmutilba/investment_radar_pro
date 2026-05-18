@@ -111,6 +111,51 @@ def _count_open_positions(pf: dict[str, Any] | None = None) -> int:
     return n
 
 
+def list_open_paper_position_symbols(pf: dict[str, Any] | None = None) -> list[str]:
+    """Símbolos con status=open en crypto_paper_portfolio.json (misma regla que el bot paper)."""
+    data = pf if pf is not None else load_portfolio()
+    syms: list[str] = []
+    for p in data.get("positions") or []:
+        if not isinstance(p, dict) or str(p.get("status", "open")) != "open":
+            continue
+        sym = str(p.get("symbol") or "").strip().upper()
+        if sym:
+            syms.append(sym)
+    return sorted(syms)
+
+
+def paper_position_limits_snapshot(
+    max_open_positions: int,
+    pf: dict[str, Any] | None = None,
+    *,
+    evaluated: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Diagnóstico de cupo max_open_positions (solo cartera paper local)."""
+    data = pf if pf is not None else load_portfolio()
+    open_syms = list_open_paper_position_symbols(data)
+    open_count = len(open_syms)
+    max_pos = max(1, int(max_open_positions))
+    in_file = sum(1 for p in data.get("positions") or [] if isinstance(p, dict))
+    rejected = 0
+    if evaluated:
+        rejected = sum(
+            1
+            for e in evaluated
+            if isinstance(e, dict) and str(e.get("reason") or "") == "max_open_positions"
+        )
+    return {
+        "open_positions_count": open_count,
+        "max_open_positions": max_pos,
+        "open_position_symbols": open_syms,
+        "open_slots_remaining": max(0, max_pos - open_count),
+        "positions_in_file_total": in_file,
+        "rejected_by_max_open_positions_count": rejected,
+        "count_source": "paper_portfolio_status_open",
+        "position_source": "paper_portfolio",
+        "position_source_label": "Posiciones paper abiertas",
+    }
+
+
 def _apply_risk_fields(
     pos: dict[str, Any],
     entry_price: float,
@@ -738,7 +783,13 @@ def get_paper_equity_curve() -> dict[str, Any]:
 def get_paper_portfolio() -> dict[str, Any]:
     pf = load_portfolio()
     cash = float(pf.get("cash_usdt") or 0)
-    open_positions = [p for p in (pf.get("positions") or []) if isinstance(p, dict)]
+    raw_positions = [p for p in (pf.get("positions") or []) if isinstance(p, dict)]
+    open_positions = [p for p in raw_positions if str(p.get("status", "open")) == "open"]
+    if len(raw_positions) > len(open_positions):
+        _log(
+            f"get_paper_portfolio: {len(raw_positions) - len(open_positions)} fila(s) con status≠open "
+            "en archivo (no se muestran; el bot solo cuenta status=open)"
+        )
     enriched = [_enrich_position(p) for p in open_positions]
     market_total = sum(float(p.get("market_value_usdt") or 0) for p in enriched)
     unrealized = sum(float(p.get("unrealized_pnl_usdt") or 0) for p in enriched)
