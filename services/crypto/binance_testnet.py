@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 _LOG_PREFIX = "[CRYPTO_TESTNET]"
+_ORDER_REQUEST_LOG_PREFIX = "[CRYPTO_TESTNET_ORDER_REQUEST]"
 _CANCEL_ORDER_LOG_PREFIX = "[CRYPTO_TESTNET_CANCEL_ORDER]"
 _LIMIT_ORDER_LOG_PREFIX = "[CRYPTO_TESTNET_LIMIT_ORDER]"
 _SYNC_ORDERS_LOG_PREFIX = "[CRYPTO_TESTNET_SYNC_ORDERS]"
@@ -128,6 +129,10 @@ _TESTNET_APP_POSITION_BASE_EPS = 1e-8
 
 def _log(msg: str) -> None:
     print(f"{_LOG_PREFIX} {msg}", flush=True)
+
+
+def _log_order_request(msg: str) -> None:
+    print(f"{_ORDER_REQUEST_LOG_PREFIX} {msg}", flush=True)
 
 
 def _log_cancel_order(msg: str) -> None:
@@ -2102,6 +2107,11 @@ def place_testnet_market_order(
         if q_amt > max_quote_usdt:
             return out_err(f"Monto máximo por orden {max_quote_usdt} USDT", 400)
 
+        _log_order_request(
+            f"market side=buy symbol={sym} order_type=MARKET amount_mode=quote "
+            f"quote_amount_usdt={q_amt} notional_est_usdt={q_amt}"
+        )
+
         usdt_free = _free_usdt_from_balances_payload(bal)
         if usdt_free is None:
             return out_err("No se pudo determinar USDT libre", 503)
@@ -2226,6 +2236,20 @@ def place_testnet_market_order(
                 400,
             )
 
+        notional_est = None
+        try:
+            tk_s = ex.fetch_ticker(sym)
+            if isinstance(tk_s, dict):
+                px_s = tk_s.get("last") or tk_s.get("bid")
+                if px_s is not None:
+                    notional_est = float(amt) * float(px_s)
+        except Exception:
+            pass
+        _log_order_request(
+            f"market side=sell symbol={sym} order_type=MARKET amount_mode=base "
+            f"amount_base={amt} notional_est_usdt={notional_est}"
+        )
+
         _log(f"market_sell: symbol={sym} amount_base={amt}")
         try:
             raw = ex.create_market_sell_order(sym, amt)
@@ -2329,6 +2353,11 @@ def place_testnet_limit_order(
     except RuntimeError as e:
         return out_err(str(e), 503)
 
+    _log_order_request(
+        f"limit side={side_l} symbol={sym} order_type=LIMIT amount_mode=base "
+        f"quantity={qty_in} limit_price={price_in} notional_est_usdt={notional}"
+    )
+
     amt = qty_in
     price = price_in
     atp = getattr(ex, "amount_to_precision", None)
@@ -2419,6 +2448,8 @@ def place_testnet_limit_order(
 
 def get_testnet_ticker(symbol: str) -> dict[str, Any]:
     """Ticker spot en testnet (público; sandbox sin credenciales en la petición)."""
+    from datetime import timezone
+
     _ensure_dotenv()
     if not is_testnet_enabled():
         raise RuntimeError("BINANCE_TESTNET_ENABLED=false")
@@ -2431,14 +2462,32 @@ def get_testnet_ticker(symbol: str) -> dict[str, Any]:
     ex = _build_sandbox_exchange(with_credentials=False)
     _log(f"ticker: {sym}")
     raw = ex.fetch_ticker(sym)
+    as_of = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if not isinstance(raw, dict):
-        return {"symbol": sym, "last": None, "percentage": None}
+        return {
+            "ok": True,
+            "symbol": sym,
+            "price": None,
+            "last": None,
+            "percentage": None,
+            "bid": None,
+            "ask": None,
+            "baseVolume": None,
+            "quoteVolume": None,
+            "as_of": as_of,
+            "source": "binance_testnet",
+        }
+    last = raw.get("last")
     return {
+        "ok": True,
         "symbol": sym,
-        "last": raw.get("last"),
+        "price": last,
+        "last": last,
         "percentage": raw.get("percentage"),
         "bid": raw.get("bid"),
         "ask": raw.get("ask"),
         "baseVolume": raw.get("baseVolume"),
         "quoteVolume": raw.get("quoteVolume"),
+        "as_of": as_of,
+        "source": "binance_testnet",
     }

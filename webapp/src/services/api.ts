@@ -211,13 +211,17 @@ export type CryptoTestnetBalancesPayload = {
 };
 
 export type CryptoTestnetTickerPayload = {
+  ok?: boolean;
   symbol: string;
+  price?: number | null;
   last?: number | null;
   percentage?: number | null;
   bid?: number | null;
   ask?: number | null;
   baseVolume?: number | null;
   quoteVolume?: number | null;
+  as_of?: string | null;
+  source?: string | null;
 };
 
 function isCryptoTestnetStatusPayload(data: unknown): data is CryptoTestnetStatusPayload {

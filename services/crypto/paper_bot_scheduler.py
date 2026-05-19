@@ -41,6 +41,7 @@ _state: dict[str, Any] = {
     "last_primary_reason": None,
     "last_entry_candidate": None,
     "last_cycle_summary": None,
+    "last_scan_debug": None,
     "best_rejected_candidate": None,
     "last_exits_review_at": None,
     "last_strategy_run_at": None,
@@ -125,16 +126,69 @@ def _refresh_schedule_times() -> None:
         _state["next_run_at"] = _delay_to_utc_iso(min(exits_delay, strat_delay))
 
 
+def _store_last_scan_debug(scan_meta: dict[str, Any], result: dict[str, Any] | None = None) -> None:
+    full = dict(scan_meta)
+    if isinstance(result, dict):
+        if result.get("timeframe") is not None:
+            full.setdefault("timeframe", result.get("timeframe"))
+        if result.get("limit") is not None:
+            full.setdefault("limit", result.get("limit"))
+    full["updated_at"] = _utc_iso()
+    _state["last_scan_debug"] = full
+
+
+def _apply_strategy_failure_diagnostics(error: str, params: dict[str, Any]) -> None:
+    from services.crypto.bot_runner import log_scan_debug_snapshot
+    from services.crypto.cycle_diagnostics import (
+        build_cycle_summary_from_evaluated,
+        merge_scan_meta_into_summary,
+    )
+    from services.crypto.watchlist import get_crypto_watchlist
+
+    wl = get_crypto_watchlist()
+    tf = (params.get("timeframe") or "1h").strip() or "1h"
+    lim = max(50, min(int(params.get("limit") or 200), 1000))
+    err_dbg = log_scan_debug_snapshot(
+        timeframe=tf,
+        limit=lim,
+        watchlist_count=len(wl),
+        watchlist_sample=wl,
+        scan_type="strategy_cycle_exception",
+        scan_results=[],
+        candidates_count=0,
+        scan_error=f"{error}",
+        scan_duration_ms=0,
+        context="paper_bot_scheduler",
+    )
+    err_dbg["scan_diagnosis"] = "strategy_exception"
+    summary = merge_scan_meta_into_summary(build_cycle_summary_from_evaluated([]), err_dbg)
+    _state["last_cycle_summary"] = summary
+    _store_last_scan_debug(err_dbg)
+    _state["last_primary_reason"] = "strategy_exception"
+    _state["best_rejected_candidate"] = None
+    _state["last_entry_candidate"] = None
+
+
 def _apply_strategy_diagnostics(result: dict[str, Any]) -> None:
     from services.crypto.cycle_diagnostics import (
         build_cycle_summary_from_evaluated,
+        merge_position_limits_into_summary,
+        merge_scan_meta_into_summary,
         pick_best_rejected_candidate,
         pick_entry_candidate_from_action,
         pick_entry_candidate_from_evaluated,
     )
 
     evaluated = [e for e in (result.get("evaluated") or []) if isinstance(e, dict)]
-    _state["last_cycle_summary"] = build_cycle_summary_from_evaluated(evaluated)
+    summary = build_cycle_summary_from_evaluated(evaluated)
+    scan_meta = result.get("scan_debug")
+    if isinstance(scan_meta, dict):
+        summary = merge_scan_meta_into_summary(summary, scan_meta)
+        _store_last_scan_debug(scan_meta, result)
+    pl = result.get("position_limits")
+    if isinstance(pl, dict):
+        summary = merge_position_limits_into_summary(summary, pl)
+    _state["last_cycle_summary"] = summary
     _state["best_rejected_candidate"] = pick_best_rejected_candidate(evaluated)
     _state["last_primary_reason"] = result.get("primary_reason")
 
@@ -236,6 +290,8 @@ def _run_cycle() -> None:
             _state["last_cycle_duration_ms"] = duration_ms
             _state["last_cycle_phases"] = list(phases_ran)
             _state["last_cycle_phase"] = _phase_from_ran(phases_ran)
+            if "strategy" in phases_ran:
+                _apply_strategy_failure_diagnostics(str(e), dict(_state.get("strategy_params") or {}))
     finally:
         with _state_lock:
             _state["running"] = False
@@ -285,6 +341,13 @@ def start_paper_bot_scheduler(
         _state["strategy_params"] = dict(strategy_params)
         _state["_last_exits_mono"] = None
         _state["_last_strategy_mono"] = None
+        _state["last_cycle_summary"] = None
+        _state["last_scan_debug"] = None
+        _state["last_primary_reason"] = None
+        _state["last_entry_candidate"] = None
+        _state["best_rejected_candidate"] = None
+        _state["last_cycle_phase"] = None
+        _state["last_cycle_phases"] = []
 
     _refresh_schedule_times()
 
@@ -338,6 +401,7 @@ def get_paper_bot_scheduler_status() -> dict[str, Any]:
             "last_primary_reason": _state.get("last_primary_reason"),
             "last_entry_candidate": _state.get("last_entry_candidate"),
             "last_cycle_summary": _state.get("last_cycle_summary"),
+            "last_scan_debug": _state.get("last_scan_debug"),
             "best_rejected_candidate": _state.get("best_rejected_candidate"),
             "last_exits_review_at": _state.get("last_exits_review_at"),
             "last_strategy_run_at": _state.get("last_strategy_run_at"),

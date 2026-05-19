@@ -51,6 +51,7 @@ import {
   type CryptoTestnetStoredOrder,
   type CryptoTestnetStatusPayload,
   type CryptoTestnetStrategyProposal,
+  type CryptoTestnetTickerPayload,
   type CryptoStrategyMode,
 } from "@/services/api";
 
@@ -66,8 +67,9 @@ const TESTNET_WHITELIST_SYMBOLS = CRYPTO_TESTNET_WHITELIST_SYMBOLS;
 const MAX_TESTNET_ORDER_USDT = 25;
 const MIN_TESTNET_ORDER_USDT = 0.01;
 const SMALL_USDT_WARN = 5;
-const PROPOSAL_PREFILL_MESSAGE =
-  "Propuesta cargada en el formulario. Revisá y confirmá manualmente.";
+const TESTNET_PRICE_DRIFT_WARN_PCT = 0.5;
+const EXIT_PROPOSAL_PREFILL_MESSAGE =
+  "Propuesta de salida cargada en el formulario. Revisá y confirmá manualmente.";
 
 const EXIT_SEARCH_HELP_TEXT =
   "Busca posibles salidas sobre posiciones reales con saldo en Binance Spot Testnet/Sandbox. SL/TP usan historial local de compras; trailing usa saldo real + máximo local.";
@@ -492,11 +494,65 @@ function lookupFreeBalance(
 function humanizeTestnetOrderError(raw: string): string {
   const s = raw.replace(/^HTTP\s+\d+:\s*/i, "").trim();
   const lower = s.toLowerCase();
+  if (
+    lower.includes("falta monto") ||
+    lower.includes("quote_amount_usdt debe ser") ||
+    lower.includes("quote_amount_usdt es obligatorio")
+  ) {
+    return "Falta monto: indicá un importe USDT válido.";
+  }
+  if (lower.includes("símbolo no permitido") || lower.includes("whitelist") || lower.includes("no habilitado")) {
+    return `Símbolo no habilitado: ${s}`;
+  }
+  if (
+    lower.includes("testnet no configurado") ||
+    lower.includes("binance_testnet_enabled=false") ||
+    lower.includes("exchange testnet no disponible") ||
+    lower.includes("no configurado (api key")
+  ) {
+    return "Testnet desconectado. Revisá el estado de conexión arriba.";
+  }
   if (lower.includes("notional") || lower.includes("-1013")) {
     return "La orden es demasiado chica para Binance.";
   }
+  if (lower.startsWith("respuesta binance") || lower.includes("ccxt")) {
+    return `Respuesta Binance/ccxt: ${s}`;
+  }
   if (s.length > 320) return `${s.slice(0, 320)}…`;
   return s;
+}
+
+function normalizeTestnetPair(symbol: string): string {
+  return symbol.trim().toUpperCase();
+}
+
+function formatProposalPrefillMessage(symbol: string, quoteUsdt: number | null | undefined): string {
+  const q =
+    typeof quoteUsdt === "number" && Number.isFinite(quoteUsdt) && quoteUsdt > 0
+      ? `USDT ${fmtNum(quoteUsdt)}`
+      : "USDT —";
+  return `Propuesta cargada: ${symbol}, BUY, MARKET, ${q}`;
+}
+
+function tickerLivePrice(t: CryptoTestnetTickerPayload | null | undefined): number | null {
+  if (!t) return null;
+  const px = t.price ?? t.last;
+  return typeof px === "number" && Number.isFinite(px) && px > 0 ? px : null;
+}
+
+function priceDriftPct(signal: number, live: number): number | null {
+  if (!Number.isFinite(signal) || signal <= 0 || !Number.isFinite(live) || live <= 0) return null;
+  return ((live - signal) / signal) * 100;
+}
+
+function signalPriceForProposal(
+  symbol: string,
+  evaluated?: CryptoTestnetEvaluatedRow[] | null,
+): number | null {
+  const sym = normalizeTestnetPair(symbol);
+  const row = evaluated?.find((r) => normalizeTestnetPair(r.symbol ?? "") === sym);
+  const p = row?.price;
+  return typeof p === "number" && Number.isFinite(p) && p > 0 ? p : null;
 }
 
 function sideHistoryLabel(side: string | null | undefined): string {
@@ -632,6 +688,11 @@ export function CryptoTestnetPanel() {
   const [orderBusy, setOrderBusy] = useState(false);
   const [orderFormError, setOrderFormError] = useState<string | null>(null);
   const [proposalPrefillMessage, setProposalPrefillMessage] = useState<string | null>(null);
+  const [proposalOrderError, setProposalOrderError] = useState<string | null>(null);
+  const [manualSignalPrice, setManualSignalPrice] = useState<number | null>(null);
+  const [manualTickerAsOf, setManualTickerAsOf] = useState<string | null>(null);
+  const [manualTickerRefreshing, setManualTickerRefreshing] = useState(false);
+  const [priceDriftWarning, setPriceDriftWarning] = useState<string | null>(null);
   const manualOrderSectionRef = useRef<HTMLElement | null>(null);
   const [lastOrder, setLastOrder] = useState<CryptoTestnetMarketOrderRow | null>(null);
   const [recentOrders, setRecentOrders] = useState<CryptoTestnetStoredOrder[]>([]);
@@ -805,7 +866,7 @@ export function CryptoTestnetPanel() {
       const qty = formatBaseQtyForInput(row.free);
       if (qty) setManualAmountBase(qty);
       setOrderFormError(null);
-      setProposalPrefillMessage(PROPOSAL_PREFILL_MESSAGE);
+      setProposalPrefillMessage(EXIT_PROPOSAL_PREFILL_MESSAGE);
       window.requestAnimationFrame(() => scrollToManualOrderForm());
     },
     [scrollToManualOrderForm],
@@ -822,18 +883,56 @@ export function CryptoTestnetPanel() {
   }, []);
 
   const applyEntryProposalToManualForm = useCallback(
-    (proposal: CryptoTestnetStrategyProposal) => {
-      const sym = proposal.symbol?.trim();
-      if (!sym) return;
+    (proposal: CryptoTestnetStrategyProposal, signalPrice?: number | null) => {
+      const sym = normalizeTestnetPair(proposal.symbol ?? "");
+      if (!sym) {
+        setOrderFormError("Propuesta sin símbolo válido.");
+        return;
+      }
+      if (!isTestnetWhitelistPair(sym)) {
+        const err = `Símbolo no habilitado en whitelist testnet: ${sym}`;
+        setOrderFormError(err);
+        setProposalOrderError(err);
+        return;
+      }
       setManualSymbol(sym);
       setManualSide("buy");
       setManualOrderType("market");
+      setManualLimitPrice("");
+      setOrderSuccessMessage(null);
       const q = proposal.quote_amount_usdt;
       if (typeof q === "number" && Number.isFinite(q) && q > 0) {
         setManualQuoteUsdt(String(q));
+      } else {
+        setManualQuoteUsdt("");
       }
+      const sig =
+        typeof signalPrice === "number" && Number.isFinite(signalPrice) && signalPrice > 0
+          ? signalPrice
+          : null;
+      setManualSignalPrice(sig);
+      setPriceDriftWarning(null);
       setOrderFormError(null);
-      setProposalPrefillMessage(PROPOSAL_PREFILL_MESSAGE);
+      setProposalOrderError(null);
+      setProposalPrefillMessage(formatProposalPrefillMessage(sym, q));
+      void (async () => {
+        try {
+          const t = await getCryptoTestnetTicker(sym);
+          const px = tickerLivePrice(t);
+          setPriceByPair((prev) => ({ ...prev, [sym]: px }));
+          setManualTickerAsOf(typeof t.as_of === "string" ? t.as_of : new Date().toISOString());
+          if (sig !== null && px !== null) {
+            const drift = priceDriftPct(sig, px);
+            if (drift !== null && Math.abs(drift) > TESTNET_PRICE_DRIFT_WARN_PCT) {
+              setPriceDriftWarning(
+                `El precio cambió ${drift >= 0 ? "+" : ""}${drift.toFixed(2)}% desde la señal. Revisá antes de confirmar.`,
+              );
+            }
+          }
+        } catch {
+          /* ticker opcional al precargar */
+        }
+      })();
       window.requestAnimationFrame(() => scrollToManualOrderForm());
     },
     [scrollToManualOrderForm],
@@ -859,7 +958,7 @@ export function CryptoTestnetPanel() {
         }
       }
       setOrderFormError(null);
-      setProposalPrefillMessage(PROPOSAL_PREFILL_MESSAGE);
+      setProposalPrefillMessage(EXIT_PROPOSAL_PREFILL_MESSAGE);
       window.requestAnimationFrame(() => scrollToManualOrderForm());
     },
     [scrollToManualOrderForm],
@@ -878,8 +977,9 @@ export function CryptoTestnetPanel() {
     }
   }, []);
 
-  const loadBalances = useCallback(async () => {
+  const loadBalances = useCallback(async (opts?: { prefetchAllTickers?: boolean }) => {
     setBalancesLoading(true);
+    const prefetchAll = opts?.prefetchAllTickers !== false;
     try {
       const [rb, rp, ro] = await Promise.allSettled([
         getCryptoTestnetBalances(),
@@ -905,21 +1005,21 @@ export function CryptoTestnetPanel() {
           ro.reason instanceof Error ? ro.reason.message : "Error al leer órdenes abiertas testnet",
         );
       }
-      const entries = await Promise.all(
-        [...TESTNET_WHITELIST_SYMBOLS].map(async (sym) => {
-          try {
-            const t = await getCryptoTestnetTicker(sym);
-            const last = t.last;
-            const px = typeof last === "number" && Number.isFinite(last) && last > 0 ? last : null;
-            return [sym, px] as const;
-          } catch {
-            return [sym, null] as const;
-          }
-        }),
-      );
-      const map: Record<string, number | null> = {};
-      for (const [sym, px] of entries) map[sym] = px;
-      setPriceByPair(map);
+      if (prefetchAll) {
+        const entries = await Promise.all(
+          [...TESTNET_WHITELIST_SYMBOLS].map(async (sym) => {
+            try {
+              const t = await getCryptoTestnetTicker(sym);
+              return [sym, tickerLivePrice(t)] as const;
+            } catch {
+              return [sym, null] as const;
+            }
+          }),
+        );
+        const map: Record<string, number | null> = {};
+        for (const [sym, px] of entries) map[sym] = px;
+        setPriceByPair(map);
+      }
       setBalancesUpdatedAt(new Date().toISOString());
       setError(null);
     } catch (e: unknown) {
@@ -930,6 +1030,20 @@ export function CryptoTestnetPanel() {
       setOpenOrdersError(null);
     } finally {
       setBalancesLoading(false);
+    }
+  }, []);
+
+  const refreshSingleTicker = useCallback(async (symbol: string): Promise<number | null> => {
+    const sym = symbol.trim();
+    if (!sym) return null;
+    try {
+      const t = await getCryptoTestnetTicker(sym);
+      const px = tickerLivePrice(t);
+      setPriceByPair((prev) => ({ ...prev, [sym]: px }));
+      setManualTickerAsOf(typeof t.as_of === "string" ? t.as_of : new Date().toISOString());
+      return px;
+    } catch {
+      return null;
     }
   }, []);
 
@@ -994,6 +1108,14 @@ export function CryptoTestnetPanel() {
       setOrdersLoading(false);
     }
   }, []);
+
+  const refreshAfterTestnetOrder = useCallback(async () => {
+    await Promise.all([
+      loadBalances({ prefetchAllTickers: false }),
+      loadOrders(),
+      loadOpenOrders(),
+    ]);
+  }, [loadBalances, loadOrders, loadOpenOrders]);
 
   const handleSyncOrderHistory = useCallback(async () => {
     setSyncHistoryBusy(true);
@@ -1122,6 +1244,92 @@ export function CryptoTestnetPanel() {
   const connected = Boolean(status?.configured && status?.enabled && status?.can_read_balance);
   const showEnvHelp = status && !status.configured;
 
+  const executeTestnetMarketBuy = useCallback(
+    async (opts: {
+      symbol: string;
+      quoteUsdt: number;
+      signalPrice?: number | null;
+    }): Promise<{ ok: true } | { ok: false; error: string }> => {
+      if (!connected) {
+        return { ok: false, error: "Testnet desconectado. Revisá el estado de conexión arriba." };
+      }
+      const sym = normalizeTestnetPair(opts.symbol);
+      if (!sym || !isTestnetWhitelistPair(sym)) {
+        return { ok: false, error: `Símbolo no habilitado en whitelist testnet: ${sym || "—"}` };
+      }
+      const q = opts.quoteUsdt;
+      if (!Number.isFinite(q) || q < MIN_TESTNET_ORDER_USDT) {
+        return {
+          ok: false,
+          error: `Falta monto: indicá al menos ${MIN_TESTNET_ORDER_USDT} USDT.`,
+        };
+      }
+      if (q > MAX_TESTNET_ORDER_USDT + 1e-9) {
+        return { ok: false, error: `El monto no puede superar ${MAX_TESTNET_ORDER_USDT} USDT.` };
+      }
+
+      setPriceDriftWarning(null);
+      try {
+        const t = await getCryptoTestnetTicker(sym);
+        const livePx = tickerLivePrice(t);
+        if (livePx !== null) {
+          setPriceByPair((prev) => ({ ...prev, [sym]: livePx }));
+          setManualTickerAsOf(typeof t.as_of === "string" ? t.as_of : new Date().toISOString());
+        }
+        const sig = opts.signalPrice;
+        if (sig != null && livePx != null) {
+          const drift = priceDriftPct(sig, livePx);
+          if (drift !== null && Math.abs(drift) > TESTNET_PRICE_DRIFT_WARN_PCT) {
+            setPriceDriftWarning(
+              `El precio cambió ${drift >= 0 ? "+" : ""}${drift.toFixed(2)}% desde la señal. Revisá antes de confirmar.`,
+            );
+          }
+        }
+      } catch {
+        /* continuar sin ticker en vivo */
+      }
+
+      try {
+        const res = await postCryptoTestnetMarketOrder({
+          symbol: sym,
+          side: "buy",
+          quote_amount_usdt: q,
+        });
+        if (res.order) setLastOrder(res.order);
+        setOrderSuccessMessage("Orden MARKET BUY enviada en Binance Spot Testnet.");
+        setManualSymbol(sym);
+        setManualSide("buy");
+        await refreshAfterTestnetOrder();
+        setError(null);
+        return { ok: true };
+      } catch (e: unknown) {
+        return {
+          ok: false,
+          error: humanizeTestnetOrderError(e instanceof Error ? e.message : "Error al enviar orden testnet"),
+        };
+      }
+    },
+    [connected, refreshAfterTestnetOrder],
+  );
+
+  const handleRefreshManualTicker = useCallback(async () => {
+    setManualTickerRefreshing(true);
+    setPriceDriftWarning(null);
+    try {
+      const live = await refreshSingleTicker(manualSymbol);
+      if (manualSignalPrice !== null && live !== null) {
+        const drift = priceDriftPct(manualSignalPrice, live);
+        if (drift !== null && Math.abs(drift) > TESTNET_PRICE_DRIFT_WARN_PCT) {
+          setPriceDriftWarning(
+            `El precio cambió ${drift >= 0 ? "+" : ""}${drift.toFixed(2)}% desde la señal. Revisá antes de confirmar.`,
+          );
+        }
+      }
+    } finally {
+      setManualTickerRefreshing(false);
+    }
+  }, [manualSymbol, manualSignalPrice, refreshSingleTicker]);
+
   useEffect(() => {
     if (connected) void loadOrders();
   }, [connected, loadOrders]);
@@ -1167,6 +1375,10 @@ export function CryptoTestnetPanel() {
 
   const baseAssetHint = baseAssetFromPair(manualSymbol);
   const pairPrice = priceByPair[manualSymbol] ?? null;
+  const manualPriceDriftPct =
+    manualSignalPrice !== null && pairPrice !== null && pairPrice > 0
+      ? priceDriftPct(manualSignalPrice, pairPrice)
+      : null;
   const freeBaseForPair =
     balances?.ok && baseAssetHint ? lookupFreeBalance(balances, baseAssetHint) : null;
   const freeUsdt = balances?.ok ? lookupFreeBalance(balances, "USDT") : null;
@@ -1199,8 +1411,17 @@ export function CryptoTestnetPanel() {
       setOrderFormError(null);
       setOrderSuccessMessage(null);
       setLastOrder(null);
-      if (!connected || !manualSymbol.trim()) return;
-      const symTrim = manualSymbol.trim();
+      setPriceDriftWarning(null);
+      if (!connected) {
+        setOrderFormError("Testnet desconectado. Revisá el estado de conexión arriba.");
+        return;
+      }
+      if (!manualSymbol.trim()) return;
+      const symTrim = normalizeTestnetPair(manualSymbol);
+      if (!isTestnetWhitelistPair(symTrim)) {
+        setOrderFormError(`Símbolo no habilitado en whitelist testnet: ${symTrim}`);
+        return;
+      }
 
       if (manualOrderType === "limit") {
         const qty = Number.parseFloat(manualLimitQty.replace(",", "."));
@@ -1242,7 +1463,7 @@ export function CryptoTestnetPanel() {
           setOrderSuccessMessage(
             "Orden LIMIT enviada a Binance Spot Testnet. Queda pendiente en el libro hasta que matchee el precio.",
           );
-          await Promise.all([loadBalances(), loadOrders(), loadOpenOrders()]);
+          await refreshAfterTestnetOrder();
           setError(null);
         } catch (err: unknown) {
           const raw = err instanceof Error ? err.message : "Error al enviar orden limit testnet";
@@ -1256,7 +1477,7 @@ export function CryptoTestnetPanel() {
       if (manualSide === "buy") {
         const q = Number.parseFloat(manualQuoteUsdt.replace(",", "."));
         if (!Number.isFinite(q) || q < MIN_TESTNET_ORDER_USDT) {
-          setOrderFormError(`Ingresá un monto USDT válido (mín. ${MIN_TESTNET_ORDER_USDT}).`);
+          setOrderFormError(`Falta monto: indicá un monto USDT válido (mín. ${MIN_TESTNET_ORDER_USDT}).`);
           return;
         }
         if (q > MAX_TESTNET_ORDER_USDT + 1e-9) {
@@ -1301,14 +1522,40 @@ export function CryptoTestnetPanel() {
 
       setOrderBusy(true);
       try {
+        if (manualSide === "buy") {
+          const qBuy = Number.parseFloat(manualQuoteUsdt.replace(",", "."));
+          try {
+            const t = await getCryptoTestnetTicker(symTrim);
+            const livePx = tickerLivePrice(t);
+            if (livePx !== null) {
+              setPriceByPair((prev) => ({ ...prev, [symTrim]: livePx }));
+              setManualTickerAsOf(typeof t.as_of === "string" ? t.as_of : new Date().toISOString());
+            }
+            if (manualSignalPrice !== null && livePx !== null) {
+              const drift = priceDriftPct(manualSignalPrice, livePx);
+              if (drift !== null && Math.abs(drift) > TESTNET_PRICE_DRIFT_WARN_PCT) {
+                setPriceDriftWarning(
+                  `El precio cambió ${drift >= 0 ? "+" : ""}${drift.toFixed(2)}% desde la señal. Revisá antes de confirmar.`,
+                );
+              }
+            }
+          } catch {
+            /* ticker opcional antes de enviar */
+          }
+          const res = await postCryptoTestnetMarketOrder({
+            symbol: symTrim,
+            side: "buy",
+            quote_amount_usdt: qBuy,
+          });
+          if (res.order) setLastOrder(res.order);
+          setOrderSuccessMessage("Orden MARKET enviada/ejecutada en Binance Spot Testnet.");
+          await refreshAfterTestnetOrder();
+          setError(null);
+          return;
+        }
+
         const res =
-          manualSide === "buy"
-            ? await postCryptoTestnetMarketOrder({
-                symbol: symTrim,
-                side: "buy",
-                quote_amount_usdt: Number.parseFloat(manualQuoteUsdt.replace(",", ".")),
-              })
-            : sellMode === "quote"
+          sellMode === "quote"
               ? await postCryptoTestnetMarketOrder({
                   symbol: symTrim,
                   side: "sell",
@@ -1321,7 +1568,7 @@ export function CryptoTestnetPanel() {
                 });
         if (res.order) setLastOrder(res.order);
         setOrderSuccessMessage("Orden MARKET enviada/ejecutada en Binance Spot Testnet.");
-        await Promise.all([loadBalances(), loadOrders(), loadOpenOrders()]);
+        await refreshAfterTestnetOrder();
         setError(null);
       } catch (err: unknown) {
         const raw = err instanceof Error ? err.message : "Error al enviar orden testnet";
@@ -1342,11 +1589,10 @@ export function CryptoTestnetPanel() {
       manualSellQuoteUsdt,
       manualSide,
       manualSymbol,
+      manualSignalPrice,
       pairPrice,
       sellMode,
-      loadBalances,
-      loadOpenOrders,
-      loadOrders,
+      refreshAfterTestnetOrder,
     ],
   );
 
@@ -1409,27 +1655,26 @@ export function CryptoTestnetPanel() {
 
   const handleAssistedConfirmBuy = useCallback(async () => {
     const p = assistedPayload?.proposal;
-    if (!p || !connected) return;
+    if (!p) return;
     setAssistedConfirmBusy(true);
     setOrderFormError(null);
-    try {
-      const res = await postCryptoTestnetMarketOrder({
-        symbol: p.symbol.trim(),
-        side: "buy",
-        quote_amount_usdt: p.quote_amount_usdt,
-      });
-      if (res.order) setLastOrder(res.order);
-      setManualSymbol(p.symbol.trim());
-      setManualSide("buy");
-      await Promise.all([loadBalances(), loadOrders()]);
+    setProposalOrderError(null);
+    const signalPx =
+      signalPriceForProposal(p.symbol, assistedPayload?.evaluated) ?? manualSignalPrice;
+    const result = await executeTestnetMarketBuy({
+      symbol: p.symbol,
+      quoteUsdt: p.quote_amount_usdt,
+      signalPrice: signalPx,
+    });
+    if (result.ok) {
       setAssistedPayload(null);
-      setError(null);
-    } catch (e: unknown) {
-      setOrderFormError(humanizeTestnetOrderError(e instanceof Error ? e.message : "Error al enviar orden testnet"));
-    } finally {
-      setAssistedConfirmBusy(false);
+      setProposalOrderError(null);
+    } else {
+      setProposalOrderError(result.error);
+      setOrderFormError(result.error);
     }
-  }, [assistedPayload, connected, loadBalances, loadOrders]);
+    setAssistedConfirmBusy(false);
+  }, [assistedPayload, executeTestnetMarketBuy, manualSignalPrice]);
 
   const handleExitAssistSearch = useCallback(async () => {
     setExitAssistLoading(true);
@@ -1563,26 +1808,32 @@ export function CryptoTestnetPanel() {
 
   const handleMonitorConfirmBuy = useCallback(async () => {
     const p = monitorStatus?.last_entry_proposal;
-    if (!p || !connected) return;
+    if (!p) return;
     setMonitorConfirmBuyBusy(true);
     setOrderFormError(null);
-    try {
-      const res = await postCryptoTestnetMarketOrder({
-        symbol: p.symbol.trim(),
-        side: "buy",
-        quote_amount_usdt: p.quote_amount_usdt,
-      });
-      if (res.order) setLastOrder(res.order);
-      setManualSymbol(p.symbol.trim());
-      setManualSide("buy");
-      await Promise.all([loadBalances(), loadOrders(), loadMonitorStatus()]);
-      setError(null);
-    } catch (e: unknown) {
-      setOrderFormError(humanizeTestnetOrderError(e instanceof Error ? e.message : "Error al enviar orden testnet"));
-    } finally {
-      setMonitorConfirmBuyBusy(false);
+    setProposalOrderError(null);
+    const signalPx =
+      signalPriceForProposal(p.symbol, monitorStatus?.last_evaluated_entries) ?? manualSignalPrice;
+    const result = await executeTestnetMarketBuy({
+      symbol: p.symbol,
+      quoteUsdt: p.quote_amount_usdt,
+      signalPrice: signalPx,
+    });
+    if (result.ok) {
+      setProposalOrderError(null);
+      void loadMonitorStatus();
+    } else {
+      setProposalOrderError(result.error);
+      setOrderFormError(result.error);
     }
-  }, [monitorStatus?.last_entry_proposal, connected, loadBalances, loadOrders, loadMonitorStatus]);
+    setMonitorConfirmBuyBusy(false);
+  }, [
+    monitorStatus?.last_entry_proposal,
+    monitorStatus?.last_evaluated_entries,
+    executeTestnetMarketBuy,
+    loadMonitorStatus,
+    manualSignalPrice,
+  ]);
 
   const handleMonitorConfirmSell = useCallback(
     async (prop: CryptoTestnetExitProposal) => {
@@ -2076,7 +2327,12 @@ export function CryptoTestnetPanel() {
                   <button
                     type="button"
                     className="radar-refresh-btn"
-                    onClick={() => applyEntryProposalToManualForm(assistedPayload.proposal!)}
+                    onClick={() =>
+                      applyEntryProposalToManualForm(
+                        assistedPayload.proposal!,
+                        signalPriceForProposal(assistedPayload.proposal!.symbol, assistedPayload.evaluated),
+                      )
+                    }
                     disabled={orderBusy}
                   >
                     Usar propuesta
@@ -2087,9 +2343,19 @@ export function CryptoTestnetPanel() {
                     onClick={() => void handleAssistedConfirmBuy()}
                     disabled={!connected || assistedConfirmBusy || orderBusy}
                   >
-                    {assistedConfirmBusy ? "Enviando…" : "Enviar BUY Testnet"}
+                    {assistedConfirmBusy ? "Enviando…" : "Confirmar BUY Testnet"}
                   </button>
                 </div>
+                {proposalOrderError ? (
+                  <p className="crypto-testnet-warn" style={{ marginTop: "0.5rem", marginBottom: 0 }} role="alert">
+                    {proposalOrderError}
+                  </p>
+                ) : null}
+                {priceDriftWarning ? (
+                  <p className="crypto-testnet-warn" style={{ marginTop: "0.35rem", marginBottom: 0 }} role="status">
+                    {priceDriftWarning}
+                  </p>
+                ) : null}
                 {!connected ? (
                   <p className="msg-muted" style={{ marginTop: "0.5rem", fontSize: "0.82rem" }}>
                     Conectá testnet (estado arriba) para poder confirmar la compra.
@@ -2751,7 +3017,15 @@ export function CryptoTestnetPanel() {
                 <button
                   type="button"
                   className="radar-refresh-btn"
-                  onClick={() => applyEntryProposalToManualForm(monitorStatus.last_entry_proposal!)}
+                  onClick={() =>
+                    applyEntryProposalToManualForm(
+                      monitorStatus.last_entry_proposal!,
+                      signalPriceForProposal(
+                        monitorStatus.last_entry_proposal!.symbol,
+                        monitorStatus.last_evaluated_entries,
+                      ),
+                    )
+                  }
                   disabled={orderBusy}
                 >
                   Usar propuesta
@@ -2765,6 +3039,16 @@ export function CryptoTestnetPanel() {
                   {monitorConfirmBuyBusy ? "Enviando…" : "Confirmar BUY Testnet"}
                 </button>
               </div>
+              {proposalOrderError ? (
+                <p className="crypto-testnet-warn" style={{ marginTop: "0.35rem", marginBottom: 0 }} role="alert">
+                  {proposalOrderError}
+                </p>
+              ) : null}
+              {priceDriftWarning ? (
+                <p className="crypto-testnet-warn" style={{ marginTop: "0.35rem", marginBottom: 0 }} role="status">
+                  {priceDriftWarning}
+                </p>
+              ) : null}
               {!connected ? (
                 <p className="msg-muted" style={{ marginTop: "0.35rem", fontSize: "0.8rem" }}>
                   Conectá testnet para confirmar la compra sugerida por el monitor.
@@ -3071,6 +3355,49 @@ export function CryptoTestnetPanel() {
                   <span className="crypto-testnet-kpi-value">{fmtNum(pairPrice)} USDT</span>
                 </div>
               </div>
+              {manualSide === "buy" && manualOrderType === "market" ? (
+                <div
+                  className="crypto-testnet-mini-grid crypto-testnet-mini-grid--dense"
+                  style={{ marginTop: "0.5rem" }}
+                >
+                  {manualSignalPrice !== null ? (
+                    <div className="crypto-testnet-kpi">
+                      <span className="crypto-testnet-kpi-label">Precio señal</span>
+                      <span className="crypto-testnet-kpi-value">{fmtNum(manualSignalPrice)} USDT</span>
+                    </div>
+                  ) : null}
+                  {manualPriceDriftPct !== null ? (
+                    <div className="crypto-testnet-kpi">
+                      <span className="crypto-testnet-kpi-label">Dif. vs señal</span>
+                      <span className="crypto-testnet-kpi-value">
+                        {manualPriceDriftPct >= 0 ? "+" : ""}
+                        {manualPriceDriftPct.toFixed(2)}%
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {manualTickerAsOf ? (
+                <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
+                  Ticker testnet: {manualTickerAsOf}
+                </p>
+              ) : null}
+              <div style={{ marginTop: "0.35rem" }}>
+                <button
+                  type="button"
+                  className="radar-refresh-btn"
+                  style={{ fontSize: "0.78rem", padding: "0.2rem 0.55rem" }}
+                  onClick={() => void handleRefreshManualTicker()}
+                  disabled={orderBusy || manualTickerRefreshing}
+                >
+                  {manualTickerRefreshing ? "Actualizando…" : "Actualizar precio"}
+                </button>
+              </div>
+              {priceDriftWarning ? (
+                <p className="crypto-testnet-warn" style={{ marginTop: "0.5rem", marginBottom: 0 }} role="status">
+                  {priceDriftWarning}
+                </p>
+              ) : null}
 
               {manualOrderType === "limit" ? (
                 <>
