@@ -62,7 +62,7 @@ export function primaryReasonLabel(
     btc_trend_filter: "BTC sin tendencia alcista",
     opened: "Se abrió posición",
     max_one_per_run: "Máximo 1 entrada por ejecución",
-    max_open_positions: "Máximo de posiciones abiertas",
+    max_open_positions: "Máximo de activos abiertos (cupo testnet)",
     no_entry: "Sin entrada tras evaluar candidatos",
     candidates_present: isDailyIntradayMode(mode)
       ? "Hay candidatos intradía"
@@ -83,14 +83,14 @@ export function assistedPrimaryReasonLabel(
     testnet_balances_unavailable:
       "No se pudieron leer balances testnet: revisá credenciales, BINANCE_TESTNET_ENABLED y pulsá Refrescar datos.",
     max_open_positions:
-      "Hay candidatos, pero no entra uno nuevo: ya alcanzaste el máximo de posiciones testnet permitido (activos con saldo).",
+      "Hay candidatos, pero no entra uno nuevo: ya alcanzaste el máximo de activos distintos con posición Testnet registrada por la app (no es monto total en USDT).",
     no_entry: "Ningún candidato pasó todos los filtros de entrada.",
     score_below_min: "Hay candidatos, pero el score quedó por debajo del mínimo configurado.",
     btc_trend_filter: "Hay candidatos, pero el filtro de tendencia BTC los descartó.",
     cooldown_symbol:
       "Hay candidatos en cooldown según el historial local de órdenes testnet guardado por esta app.",
     already_hold_base_testnet:
-      "Ya existe una posición Testnet registrada por la app para este activo (no se propone duplicar).",
+      "Ya hay una posición Testnet registrada por la app en este activo. El monitor no propone otra entrada en el mismo par hasta cerrarla (evita duplicar compras).",
     not_whitelisted_testnet:
       "El candidato no está en la whitelist Testnet de esta app (pares USDT habilitados).",
   };

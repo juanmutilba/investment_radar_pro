@@ -70,6 +70,14 @@ const MAX_TESTNET_ORDER_USDT = 25;
 const MIN_TESTNET_ORDER_USDT = 0.01;
 const SMALL_USDT_WARN = 5;
 const TESTNET_PRICE_DRIFT_WARN_PCT = 0.5;
+const MAX_OPEN_ASSETS_TOOLTIP =
+  "Cuenta cuántos activos distintos tienen posición Testnet registrada por la app. No es monto total invertido.";
+const MAX_USDT_EXPOSURE_FUTURE_NOTE =
+  "Para limitar dinero total invertido usaremos exposición máxima USDT en un próximo paso.";
+const TESTNET_BUY_SUCCESS_MESSAGE =
+  "Compra ejecutada. Revisá la posición abierta en Posiciones Testnet.";
+const TESTNET_SELL_SUCCESS_MESSAGE =
+  "Venta ejecutada. Revisá Posiciones Testnet (pestaña Cerradas) o el historial.";
 const EXECUTED_PROPOSALS_STORAGE_KEY = "crypto_testnet_executed_proposals_v1";
 const EXIT_PROPOSAL_PREFILL_MESSAGE =
   "Propuesta de salida cargada en el formulario. Revisá y confirmá manualmente.";
@@ -243,6 +251,22 @@ function TestnetSecurityCard({
   );
 }
 
+function CryptoTestnetMaxOpenAssetsLabel() {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+      Máx. activos abiertos
+      <button
+        type="button"
+        className="crypto-testnet-field-hint-btn"
+        title={MAX_OPEN_ASSETS_TOOLTIP}
+        aria-label={MAX_OPEN_ASSETS_TOOLTIP}
+      >
+        ?
+      </button>
+    </span>
+  );
+}
+
 function CryptoTestnetStrategyCooldownLabel() {
   return (
     <span className="crypto-testnet-field-label">
@@ -282,7 +306,7 @@ function TestnetPositionLimitsNote({ limits }: { limits?: CryptoPositionLimitsSn
     <p className="msg-muted" style={{ margin: "0.5rem 0 0", fontSize: "0.82rem" }}>
       <strong>Cupo usado por: {label}</strong>
       {" — "}
-      {limits.open_positions_count}/{limits.max_open_positions}
+      {limits.open_positions_count}/{limits.max_open_positions} activos distintos
       {(limits.open_position_symbols?.length ?? 0) > 0
         ? ` (${limits.open_position_symbols.join(", ")})`
         : " (ninguna posición abierta registrada por la app)"}
@@ -621,7 +645,7 @@ function formatMonitorActiveParamsLine(p: CryptoTestnetMonitorParamsSnapshot | u
   } else if (p.trailing_stop_pct === null) {
     parts.push("trail —");
   }
-  if (p.max_open_positions != null) parts.push(`máx ${p.max_open_positions} pos.`);
+  if (p.max_open_positions != null) parts.push(`máx ${p.max_open_positions} activos`);
   if (p.quote_amount_usdt != null) parts.push(`${p.quote_amount_usdt} USDT/entrada`);
   return parts.length > 0 ? parts.join(" · ") : "—";
 }
@@ -732,6 +756,9 @@ export function CryptoTestnetPanel() {
   const [appPositionsError, setAppPositionsError] = useState<string | null>(null);
   const [appPositionsLoading, setAppPositionsLoading] = useState(false);
   const [appPositionsTab, setAppPositionsTab] = useState<"open" | "closed">("open");
+  const [appPositionSellBusy, setAppPositionSellBusy] = useState<string | null>(null);
+  const [appPositionFeedbackMessage, setAppPositionFeedbackMessage] = useState<string | null>(null);
+  const [appPositionFeedbackError, setAppPositionFeedbackError] = useState<string | null>(null);
   const [executedProposalKeys, setExecutedProposalKeys] = useState<Set<string>>(() =>
     loadExecutedProposalKeys(),
   );
@@ -1244,18 +1271,16 @@ export function CryptoTestnetPanel() {
     [executedProposalKeys],
   );
 
-  const navigateAfterTestnetOrder = useCallback(
-    (side: "buy" | "sell") => {
-      if (side === "buy") {
-        setAppPositionsTab("open");
-        scrollToTestnetSection("crypto-testnet-app-positions");
-      } else {
-        setAppPositionsTab("closed");
-        scrollToTestnetSection("crypto-testnet-section-orders");
-      }
-    },
-    [scrollToTestnetSection],
-  );
+  const navigateAfterTestnetOrder = useCallback((side: "buy" | "sell") => {
+    setCollapsedGroups((prev) => (prev.orders ? { ...prev, orders: false } : prev));
+    setAppPositionsTab(side === "buy" ? "open" : "closed");
+    const targetId = "crypto-testnet-app-positions";
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+  }, []);
 
   const executeTestnetMarketBuy = useCallback(
     async (opts: {
@@ -1316,7 +1341,9 @@ export function CryptoTestnetPanel() {
         });
         if (res.order) setLastOrder(res.order);
         markProposalExecuted(proposalEntryKey(sym));
-        setOrderSuccessMessage("Orden ejecutada. Revisá la posición en Testnet.");
+        setOrderSuccessMessage(TESTNET_BUY_SUCCESS_MESSAGE);
+        setAppPositionFeedbackMessage(TESTNET_BUY_SUCCESS_MESSAGE);
+        setAppPositionFeedbackError(null);
         setManualSymbol(sym);
         setManualSide("buy");
         await refreshAfterTestnetOrder();
@@ -1344,6 +1371,7 @@ export function CryptoTestnetPanel() {
       symbol: string;
       asset: string;
       amountBase: number;
+      fromProposal?: boolean;
     }): Promise<{ ok: true } | { ok: false; error: string }> => {
       if (!connected) {
         return { ok: false, error: "Testnet desconectado. Revisá el estado de conexión arriba." };
@@ -1353,7 +1381,7 @@ export function CryptoTestnetPanel() {
       if (!sym || !isTestnetWhitelistPair(sym)) {
         return { ok: false, error: `Símbolo no habilitado en whitelist testnet: ${sym || "—"}` };
       }
-      if (isExitProposalExecuted(sym, asset)) {
+      if (opts.fromProposal && isExitProposalExecuted(sym, asset)) {
         return { ok: false, error: "Esta propuesta de salida ya fue ejecutada en esta sesión." };
       }
 
@@ -1386,8 +1414,10 @@ export function CryptoTestnetPanel() {
           amount_base: amt,
         });
         if (res.order) setLastOrder(res.order);
-        markProposalExecuted(proposalExitKey(sym, asset));
-        setOrderSuccessMessage("Orden ejecutada. Revisá el historial y posiciones cerradas en Testnet.");
+        if (opts.fromProposal) markProposalExecuted(proposalExitKey(sym, asset));
+        setOrderSuccessMessage(TESTNET_SELL_SUCCESS_MESSAGE);
+        setAppPositionFeedbackMessage(TESTNET_SELL_SUCCESS_MESSAGE);
+        setAppPositionFeedbackError(null);
         setManualSymbol(sym);
         setManualSide("sell");
         await refreshAfterTestnetOrder();
@@ -1633,7 +1663,9 @@ export function CryptoTestnetPanel() {
           });
         if (res.order) setLastOrder(res.order);
         markProposalExecuted(proposalEntryKey(symTrim));
-        setOrderSuccessMessage("Orden ejecutada. Revisá la posición en Testnet.");
+        setOrderSuccessMessage(TESTNET_BUY_SUCCESS_MESSAGE);
+        setAppPositionFeedbackMessage(TESTNET_BUY_SUCCESS_MESSAGE);
+        setAppPositionFeedbackError(null);
           await refreshAfterTestnetOrder();
           navigateAfterTestnetOrder("buy");
           setError(null);
@@ -1654,7 +1686,9 @@ export function CryptoTestnetPanel() {
                 });
         if (res.order) setLastOrder(res.order);
         markProposalExecuted(proposalExitKey(symTrim, baseAssetFromPair(symTrim)));
-        setOrderSuccessMessage("Orden ejecutada. Revisá el historial y posiciones cerradas en Testnet.");
+        setOrderSuccessMessage(TESTNET_SELL_SUCCESS_MESSAGE);
+        setAppPositionFeedbackMessage(TESTNET_SELL_SUCCESS_MESSAGE);
+        setAppPositionFeedbackError(null);
         await refreshAfterTestnetOrder();
         navigateAfterTestnetOrder("sell");
         setError(null);
@@ -1805,6 +1839,7 @@ export function CryptoTestnetPanel() {
         symbol: prop.symbol,
         asset: prop.asset,
         amountBase: prop.amount_base,
+        fromProposal: true,
       });
       if (!result.ok) {
         setProposalOrderError(result.error);
@@ -1816,6 +1851,35 @@ export function CryptoTestnetPanel() {
       setExitConfirmAsset(null);
     },
     [connected, executeTestnetMarketSell, handleExitAssistSearch, isExitProposalExecuted],
+  );
+
+  const handleSellFromAppPosition = useCallback(
+    async (opts: { symbol: string; asset: string; amountBase: number }) => {
+      setAppPositionSellBusy(opts.symbol);
+      setAppPositionFeedbackError(null);
+      setAppPositionFeedbackMessage(null);
+      const result = await executeTestnetMarketSell({
+        symbol: opts.symbol,
+        asset: opts.asset,
+        amountBase: opts.amountBase,
+        fromProposal: false,
+      });
+      if (result.ok) {
+        setAppPositionFeedbackMessage(TESTNET_SELL_SUCCESS_MESSAGE);
+        setOrderSuccessMessage(TESTNET_SELL_SUCCESS_MESSAGE);
+      } else {
+        setAppPositionFeedbackError(result.error);
+        setOrderFormError(result.error);
+      }
+      setAppPositionSellBusy(null);
+      return { ok: result.ok };
+    },
+    [executeTestnetMarketSell],
+  );
+
+  const lookupFreeBaseForAsset = useCallback(
+    (asset: string) => lookupFreeBalance(balances, asset),
+    [balances],
   );
 
   const handleMonitorStart = useCallback(async () => {
@@ -1931,6 +1995,7 @@ export function CryptoTestnetPanel() {
         symbol: prop.symbol,
         asset: prop.asset,
         amountBase: prop.amount_base,
+        fromProposal: true,
       });
       if (!result.ok) {
         setProposalOrderError(result.error);
@@ -2089,8 +2154,9 @@ export function CryptoTestnetPanel() {
             <code style={{ fontSize: "0.8rem" }}>crypto_testnet_orders.json</code>).
           </p>
           <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.82rem" }}>
-            Las salidas asistidas siguen mirando saldos reales del sandbox. El cupo max_open_positions en propuestas y
-            monitor solo cuenta BUY/SELL registrados por esta app. No confundir con la cartera paper.
+            Las salidas asistidas miran saldos reales del sandbox. El cupo de activos abiertos en propuestas/monitor cuenta
+            cuántos símbolos distintos tienen posición registrada por la app (no monto USDT total).{" "}
+            {MAX_USDT_EXPOSURE_FUTURE_NOTE}
           </p>
           <p className="msg-muted" style={{ marginTop: 0, marginBottom: "0.65rem", fontSize: "0.85rem" }}>
             Resumen orientativo (balances sandbox). Rentabilidad de operaciones en{" "}
@@ -2279,7 +2345,7 @@ export function CryptoTestnetPanel() {
             />
           </label>
           <label className="crypto-testnet-field">
-            <span className="msg-muted">Máx. posiciones abiertas</span>
+            <CryptoTestnetMaxOpenAssetsLabel />
             <input
               type="number"
               className="radar-input"
@@ -2289,8 +2355,12 @@ export function CryptoTestnetPanel() {
               value={assistMaxOpen}
               onChange={(ev) => setAssistMaxOpen(ev.target.value)}
               disabled={assistedLoading}
+              title={MAX_OPEN_ASSETS_TOOLTIP}
             />
           </label>
+          <p className="msg-muted" style={{ margin: 0, fontSize: "0.78rem", gridColumn: "1 / -1" }}>
+            {MAX_USDT_EXPOSURE_FUTURE_NOTE}
+          </p>
           <label className="crypto-testnet-field">
             <CryptoTestnetStrategyCooldownLabel />
             <input
@@ -2914,7 +2984,7 @@ export function CryptoTestnetPanel() {
             />
           </label>
           <label className="crypto-testnet-field">
-            <span className="msg-muted">Máx. posiciones</span>
+            <CryptoTestnetMaxOpenAssetsLabel />
             <input
               type="number"
               className="radar-input"
@@ -2924,8 +2994,12 @@ export function CryptoTestnetPanel() {
               value={monMaxOpen}
               onChange={(ev) => setMonMaxOpen(ev.target.value)}
               disabled={monInputsLocked || monitorActionBusy}
+              title={MAX_OPEN_ASSETS_TOOLTIP}
             />
           </label>
+          <p className="msg-muted" style={{ margin: 0, fontSize: "0.78rem", gridColumn: "1 / -1" }}>
+            {MAX_USDT_EXPOSURE_FUTURE_NOTE}
+          </p>
           <label className="crypto-testnet-field">
             <CryptoTestnetStrategyCooldownLabel />
             <input
@@ -3784,7 +3858,7 @@ export function CryptoTestnetPanel() {
         sectionId="crypto-testnet-section-orders"
         orderClassName="crypto-testnet-group--orders"
         title="Órdenes e historial"
-        lead="Órdenes abiertas en testnet, cancelación, sync LIMIT e historial local de la app."
+        lead="Posiciones Testnet (PnL app), órdenes LIMIT pendientes e historial local."
         collapsed={collapsedGroups.orders}
         onToggle={toggleTestnetGroup}
       >
@@ -3795,6 +3869,12 @@ export function CryptoTestnetPanel() {
         tab={appPositionsTab}
         onTabChange={setAppPositionsTab}
         onRefresh={() => void loadAppPositions()}
+        connected={connected}
+        lookupFreeBase={lookupFreeBaseForAsset}
+        onSell={handleSellFromAppPosition}
+        sellBusySymbol={appPositionSellBusy}
+        feedbackMessage={appPositionFeedbackMessage}
+        feedbackError={appPositionFeedbackError}
       />
 
       {balances ? (
@@ -3805,12 +3885,9 @@ export function CryptoTestnetPanel() {
                 Órdenes abiertas Testnet
               </h3>
               <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
-                Las órdenes <strong>MARKET</strong> ejecutadas no quedan abiertas; se ven en{" "}
-                <strong>Historial</strong> y <strong>Posiciones Testnet (app)</strong>. Esta tabla muestra{" "}
-                <strong>LIMIT</strong> pendientes en Binance Spot Testnet.
-              </p>
-              <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
-                Lectura directa desde el exchange; no es historial local ni paper.
+                Esta sección muestra órdenes <strong>LIMIT</strong> pendientes. Las órdenes{" "}
+                <strong>MARKET</strong> ejecutadas aparecen en <strong>Historial</strong> y{" "}
+                <strong>Posiciones Testnet</strong>.
               </p>
             </div>
             <div className="crypto-testnet-toolbar">
