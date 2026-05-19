@@ -117,8 +117,13 @@ def format_testnet_whitelist_rejection(
     if setup:
         return f"{sym} ({setup}) no está habilitado en la whitelist Testnet."
     return f"{sym} no está habilitado en la whitelist Testnet."
-MAX_MARKET_ORDER_QUOTE_USDT: float = 25.0
+TESTNET_MAX_ORDER_NOTIONAL_USDT: float = 100.0
+MAX_MARKET_ORDER_QUOTE_USDT: float = TESTNET_MAX_ORDER_NOTIONAL_USDT
 MIN_MARKET_ORDER_QUOTE_USDT: float = 0.01
+
+
+def _max_order_notional_error() -> str:
+    return f"El importe debe ser menor o igual a {TESTNET_MAX_ORDER_NOTIONAL_USDT:g} USDT"
 
 # Cupo max_open_positions (propuestas/monitor): historial local, no saldos sandbox.
 TESTNET_POSITION_SOURCE = "testnet_local_app_positions"
@@ -1708,41 +1713,269 @@ def _update_trailing_state_entry(
     return snapshot, changed
 
 
+def _base_asset_from_symbol(symbol: str) -> str:
+    sym = (symbol or "").strip().upper()
+    if "/" in sym:
+        return sym.split("/")[0].strip()
+    if sym.endswith("USDT") and len(sym) > 4:
+        return sym[:-4]
+    return sym
+
+
+def _free_base_from_balances_payload(bal_payload: dict[str, Any], asset: str) -> float | None:
+    if not bal_payload.get("ok"):
+        return None
+    au = asset.strip().upper()
+    for row in bal_payload.get("balances") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("asset") or "").strip().upper() == au:
+            return _safe_ccxt_float(row.get("free"))
+    return None
+
+
 def _build_testnet_exit_proposal(
     *,
     asset: str,
     symbol: str,
     exit_reason: str,
-    free: float,
+    amount_base: float,
     px: float,
-    value_free: float,
+    value_usdt: float,
     avg_entry: float | None,
     pnl_pct: float | None,
     trailing_snapshot: dict[str, Any] | None,
+    stop_loss_price: float | None = None,
+    take_profit_price: float | None = None,
+    break_even_price: float | None = None,
 ) -> dict[str, Any]:
-    sell_quote = free * px
+    sell_quote = amount_base * px
     obj: dict[str, Any] = {
         "asset": asset,
         "symbol": symbol,
         "side": "sell",
         "reason": exit_reason,
         "exit_reason": exit_reason,
-        "amount_base": free,
+        "amount_base": round(amount_base, 12),
         "sell_quote_amount_usdt": round(sell_quote, 8),
         "current_price_usdt": round(px, 8),
         "current_price": round(px, 8),
-        "value_usdt": round(value_free, 8),
-        "source": "assisted_testnet",
+        "value_usdt": round(value_usdt, 8),
+        "source": "assisted_testnet_app_position",
     }
     if avg_entry is not None and math.isfinite(avg_entry):
         obj["avg_entry_usdt"] = round(avg_entry, 8)
+        obj["avg_entry_price"] = round(avg_entry, 8)
     if pnl_pct is not None and math.isfinite(pnl_pct):
         obj["pnl_pct"] = round(pnl_pct, 6)
+        obj["current_pnl_pct"] = round(pnl_pct, 6)
+    if stop_loss_price is not None and math.isfinite(stop_loss_price):
+        obj["stop_loss_price"] = round(stop_loss_price, 8)
+    if take_profit_price is not None and math.isfinite(take_profit_price):
+        obj["take_profit_price"] = round(take_profit_price, 8)
+    if break_even_price is not None and math.isfinite(break_even_price):
+        obj["break_even_price"] = round(break_even_price, 8)
     if trailing_snapshot:
         obj["highest_price"] = trailing_snapshot.get("highest_price")
         obj["trailing_stop_pct"] = trailing_snapshot.get("trailing_stop_pct")
         obj["trailing_stop_price"] = trailing_snapshot.get("trailing_stop_price")
     return obj
+
+
+def _evaluate_app_open_position_exit(
+    pos: dict[str, Any],
+    *,
+    free_base: float,
+    stop_loss_pct: float,
+    take_profit_pct: float,
+    effective_trail: float,
+    trailing_active: bool,
+    min_value_usdt: float,
+    break_even_trigger_pct: float,
+    break_even_plus_pct: float,
+    position_state: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], bool]:
+    """
+    Evalúa salida para una posición abierta reconstruida por la app (FIFO local).
+    Devuelve fila de diagnóstico y si hubo cambio en position_state.
+    """
+    sym = str(pos.get("symbol") or "").strip().upper()
+    asset = _base_asset_from_symbol(sym)
+    amt = _safe_ccxt_float(pos.get("amount_base")) or 0.0
+    avg_entry = _safe_ccxt_float(pos.get("avg_entry_price"))
+    px = _safe_ccxt_float(pos.get("current_price"))
+
+    eval_row: dict[str, Any] = {
+        "asset": asset,
+        "symbol": sym,
+        "status": "evaluated",
+        "position_status": "holding",
+        "reason": "holding",
+        "proposal": None,
+        "amount_base": round(amt, 12) if amt > 0 else 0.0,
+        "avg_entry_price": None,
+        "avg_entry_usdt": None,
+        "current_price": px,
+        "current_price_usdt": px,
+        "market_value_usdt": _safe_ccxt_float(pos.get("market_value_usdt")),
+        "unrealized_pnl_usdt": _safe_ccxt_float(pos.get("unrealized_pnl_usdt")),
+        "unrealized_pnl_pct": _safe_ccxt_float(pos.get("unrealized_pnl_pct")),
+        "current_pnl_pct": _safe_ccxt_float(pos.get("unrealized_pnl_pct")),
+        "pnl_pct": _safe_ccxt_float(pos.get("unrealized_pnl_pct")),
+        "free_base": free_base,
+        "stop_loss_price": None,
+        "take_profit_price": None,
+        "break_even_price": None,
+        "trailing_stop_price": None,
+        "highest_price": None,
+        "trailing_stop_pct": None,
+        "distance_to_stop_loss_pct": None,
+        "distance_to_take_profit_pct": None,
+        "message": "Posición en seguimiento; sin salida sugerida.",
+    }
+
+    state_dirty = False
+
+    if not sym or not asset:
+        eval_row["status"] = "skipped"
+        eval_row["position_status"] = "skipped"
+        eval_row["reason"] = "no_symbol"
+        eval_row["message"] = "Símbolo inválido."
+        return eval_row, state_dirty
+
+    if amt <= 1e-12:
+        eval_row["status"] = "skipped"
+        eval_row["position_status"] = "skipped"
+        eval_row["reason"] = "no_app_position"
+        eval_row["message"] = "Sin cantidad en posición app."
+        return eval_row, state_dirty
+
+    if avg_entry is None or avg_entry <= 0 or not math.isfinite(avg_entry):
+        eval_row["status"] = "skipped"
+        eval_row["position_status"] = "skipped"
+        eval_row["reason"] = "missing_avg_entry"
+        eval_row["message"] = "Sin precio de entrada promedio en historial local."
+        return eval_row, state_dirty
+
+    eval_row["avg_entry_price"] = round(avg_entry, 8)
+    eval_row["avg_entry_usdt"] = round(avg_entry, 8)
+    eval_row["break_even_price"] = round(avg_entry, 8)
+
+    if px is None or px <= 0 or not math.isfinite(px):
+        eval_row["status"] = "skipped"
+        eval_row["position_status"] = "skipped"
+        eval_row["reason"] = "no_price"
+        eval_row["message"] = "Precio actual no disponible."
+        return eval_row, state_dirty
+
+    sellable = min(amt, max(free_base, 0.0))
+    value_sellable = sellable * px
+    eval_row["value_usdt"] = round(value_sellable, 8)
+
+    if free_base <= 1e-12:
+        eval_row["status"] = "skipped"
+        eval_row["position_status"] = "skipped"
+        eval_row["reason"] = "no_free_base"
+        eval_row["message"] = "Sin saldo libre testnet para vender."
+        return eval_row, state_dirty
+
+    if sellable <= 1e-12:
+        eval_row["status"] = "skipped"
+        eval_row["position_status"] = "skipped"
+        eval_row["reason"] = "no_sellable_amount"
+        eval_row["message"] = "Cantidad vendible nula (posición app vs saldo libre)."
+        return eval_row, state_dirty
+
+    if value_sellable + 1e-9 < min_value_usdt:
+        eval_row["status"] = "skipped"
+        eval_row["position_status"] = "skipped"
+        eval_row["reason"] = "below_min_value"
+        eval_row["message"] = f"Valor vendible por debajo del mínimo ({min_value_usdt} USDT)."
+        return eval_row, state_dirty
+
+    pnl_pct = (px - avg_entry) / avg_entry * 100.0
+    eval_row["pnl_pct"] = round(pnl_pct, 6)
+    eval_row["current_pnl_pct"] = round(pnl_pct, 6)
+
+    sl_price = avg_entry * (1.0 - stop_loss_pct / 100.0) if stop_loss_pct > 0 else None
+    tp_price = avg_entry * (1.0 + take_profit_pct / 100.0) if take_profit_pct > 0 else None
+    if sl_price is not None:
+        eval_row["stop_loss_price"] = round(sl_price, 8)
+        eval_row["distance_to_stop_loss_pct"] = round((px - sl_price) / avg_entry * 100.0, 4)
+    if tp_price is not None:
+        eval_row["take_profit_price"] = round(tp_price, 8)
+        eval_row["distance_to_take_profit_pct"] = round((tp_price - px) / avg_entry * 100.0, 4)
+
+    trailing_snapshot: dict[str, Any] | None = None
+    if trailing_active and effective_trail > 0:
+        trailing_snapshot, st_changed = _update_trailing_state_entry(
+            position_state, sym, px, effective_trail
+        )
+        if st_changed:
+            state_dirty = True
+        eval_row["highest_price"] = trailing_snapshot.get("highest_price")
+        eval_row["trailing_stop_pct"] = trailing_snapshot.get("trailing_stop_pct")
+        eval_row["trailing_stop_price"] = trailing_snapshot.get("trailing_stop_price")
+
+    key = _position_state_symbol_key(sym)
+    st_entry = position_state.get(key) if isinstance(position_state.get(key), dict) else {}
+    was_profitable = bool(st_entry.get("was_profitable"))
+    if break_even_trigger_pct > 0:
+        if px >= avg_entry * (1.0 + break_even_trigger_pct / 100.0):
+            was_profitable = True
+    elif px > avg_entry * (1.0 + 1e-9):
+        was_profitable = True
+    if was_profitable != bool(st_entry.get("was_profitable")):
+        st_entry = {**st_entry, "was_profitable": was_profitable}
+        position_state[key] = st_entry
+        state_dirty = True
+
+    exit_reason: str | None = None
+    eps = max(1e-12, avg_entry * 1e-9)
+
+    if stop_loss_pct > 0 and sl_price is not None and px <= sl_price + eps:
+        exit_reason = "stop_loss"
+    elif take_profit_pct > 0 and tp_price is not None and px >= tp_price - eps:
+        exit_reason = "take_profit"
+    elif (
+        trailing_active
+        and trailing_snapshot is not None
+        and trailing_snapshot.get("triggered")
+    ):
+        exit_reason = "trailing_stop"
+    elif was_profitable and break_even_trigger_pct > 0:
+        be_floor = avg_entry * (1.0 + break_even_plus_pct / 100.0)
+        if px <= be_floor + eps:
+            exit_reason = "break_even_protection"
+
+    if exit_reason is None:
+        eval_row["status"] = "holding"
+        eval_row["position_status"] = "holding"
+        eval_row["reason"] = "holding"
+        eval_row["message"] = "Posición en seguimiento; sin salida sugerida."
+        return eval_row, state_dirty
+
+    proposal_obj = _build_testnet_exit_proposal(
+        asset=asset,
+        symbol=sym,
+        exit_reason=exit_reason,
+        amount_base=sellable,
+        px=px,
+        value_usdt=value_sellable,
+        avg_entry=avg_entry,
+        pnl_pct=pnl_pct,
+        trailing_snapshot=trailing_snapshot if exit_reason == "trailing_stop" else None,
+        stop_loss_price=sl_price,
+        take_profit_price=tp_price,
+        break_even_price=avg_entry,
+    )
+    eval_row["status"] = "proposed"
+    eval_row["position_status"] = "proposed"
+    eval_row["reason"] = exit_reason
+    eval_row["exit_reason"] = exit_reason
+    eval_row["proposal"] = proposal_obj
+    eval_row["message"] = f"Salida sugerida: {exit_reason}."
+    return eval_row, state_dirty
 
 
 def propose_testnet_exits(
@@ -1751,10 +1984,12 @@ def propose_testnet_exits(
     take_profit_pct: float = 4.0,
     trailing_stop_pct: float | None = None,
     min_value_usdt: float = 5.0,
+    break_even_trigger_pct: float = 0.0,
+    break_even_plus_pct: float = 0.0,
 ) -> dict[str, Any]:
     """
-    Propone ventas testnet según SL/TP (PnL % desde historial local) y trailing stop
-    (máximo en data/crypto_testnet_position_state.json). Sin ejecutar órdenes.
+    Propone ventas testnet desde posiciones abiertas registradas por la app (FIFO local).
+    Evalúa SL/TP por precio, trailing y break-even opcional. Sin ejecutar órdenes.
     """
     if not math.isfinite(stop_loss_pct) or stop_loss_pct < 0:
         raise ValueError("stop_loss_pct inválido")
@@ -1766,176 +2001,72 @@ def propose_testnet_exits(
         raise ValueError("trailing_stop_pct inválido")
     if not math.isfinite(min_value_usdt) or min_value_usdt < 0:
         raise ValueError("min_value_usdt inválido")
+    if not math.isfinite(break_even_trigger_pct) or break_even_trigger_pct < 0:
+        raise ValueError("break_even_trigger_pct inválido")
+    if not math.isfinite(break_even_plus_pct) or break_even_plus_pct < 0:
+        raise ValueError("break_even_plus_pct inválido")
 
     effective_trail = _effective_trailing_stop_pct(trailing_stop_pct)
     trailing_active = effective_trail > 0
     trailing_note = "active" if trailing_active else "disabled"
 
-    pos_payload = get_testnet_positions()
-    if not pos_payload.get("ok"):
+    app_payload = get_testnet_app_positions()
+    if not app_payload.get("ok"):
         return {
             "ok": False,
-            "error": str(pos_payload.get("error") or "positions_unavailable"),
+            "error": str(app_payload.get("error") or "app_positions_unavailable"),
             "proposals": [],
             "evaluated": [],
             "trailing_stop_status": trailing_note,
             "trailing_stop_pct_effective": effective_trail if trailing_active else None,
+            "position_source": TESTNET_POSITION_SOURCE,
         }
 
-    all_local = _load_testnet_orders_json()
+    bal_payload = get_testnet_balances()
     position_state = _load_testnet_position_state()
     position_state_dirty = False
     active_symbols: set[str] = set()
     proposals: list[dict[str, Any]] = []
     evaluated: list[dict[str, Any]] = []
 
-    for p in pos_payload.get("positions") or []:
-        if not isinstance(p, dict):
-            continue
-        asset = str(p.get("asset") or "").strip().upper()
-        sym = p.get("symbol")
-        sym_s = str(sym).strip() if sym else ""
-        if not asset or not sym_s:
-            evaluated.append(
-                {
-                    "asset": asset or None,
-                    "symbol": sym_s or None,
-                    "status": "skipped",
-                    "reason": "no_symbol",
-                    "proposal": None,
-                }
-            )
-            continue
+    open_positions = [
+        p for p in (app_payload.get("open_positions") or []) if isinstance(p, dict)
+    ]
 
-        total = _safe_ccxt_float(p.get("total"))
-        free = _safe_ccxt_float(p.get("free"))
-        if total is None:
-            total = 0.0
-        if free is None:
-            free = 0.0
+    for pos in open_positions:
+        sym = str(pos.get("symbol") or "").strip().upper()
+        if sym:
+            active_symbols.add(_position_state_symbol_key(sym))
+        asset = _base_asset_from_symbol(sym)
+        free_base = _free_base_from_balances_payload(bal_payload, asset)
+        if free_base is None:
+            free_base = 0.0
 
-        px = _safe_ccxt_float(p.get("last_price_usdt"))
-
-        rows = _local_orders_for_symbol(all_local, sym_s)
-        base_inv, cost_inv, pricing_ok = _fifo_base_cost_after_orders(rows)
-
-        tol = max(1e-9, 1e-6 * max(abs(total), abs(base_inv), 1.0))
-        local_covers = abs(total - base_inv) <= tol
-
-        eval_row: dict[str, Any] = {
-            "asset": asset,
-            "symbol": sym_s,
-            "status": "evaluated",
-            "reason": "",
-            "proposal": None,
-            "avg_entry_usdt": None,
-            "current_price_usdt": px,
-            "pnl_pct": None,
-            "value_usdt": None,
-            "local_inventory_base": round(base_inv, 12),
-            "position_total_base": total,
-            "free_base": free,
-        }
-
-        if free <= 1e-12:
-            eval_row["status"] = "skipped"
-            eval_row["reason"] = "no_free_base"
-            evaluated.append(eval_row)
-            continue
-
-        active_symbols.add(_position_state_symbol_key(sym_s))
-
-        if px is None or px <= 0:
-            eval_row["status"] = "skipped"
-            eval_row["reason"] = "no_price"
-            evaluated.append(eval_row)
-            continue
-
-        value_free = free * px
-        if math.isnan(value_free) or math.isinf(value_free):
-            eval_row["status"] = "skipped"
-            eval_row["reason"] = "no_price"
-            evaluated.append(eval_row)
-            continue
-
-        eval_row["value_usdt"] = round(value_free, 8)
-
-        if value_free + 1e-9 < min_value_usdt:
-            eval_row["status"] = "skipped"
-            eval_row["reason"] = "below_min_value"
-            evaluated.append(eval_row)
-            continue
-
-        avg_entry: float | None = None
-        pnl_pct: float | None = None
-        local_entry_ok = pricing_ok and local_covers and base_inv > 1e-18
-        if local_entry_ok:
-            avg_entry = cost_inv / base_inv
-            if avg_entry <= 0 or not math.isfinite(avg_entry):
-                local_entry_ok = False
-                avg_entry = None
-            else:
-                pnl_pct = (px - avg_entry) / avg_entry * 100.0
-                eval_row["avg_entry_usdt"] = round(avg_entry, 8)
-                eval_row["pnl_pct"] = round(pnl_pct, 6)
-
-        exit_reason: str | None = None
-        trailing_snapshot: dict[str, Any] | None = None
-
-        if local_entry_ok and pnl_pct is not None:
-            if stop_loss_pct > 0 and pnl_pct <= -stop_loss_pct:
-                exit_reason = "stop_loss"
-            elif take_profit_pct > 0 and pnl_pct >= take_profit_pct:
-                exit_reason = "take_profit"
-
-        if exit_reason is None and trailing_active:
-            trailing_snapshot, st_changed = _update_trailing_state_entry(
-                position_state, sym_s, px, effective_trail
-            )
-            if st_changed:
-                position_state_dirty = True
-            eval_row["highest_price"] = trailing_snapshot.get("highest_price")
-            eval_row["trailing_stop_pct"] = trailing_snapshot.get("trailing_stop_pct")
-            eval_row["trailing_stop_price"] = trailing_snapshot.get("trailing_stop_price")
-            if trailing_snapshot.get("triggered"):
-                exit_reason = "trailing_stop"
-                _log_trailing_exit(
-                    f"propuesta {sym_s} px={px} high={trailing_snapshot.get('highest_price')} "
-                    f"trail={trailing_snapshot.get('trailing_stop_price')} pct={effective_trail}"
-                )
-            else:
-                _log_trailing_exit(
-                    f"hold {sym_s} px={px} high={trailing_snapshot.get('highest_price')} "
-                    f"trail={trailing_snapshot.get('trailing_stop_price')}"
-                )
-
-        if exit_reason is None:
-            if not local_entry_ok:
-                eval_row["status"] = "rejected"
-                eval_row["reason"] = "missing_local_entry"
-            else:
-                eval_row["status"] = "hold"
-                eval_row["reason"] = "inside_sl_tp_band"
-            evaluated.append(eval_row)
-            continue
-
-        proposal_obj = _build_testnet_exit_proposal(
-            asset=asset,
-            symbol=sym_s,
-            exit_reason=exit_reason,
-            free=free,
-            px=px,
-            value_free=value_free,
-            avg_entry=avg_entry,
-            pnl_pct=pnl_pct,
-            trailing_snapshot=trailing_snapshot if exit_reason == "trailing_stop" else None,
+        eval_row, row_dirty = _evaluate_app_open_position_exit(
+            pos,
+            free_base=free_base,
+            stop_loss_pct=float(stop_loss_pct),
+            take_profit_pct=float(take_profit_pct),
+            effective_trail=effective_trail,
+            trailing_active=trailing_active,
+            min_value_usdt=float(min_value_usdt),
+            break_even_trigger_pct=float(break_even_trigger_pct),
+            break_even_plus_pct=float(break_even_plus_pct),
+            position_state=position_state,
         )
-        proposals.append(proposal_obj)
-        eval_row["status"] = "proposed"
-        eval_row["reason"] = exit_reason
-        eval_row["exit_reason"] = exit_reason
-        eval_row["proposal"] = proposal_obj
+        if row_dirty:
+            position_state_dirty = True
+
         evaluated.append(eval_row)
+        prop = eval_row.get("proposal")
+        if isinstance(prop, dict) and eval_row.get("status") == "proposed":
+            proposals.append(prop)
+            exit_reason = eval_row.get("exit_reason")
+            if exit_reason:
+                _log(
+                    f"propose_exit app {sym} reason={exit_reason} "
+                    f"px={eval_row.get('current_price')} pnl%={eval_row.get('pnl_pct')}"
+                )
 
     pruned = {
         k: v for k, v in position_state.items() if k in active_symbols and isinstance(v, dict)
@@ -1947,7 +2078,10 @@ def propose_testnet_exits(
     if position_state_dirty:
         _atomic_write_testnet_position_state(position_state)
 
-    _log(f"propose_testnet_exits: proposals={len(proposals)} evaluated={len(evaluated)}")
+    _log(
+        f"propose_testnet_exits: open={len(open_positions)} proposals={len(proposals)} "
+        f"evaluated={len(evaluated)}"
+    )
     return {
         "ok": True,
         "proposals": proposals,
@@ -1958,6 +2092,10 @@ def propose_testnet_exits(
         "stop_loss_pct": float(stop_loss_pct),
         "take_profit_pct": float(take_profit_pct),
         "min_value_usdt": float(min_value_usdt),
+        "break_even_trigger_pct": float(break_even_trigger_pct),
+        "break_even_plus_pct": float(break_even_plus_pct),
+        "position_source": TESTNET_POSITION_SOURCE,
+        "open_positions_count": len(open_positions),
     }
 
 
@@ -2254,7 +2392,7 @@ def place_testnet_market_order(
     *,
     amount_base: float | None = None,
     sell_quote_amount_usdt: float | None = None,
-    max_quote_usdt: float = MAX_MARKET_ORDER_QUOTE_USDT,
+    max_quote_usdt: float = TESTNET_MAX_ORDER_NOTIONAL_USDT,
 ) -> dict[str, Any]:
     """
     Orden market sólo testnet (sandbox).
@@ -2325,7 +2463,7 @@ def place_testnet_market_order(
             return out_err(f"Monto mínimo {MIN_MARKET_ORDER_QUOTE_USDT} USDT", 400)
 
         if q_amt > max_quote_usdt:
-            return out_err(f"Monto máximo por orden {max_quote_usdt} USDT", 400)
+            return out_err(_max_order_notional_error(), 400)
 
         _log_order_request(
             f"market side=buy symbol={sym} order_type=MARKET amount_mode=quote "
@@ -2346,8 +2484,10 @@ def place_testnet_market_order(
             except Exception:
                 cost = q_amt
 
-        if cost <= 0 or cost > max_quote_usdt + 1e-9:
+        if cost <= 0:
             return out_err("Monto tras precisión inválido", 400)
+        if cost > max_quote_usdt + 1e-9:
+            return out_err(_max_order_notional_error(), 400)
 
         _log(f"market_buy: symbol={sym} quote_usdt={cost}")
         try:
@@ -2400,7 +2540,7 @@ def place_testnet_market_order(
                 )
 
             if sq > max_quote_usdt:
-                return out_err(f"Monto máximo por orden {max_quote_usdt} USDT (lado venta)", 400)
+                return out_err(_max_order_notional_error(), 400)
 
             try:
                 tk = ex.fetch_ticker(sym)
@@ -2503,7 +2643,7 @@ def place_testnet_limit_order(
     quantity: float,
     limit_price: float,
     *,
-    max_quote_usdt: float = MAX_MARKET_ORDER_QUOTE_USDT,
+    max_quote_usdt: float = TESTNET_MAX_ORDER_NOTIONAL_USDT,
 ) -> dict[str, Any]:
     """
     Orden limit spot en Binance Testnet (sandbox); queda en libro hasta match.
@@ -2552,10 +2692,7 @@ def place_testnet_limit_order(
 
     notional = qty_in * price_in
     if notional > max_quote_usdt + 1e-9:
-        return out_err(
-            f"Notional máximo por orden {max_quote_usdt} USDT (qty×precio={notional:.4f})",
-            400,
-        )
+        return out_err(_max_order_notional_error(), 400)
 
     bal = get_testnet_balances()
     if not bal.get("ok"):
@@ -2598,7 +2735,7 @@ def place_testnet_limit_order(
 
     notional_adj = amt * price
     if notional_adj > max_quote_usdt + 1e-9:
-        return out_err(f"Notional tras precisión supera {max_quote_usdt} USDT", 400)
+        return out_err(_max_order_notional_error(), 400)
 
     if side_l == "buy":
         usdt_free = _free_usdt_from_balances_payload(bal)

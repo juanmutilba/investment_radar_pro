@@ -1,5 +1,13 @@
 import { Fragment, useCallback, useState } from "react";
-import type { CryptoTestnetAppOpenPosition, CryptoTestnetAppPositionsPayload } from "@/services/api";
+import type {
+  CryptoTestnetAppOpenPosition,
+  CryptoTestnetAppPositionsPayload,
+  CryptoTestnetExitEvaluatedRow,
+} from "@/services/api";
+import {
+  positionExitBadgeLabel,
+  positionExitBadges,
+} from "@/components/crypto/TestnetExitEvaluationsTable";
 
 function fmtNum(v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
@@ -37,6 +45,11 @@ type Props = {
   sellBusySymbol: string | null;
   feedbackMessage: string | null;
   feedbackError: string | null;
+  onOpenManualSell?: (symbol: string, amountBase?: number) => void;
+  exitEvalBySymbol?: Map<string, CryptoTestnetExitEvaluatedRow>;
+  /** Solo posiciones abiertas (p. ej. embed en Monitor). */
+  openOnly?: boolean;
+  sectionTitle?: string;
 };
 
 export function TestnetAppPositionsCard({
@@ -52,7 +65,12 @@ export function TestnetAppPositionsCard({
   sellBusySymbol,
   feedbackMessage,
   feedbackError,
+  onOpenManualSell,
+  exitEvalBySymbol,
+  openOnly = false,
+  sectionTitle,
 }: Props) {
+  const effectiveTab = openOnly ? "open" : tab;
   const [partialSymbol, setPartialSymbol] = useState<string | null>(null);
 
   const runSell = useCallback(
@@ -107,16 +125,17 @@ export function TestnetAppPositionsCard({
   return (
     <section
       id="crypto-testnet-app-positions"
-      className="card crypto-testnet-section crypto-testnet-app-positions-card"
+      className={`card crypto-testnet-section crypto-testnet-app-positions-card${openOnly ? " crypto-testnet-app-positions-card--open-only" : ""}`}
     >
       <div className="crypto-testnet-section-head">
         <div>
           <h3 className="dashboard-section-title crypto-testnet-section-title" style={{ margin: 0 }}>
-            Posiciones Testnet
+            {sectionTitle ?? "Posiciones registradas por la app"}
           </h3>
           <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
-            Rentabilidad desde órdenes registradas por esta app (<code>crypto_testnet_orders.json</code>). No usa
-            saldos regalados del sandbox de Binance.
+            {openOnly
+              ? "Cerrá posiciones abiertas con confirmación manual (vender total o parcial)."
+              : "Rentabilidad desde órdenes registradas por esta app (crypto_testnet_orders.json). No usa saldos regalados del sandbox de Binance."}
           </p>
         </div>
         <div className="crypto-testnet-toolbar">
@@ -157,28 +176,32 @@ export function TestnetAppPositionsCard({
               <span className="crypto-testnet-kpi-label">Abiertas</span>
               <span className="crypto-testnet-kpi-value">{payload.open_positions.length}</span>
             </div>
-            <div className="crypto-testnet-kpi">
-              <span className="crypto-testnet-kpi-label">Cerradas</span>
-              <span className="crypto-testnet-kpi-value">{payload.closed_positions.length}</span>
+            {!openOnly ? (
+              <div className="crypto-testnet-kpi">
+                <span className="crypto-testnet-kpi-label">Cerradas</span>
+                <span className="crypto-testnet-kpi-value">{payload.closed_positions.length}</span>
+              </div>
+            ) : null}
+          </div>
+          {!openOnly ? (
+            <div className="crypto-testnet-toolbar crypto-testnet-block-start" style={{ gap: "0.35rem" }}>
+              <button
+                type="button"
+                className={`radar-refresh-btn${tab === "open" ? " radar-refresh-btn--active" : ""}`}
+                onClick={() => onTabChange("open")}
+              >
+                Abiertas ({payload.open_positions.length})
+              </button>
+              <button
+                type="button"
+                className={`radar-refresh-btn${tab === "closed" ? " radar-refresh-btn--active" : ""}`}
+                onClick={() => onTabChange("closed")}
+              >
+                Cerradas ({payload.closed_positions.length})
+              </button>
             </div>
-          </div>
-          <div className="crypto-testnet-toolbar crypto-testnet-block-start" style={{ gap: "0.35rem" }}>
-            <button
-              type="button"
-              className={`radar-refresh-btn${tab === "open" ? " radar-refresh-btn--active" : ""}`}
-              onClick={() => onTabChange("open")}
-            >
-              Abiertas ({payload.open_positions.length})
-            </button>
-            <button
-              type="button"
-              className={`radar-refresh-btn${tab === "closed" ? " radar-refresh-btn--active" : ""}`}
-              onClick={() => onTabChange("closed")}
-            >
-              Cerradas ({payload.closed_positions.length})
-            </button>
-          </div>
-          {tab === "open" ? (
+          ) : null}
+          {effectiveTab === "open" ? (
             payload.open_positions.length === 0 ? (
               <p className="msg-muted crypto-testnet-block-start" style={{ fontSize: "0.85rem" }}>
                 Sin posiciones abiertas registradas por la app.
@@ -210,7 +233,33 @@ export function TestnetAppPositionsCard({
                       return (
                         <Fragment key={p.symbol}>
                           <tr>
-                            <td>{p.symbol}</td>
+                            <td>
+                              <div>{p.symbol}</div>
+                              {exitEvalBySymbol ? (
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    flexWrap: "wrap",
+                                    gap: "0.25rem",
+                                    marginTop: "0.3rem",
+                                  }}
+                                >
+                                  {positionExitBadges(exitEvalBySymbol.get(p.symbol.trim().toUpperCase())).map(
+                                    (badge) => (
+                                      <span
+                                        key={badge}
+                                        className={`crypto-side-badge${
+                                          badge === "profit" ? " crypto-side-badge--buy" : ""
+                                        }${badge === "near_sl" ? " crypto-side-badge--sell" : ""}`}
+                                        style={{ fontSize: "0.68rem", padding: "0.1rem 0.35rem" }}
+                                      >
+                                        {positionExitBadgeLabel(badge)}
+                                      </span>
+                                    ),
+                                  )}
+                                </div>
+                              ) : null}
+                            </td>
                             <td className="crypto-testnet-num">{numFmt4.format(p.amount_base)}</td>
                             <td className="crypto-testnet-num">{fmtNum(p.avg_entry_price)}</td>
                             <td className="crypto-testnet-num">{fmtNum(p.current_price ?? null)}</td>
@@ -252,6 +301,16 @@ export function TestnetAppPositionsCard({
                                 >
                                   {partialOpen ? "Ocultar parcial" : "Vender parcial"}
                                 </button>
+                                {onOpenManualSell ? (
+                                  <button
+                                    type="button"
+                                    className="radar-refresh-btn crypto-testnet-btn-compact"
+                                    disabled={!connected || busy}
+                                    onClick={() => onOpenManualSell(p.symbol, maxSell > 0 ? maxSell : undefined)}
+                                  >
+                                    Vender manual
+                                  </button>
+                                ) : null}
                               </div>
                             </td>
                           </tr>
@@ -288,7 +347,7 @@ export function TestnetAppPositionsCard({
                 </table>
               </div>
             )
-          ) : payload.closed_positions.length === 0 ? (
+          ) : effectiveTab === "closed" && payload.closed_positions.length === 0 ? (
             <p className="msg-muted crypto-testnet-block-start" style={{ fontSize: "0.85rem" }}>
               Sin posiciones cerradas en el historial local.
             </p>

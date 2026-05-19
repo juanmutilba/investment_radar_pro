@@ -578,9 +578,11 @@ def crypto_testnet_strategy_propose_exits(
     take_profit_pct: float = Query(4, ge=0),
     trailing_stop_pct: float | None = Query(default=None),
     min_value_usdt: float = Query(5, ge=0),
+    break_even_trigger_pct: float = Query(0, ge=0),
+    break_even_plus_pct: float = Query(0, ge=0),
 ):
     """
-    SL/TP (historial local) y trailing stop (estado en crypto_testnet_position_state.json);
+    SL/TP sobre posiciones app (FIFO local), trailing y break-even opcional;
     sólo propone SELL (sin ejecutar).
     """
     from services.crypto import binance_testnet as tn
@@ -591,6 +593,8 @@ def crypto_testnet_strategy_propose_exits(
             take_profit_pct=take_profit_pct,
             trailing_stop_pct=trailing_stop_pct,
             min_value_usdt=min_value_usdt,
+            break_even_trigger_pct=break_even_trigger_pct,
+            break_even_plus_pct=break_even_plus_pct,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -692,24 +696,31 @@ def crypto_testnet_ticker(
 
 
 class CryptoTestnetMarketOrderBody(BaseModel):
-    """Spot market testnet: BUY por USDT (máx. 25) o SELL por cantidad base o ~USDT a liquidar. Sandbox únicamente."""
+    """Spot market testnet: BUY por USDT o SELL por cantidad base o ~USDT a liquidar. Sandbox únicamente."""
 
     symbol: str = Field(..., min_length=3, max_length=24)
     side: Literal["buy", "sell"]
-    quote_amount_usdt: float | None = Field(default=None, description="BUY: monto USDT (máx. 25)")
+    quote_amount_usdt: float | None = Field(default=None, description="BUY: monto USDT")
     amount_base: float | None = Field(default=None, description="SELL avanzado: cantidad del activo base")
     sell_quote_amount_usdt: float | None = Field(default=None, description="SELL recomendado: ~USDT a recibir al vender")
 
     @model_validator(mode="after")
     def check_side_fields(self) -> "CryptoTestnetMarketOrderBody":
+        from services.crypto.binance_testnet import (
+            MIN_MARKET_ORDER_QUOTE_USDT,
+            TESTNET_MAX_ORDER_NOTIONAL_USDT,
+        )
+
+        max_usdt = TESTNET_MAX_ORDER_NOTIONAL_USDT
+        max_err = f"El importe debe ser menor o igual a {max_usdt:g} USDT"
         if self.side == "buy":
             if self.quote_amount_usdt is None:
                 raise ValueError("BUY requiere quote_amount_usdt")
             q = float(self.quote_amount_usdt)
-            if q < 0.01:
-                raise ValueError("quote_amount_usdt debe ser ≥ 0.01")
-            if q > 25:
-                raise ValueError("quote_amount_usdt máximo 25 USDT por orden")
+            if q < MIN_MARKET_ORDER_QUOTE_USDT:
+                raise ValueError(f"quote_amount_usdt debe ser ≥ {MIN_MARKET_ORDER_QUOTE_USDT}")
+            if q > max_usdt:
+                raise ValueError(max_err)
             if self.amount_base is not None or self.sell_quote_amount_usdt is not None:
                 raise ValueError("BUY no admite amount_base ni sell_quote_amount_usdt")
         else:
@@ -726,10 +737,10 @@ class CryptoTestnetMarketOrderBody(BaseModel):
                     raise ValueError("amount_base debe ser > 0")
             else:
                 sq = float(self.sell_quote_amount_usdt)
-                if sq < 0.01:
-                    raise ValueError("sell_quote_amount_usdt debe ser ≥ 0.01")
-                if sq > 25:
-                    raise ValueError("sell_quote_amount_usdt máximo 25 USDT por orden")
+                if sq < MIN_MARKET_ORDER_QUOTE_USDT:
+                    raise ValueError(f"sell_quote_amount_usdt debe ser ≥ {MIN_MARKET_ORDER_QUOTE_USDT}")
+                if sq > max_usdt:
+                    raise ValueError(max_err)
         return self
 
 

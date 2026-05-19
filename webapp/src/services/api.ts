@@ -586,19 +586,30 @@ export async function postCryptoTestnetProposeEntry(
 }
 
 /** POST /crypto/testnet/strategy/propose-exits — propuestas de venta por SL/TP (sin ejecutar). */
+export type CryptoTestnetExitReason =
+  | "stop_loss"
+  | "take_profit"
+  | "trailing_stop"
+  | "break_even_protection";
+
 export type CryptoTestnetExitProposal = {
   asset: string;
   symbol: string;
   side: "sell";
-  reason: "stop_loss" | "take_profit" | "trailing_stop";
-  exit_reason?: "stop_loss" | "take_profit" | "trailing_stop";
+  reason: CryptoTestnetExitReason | string;
+  exit_reason?: CryptoTestnetExitReason | string;
   amount_base: number;
   sell_quote_amount_usdt: number;
   avg_entry_usdt?: number;
+  avg_entry_price?: number;
   current_price_usdt: number;
   current_price?: number;
   pnl_pct?: number;
+  current_pnl_pct?: number;
   value_usdt: number;
+  stop_loss_price?: number;
+  take_profit_price?: number;
+  break_even_price?: number;
   highest_price?: number;
   trailing_stop_pct?: number;
   trailing_stop_price?: number;
@@ -609,19 +620,33 @@ export type CryptoTestnetExitEvaluatedRow = {
   asset?: string | null;
   symbol?: string | null;
   status?: string;
+  position_status?: string;
   reason?: string;
+  message?: string | null;
   proposal?: CryptoTestnetExitProposal | null;
+  amount_base?: number | null;
+  avg_entry_price?: number | null;
   avg_entry_usdt?: number | null;
+  current_price?: number | null;
   current_price_usdt?: number | null;
+  market_value_usdt?: number | null;
+  unrealized_pnl_usdt?: number | null;
+  unrealized_pnl_pct?: number | null;
+  current_pnl_pct?: number | null;
   pnl_pct?: number | null;
   value_usdt?: number | null;
-  local_inventory_base?: number | null;
-  position_total_base?: number | null;
   free_base?: number | null;
+  stop_loss_price?: number | null;
+  take_profit_price?: number | null;
+  break_even_price?: number | null;
   highest_price?: number | null;
   trailing_stop_pct?: number | null;
   trailing_stop_price?: number | null;
+  distance_to_stop_loss_pct?: number | null;
+  distance_to_take_profit_pct?: number | null;
   exit_reason?: string | null;
+  local_inventory_base?: number | null;
+  position_total_base?: number | null;
 };
 
 export type CryptoTestnetProposeExitsPayload = {
@@ -635,6 +660,10 @@ export type CryptoTestnetProposeExitsPayload = {
   stop_loss_pct?: number;
   take_profit_pct?: number;
   min_value_usdt?: number;
+  break_even_trigger_pct?: number;
+  break_even_plus_pct?: number;
+  position_source?: string;
+  open_positions_count?: number;
 };
 
 export type CryptoTestnetProposeExitsParams = {
@@ -642,6 +671,8 @@ export type CryptoTestnetProposeExitsParams = {
   take_profit_pct?: number;
   trailing_stop_pct?: number | null;
   min_value_usdt?: number;
+  break_even_trigger_pct?: number;
+  break_even_plus_pct?: number;
 };
 
 function isCryptoTestnetProposeExitsPayload(data: unknown): data is CryptoTestnetProposeExitsPayload {
@@ -662,6 +693,12 @@ export async function postCryptoTestnetProposeExits(
   if (params.min_value_usdt != null) q.set("min_value_usdt", String(params.min_value_usdt));
   if (params.trailing_stop_pct != null && Number.isFinite(params.trailing_stop_pct)) {
     q.set("trailing_stop_pct", String(params.trailing_stop_pct));
+  }
+  if (params.break_even_trigger_pct != null) {
+    q.set("break_even_trigger_pct", String(params.break_even_trigger_pct));
+  }
+  if (params.break_even_plus_pct != null) {
+    q.set("break_even_plus_pct", String(params.break_even_plus_pct));
   }
   const res = await fetch(`${BASE}/crypto/testnet/strategy/propose-exits?${q.toString()}`, {
     method: "POST",

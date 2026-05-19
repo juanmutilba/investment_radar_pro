@@ -119,7 +119,7 @@ const REASON_CHIP_LABELS: Record<string, string> = {
   cooldown_symbol: "Cooldown",
   already_open: "Ya abierto",
   already_hold_base_testnet: "Posición app",
-  max_open_positions: "Máx. posiciones",
+  max_open_positions: "Máx. activos abiertos",
   max_one_per_run: "1 por ciclo",
   not_whitelisted_testnet: "No whitelist",
   testnet_balances_unavailable: "Sin balances",
@@ -465,7 +465,7 @@ export function CycleDiagnosticsPanel({
               : "Cupo posiciones paper"}
           </strong>
           {": "}
-          {summary.open_positions_count} / {summary.max_open_positions} abiertas
+          {summary.open_positions_count} / {summary.max_open_positions} activos distintos
           {(summary.open_position_symbols?.length ?? 0) > 0
             ? ` — ${summary.open_position_symbols!.join(", ")}`
             : " — ninguna"}

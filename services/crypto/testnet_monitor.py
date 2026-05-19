@@ -390,6 +390,8 @@ def _run_cycle() -> None:
             take_profit_pct=float(params.get("take_profit_pct") or 4),
             trailing_stop_pct=trailing_exit,
             min_value_usdt=float(params.get("min_exit_value_usdt") or 5),
+            break_even_trigger_pct=float(params.get("break_even_trigger_pct") or 0),
+            break_even_plus_pct=float(params.get("break_even_plus_pct") or 0),
         )
 
         if not exit_payload.get("ok"):
