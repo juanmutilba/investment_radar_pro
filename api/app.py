@@ -507,6 +507,14 @@ def crypto_testnet_positions():
     return tn.get_testnet_positions()
 
 
+@app.get("/crypto/testnet/app-positions")
+def crypto_testnet_app_positions():
+    """Posiciones Testnet de la app (FIFO desde crypto_testnet_orders.json) con PnL realizado/no realizado."""
+    from services.crypto import binance_testnet as tn
+
+    return tn.get_testnet_app_positions()
+
+
 @app.get("/crypto/testnet/open-orders")
 def crypto_testnet_open_orders(
     symbol: str | None = Query(

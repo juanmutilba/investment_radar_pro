@@ -915,6 +915,226 @@ def get_testnet_positions() -> dict[str, Any]:
     }
 
 
+def _row_created_at_iso(row: dict[str, Any]) -> str | None:
+    raw = str(row.get("created_at") or "").strip()
+    if raw:
+        return raw
+    ts_ex = row.get("timestamp_exchange")
+    if isinstance(ts_ex, (int, float)) and math.isfinite(float(ts_ex)):
+        v = float(ts_ex)
+        if v < 1e11:
+            v *= 1000.0
+        try:
+            from datetime import timezone
+
+            return datetime.fromtimestamp(v / 1000.0, tz=timezone.utc).isoformat(timespec="seconds")
+        except (OSError, OverflowError, ValueError):
+            pass
+    return None
+
+
+def _order_usdt_notional(row: dict[str, Any], qty: float) -> float | None:
+    if not (qty > 0):
+        return None
+    filled = _safe_ccxt_float(row.get("filled"))
+    cost_raw = _safe_ccxt_float(row.get("cost"))
+    if cost_raw is not None and cost_raw > 0:
+        if filled is not None and filled > 0 and abs(filled - qty) > 1e-12:
+            return cost_raw * (qty / filled)
+        return cost_raw
+    avg = _safe_ccxt_float(row.get("average"))
+    if avg is not None and avg > 0:
+        return avg * qty
+    return None
+
+
+def _rebuild_app_positions_for_symbol(
+    rows_chrono: list[dict[str, Any]],
+    symbol: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], float]:
+    """Reconstruye ciclos abiertos/cerrados y PnL realizado desde órdenes locales del par."""
+    open_out: list[dict[str, Any]] = []
+    closed_out: list[dict[str, Any]] = []
+    realized_total = 0.0
+
+    base_inv = 0.0
+    cost_inv = 0.0
+    opened_at: str | None = None
+    cycle_buy_base = 0.0
+    cycle_buy_cost = 0.0
+    cycle_sell_base = 0.0
+    cycle_sell_proceeds = 0.0
+
+    for row in rows_chrono:
+        side = str(row.get("side") or "").lower().strip()
+        filled = _safe_ccxt_float(row.get("filled"))
+        if filled is None or filled <= 0:
+            continue
+        ts = _row_created_at_iso(row)
+
+        if side == "buy":
+            c_usdt = _order_usdt_notional(row, filled)
+            if c_usdt is None or c_usdt <= 0:
+                continue
+            if base_inv <= _TESTNET_APP_POSITION_BASE_EPS:
+                opened_at = ts
+                cycle_buy_base = 0.0
+                cycle_buy_cost = 0.0
+                cycle_sell_base = 0.0
+                cycle_sell_proceeds = 0.0
+            cycle_buy_base += filled
+            cycle_buy_cost += c_usdt
+            base_inv += filled
+            cost_inv += c_usdt
+        elif side == "sell":
+            if base_inv <= _TESTNET_APP_POSITION_BASE_EPS:
+                continue
+            sell_qty = min(filled, base_inv)
+            proceeds = _order_usdt_notional(row, sell_qty)
+            if proceeds is None or proceeds <= 0:
+                continue
+            unit_cost = cost_inv / base_inv
+            cost_sold = sell_qty * unit_cost
+            pnl = proceeds - cost_sold
+            realized_total += pnl
+            cost_inv -= cost_sold
+            base_inv -= sell_qty
+            cycle_sell_base += sell_qty
+            cycle_sell_proceeds += proceeds
+            if cost_inv < 0:
+                cost_inv = 0.0
+            if base_inv <= _TESTNET_APP_POSITION_BASE_EPS:
+                base_inv = 0.0
+                cost_inv = 0.0
+                entry_px = cycle_buy_cost / cycle_buy_base if cycle_buy_base > 0 else None
+                exit_px = (
+                    cycle_sell_proceeds / cycle_sell_base if cycle_sell_base > 0 else None
+                )
+                pnl_cycle = cycle_sell_proceeds - cycle_buy_cost
+                pnl_pct = (
+                    (pnl_cycle / cycle_buy_cost) * 100.0
+                    if cycle_buy_cost > 0 and math.isfinite(pnl_cycle)
+                    else None
+                )
+                closed_out.append(
+                    {
+                        "symbol": symbol,
+                        "entry_price": round(entry_px, 8) if entry_px is not None else None,
+                        "exit_price": round(exit_px, 8) if exit_px is not None else None,
+                        "amount_base": round(cycle_sell_base, 12),
+                        "pnl_usdt": round(pnl_cycle, 8),
+                        "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
+                        "opened_at": opened_at,
+                        "closed_at": ts,
+                    }
+                )
+                opened_at = None
+                cycle_buy_base = 0.0
+                cycle_buy_cost = 0.0
+                cycle_sell_base = 0.0
+                cycle_sell_proceeds = 0.0
+
+    if base_inv > _TESTNET_APP_POSITION_BASE_EPS and cost_inv > 0:
+        avg_entry = cost_inv / base_inv
+        open_out.append(
+            {
+                "symbol": symbol,
+                "amount_base": round(base_inv, 12),
+                "avg_entry_price": round(avg_entry, 8),
+                "opened_at": opened_at,
+            }
+        )
+
+    return open_out, closed_out, realized_total
+
+
+def get_testnet_app_positions() -> dict[str, Any]:
+    """
+    Posiciones Testnet reconstruidas desde data/crypto_testnet_orders.json (FIFO).
+    No usa saldos ficticios del sandbox para PnL.
+    """
+    _ensure_dotenv()
+    updated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    all_rows = _load_testnet_orders_json()
+
+    symbols: set[str] = set()
+    for row in all_rows:
+        sym = str(row.get("symbol") or "").strip().upper().replace(" ", "")
+        if sym and sym in MARKET_ORDER_SYMBOL_WHITELIST:
+            symbols.add(sym)
+
+    open_positions: list[dict[str, Any]] = []
+    closed_positions: list[dict[str, Any]] = []
+    realized_pnl_usdt = 0.0
+
+    for sym in sorted(symbols):
+        rows = _local_orders_for_symbol(all_rows, sym)
+        o, c, r = _rebuild_app_positions_for_symbol(rows, sym)
+        open_positions.extend(o)
+        closed_positions.extend(c)
+        realized_pnl_usdt += r
+
+    closed_positions.sort(
+        key=lambda p: (_parse_local_order_sort_key({"created_at": p.get("closed_at") or ""})[0]),
+        reverse=True,
+    )
+
+    prices: dict[str, float | None] = {}
+    unrealized_pnl_usdt = 0.0
+    has_unrealized = False
+
+    if open_positions and is_testnet_enabled() and _ccxt_available():
+        ex = _build_sandbox_exchange(with_credentials=False)
+        for pos in open_positions:
+            sym = str(pos.get("symbol") or "").strip()
+            if not sym:
+                continue
+            px: float | None = prices.get(sym)
+            if sym not in prices:
+                try:
+                    tk = ex.fetch_ticker(sym)
+                    if isinstance(tk, dict):
+                        raw_px = tk.get("last") or tk.get("bid") or tk.get("close")
+                        px = _safe_ccxt_float(raw_px)
+                        if px is not None and px <= 0:
+                            px = None
+                    else:
+                        px = None
+                except Exception as e:
+                    _log(f"app_positions: ticker {sym} falló {_safe_error(e)}")
+                    px = None
+                prices[sym] = px
+
+            amt = _safe_ccxt_float(pos.get("amount_base")) or 0.0
+            entry = _safe_ccxt_float(pos.get("avg_entry_price"))
+            pos["current_price"] = px
+            if px is not None and entry is not None and amt > 0:
+                mkt = amt * px
+                cost = amt * entry
+                u_pnl = mkt - cost
+                u_pct = (u_pnl / cost) * 100.0 if cost > 0 else None
+                pos["market_value_usdt"] = round(mkt, 8)
+                pos["unrealized_pnl_usdt"] = round(u_pnl, 8)
+                pos["unrealized_pnl_pct"] = round(u_pct, 4) if u_pct is not None else None
+                unrealized_pnl_usdt += u_pnl
+                has_unrealized = True
+            else:
+                pos["market_value_usdt"] = None
+                pos["unrealized_pnl_usdt"] = None
+                pos["unrealized_pnl_pct"] = None
+
+    return {
+        "ok": True,
+        "error": None,
+        "open_positions": open_positions,
+        "closed_positions": closed_positions,
+        "realized_pnl_usdt": round(realized_pnl_usdt, 8),
+        "unrealized_pnl_usdt": round(unrealized_pnl_usdt, 8) if has_unrealized else None,
+        "updated_at": updated_at,
+        "source": "crypto_testnet_orders_json",
+    }
+
+
 def _open_order_row_from_ccxt(raw: dict[str, Any], fallback_symbol: str) -> dict[str, Any]:
     """Fila normalizada para órdenes abiertas ccxt (spot testnet)."""
     sym_r = raw.get("symbol")

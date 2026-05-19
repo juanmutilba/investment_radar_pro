@@ -318,6 +318,66 @@ export async function getCryptoTestnetPositions(): Promise<CryptoTestnetPosition
   return data;
 }
 
+/** GET /crypto/testnet/app-positions — posiciones/PnL desde historial local de órdenes de la app. */
+export type CryptoTestnetAppOpenPosition = {
+  symbol: string;
+  amount_base: number;
+  avg_entry_price: number;
+  current_price?: number | null;
+  market_value_usdt?: number | null;
+  unrealized_pnl_usdt?: number | null;
+  unrealized_pnl_pct?: number | null;
+  opened_at?: string | null;
+};
+
+export type CryptoTestnetAppClosedPosition = {
+  symbol: string;
+  entry_price: number | null;
+  exit_price: number | null;
+  amount_base: number;
+  pnl_usdt: number;
+  pnl_pct: number | null;
+  opened_at?: string | null;
+  closed_at?: string | null;
+};
+
+export type CryptoTestnetAppPositionsPayload = {
+  ok: boolean;
+  error: string | null;
+  open_positions: CryptoTestnetAppOpenPosition[];
+  closed_positions: CryptoTestnetAppClosedPosition[];
+  realized_pnl_usdt: number;
+  unrealized_pnl_usdt: number | null;
+  updated_at: string;
+  source?: string;
+};
+
+function isCryptoTestnetAppPositionsPayload(data: unknown): data is CryptoTestnetAppPositionsPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.ok === "boolean" &&
+    (o.error === null || typeof o.error === "string") &&
+    Array.isArray(o.open_positions) &&
+    Array.isArray(o.closed_positions) &&
+    typeof o.realized_pnl_usdt === "number" &&
+    (o.unrealized_pnl_usdt === null || typeof o.unrealized_pnl_usdt === "number") &&
+    typeof o.updated_at === "string"
+  );
+}
+
+export async function getCryptoTestnetAppPositions(): Promise<CryptoTestnetAppPositionsPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/app-positions`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetAppPositionsPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/testnet/app-positions");
+  }
+  return data;
+}
+
 /** GET /crypto/testnet/open-orders — órdenes abiertas en vivo desde Binance Spot Testnet. */
 export type CryptoTestnetOpenOrderRow = {
   symbol: string;
