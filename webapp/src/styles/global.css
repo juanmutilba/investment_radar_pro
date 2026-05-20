@@ -2962,7 +2962,7 @@ table.radar-table thead .radar-table__sticky-col {
   margin-top: 0.75rem;
   padding: 0.85rem 0.95rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 12px;
   background: color-mix(in srgb, var(--bg-panel) 92%, rgba(59, 130, 246, 0.06));
 }
 
@@ -2995,10 +2995,47 @@ table.radar-table thead .radar-table__sticky-col {
   flex-direction: column;
   gap: 0.5rem;
   min-width: 0;
-  padding: 0.65rem 0.7rem;
-  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
-  border-radius: var(--radius);
+  padding: 0.65rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 12px;
   background: var(--bg-panel);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--border) 40%, transparent);
+}
+
+.crypto-monitor-field {
+  min-width: 0;
+}
+
+.crypto-monitor-field-label {
+  font-weight: 500;
+}
+
+.crypto-monitor-input,
+.crypto-monitor-select {
+  border-radius: 10px !important;
+  border: 1px solid color-mix(in srgb, var(--border) 92%, #64748b) !important;
+  padding: 0.4rem 0.55rem !important;
+  font-size: 0.86rem;
+  line-height: 1.25;
+  background: var(--bg-panel, #fff);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.crypto-monitor-input:hover:not(:disabled),
+.crypto-monitor-select:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--border) 70%, #3b82f6) !important;
+}
+
+.crypto-monitor-input:focus-visible,
+.crypto-monitor-select:focus-visible {
+  outline: none;
+  border-color: rgba(59, 130, 246, 0.75) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #3b82f6 22%, transparent);
+}
+
+.crypto-monitor-select {
+  cursor: pointer;
+  max-width: 100%;
 }
 
 .crypto-monitor-config-card-heading {
@@ -3024,21 +3061,25 @@ table.radar-table thead .radar-table__sticky-col {
   color: var(--text-muted);
 }
 
-.crypto-monitor-config-card .radar-input {
+.crypto-monitor-config-card .crypto-monitor-input {
   max-width: 130px;
   width: 100%;
-  padding: 0.35rem 0.45rem;
-  font-size: 0.84rem;
 }
 
-.crypto-monitor-config-card--general .radar-input {
+.crypto-monitor-config-card--general .crypto-monitor-input {
+  max-width: 100%;
+}
+
+.crypto-monitor-config-card--risk .crypto-monitor-input,
+.crypto-monitor-risk-grid .crypto-monitor-input,
+.crypto-monitor-break-even-grid .crypto-monitor-input {
   max-width: 100%;
 }
 
 .crypto-monitor-timeframe-box {
   padding: 0.55rem 0.6rem;
   border: 1px solid rgba(59, 130, 246, 0.42);
-  border-radius: var(--radius);
+  border-radius: 10px;
   background: rgba(59, 130, 246, 0.08);
 }
 
@@ -3055,7 +3096,11 @@ table.radar-table thead .radar-table__sticky-col {
 
 .crypto-monitor-timeframe-box .radar-toolbar__input,
 .crypto-monitor-timeframe-box .radar-toolbar__select {
-  font-size: 0.84rem;
+  font-size: 0.86rem;
+  border-radius: 10px !important;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, #64748b) !important;
+  padding: 0.35rem 0.45rem !important;
+  background: var(--bg-panel, #fff);
 }
 
 .crypto-monitor-risk-grid {
@@ -3071,7 +3116,7 @@ table.radar-table thead .radar-table__sticky-col {
   background: color-mix(in srgb, var(--bg-panel) 88%, rgba(148, 163, 184, 0.06));
 }
 
-.crypto-monitor-risk-grid .radar-input {
+.crypto-monitor-risk-grid .crypto-monitor-input {
   max-width: 100%;
 }
 
@@ -3084,17 +3129,42 @@ table.radar-table thead .radar-table__sticky-col {
   border-top: 1px dashed color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-.crypto-monitor-risk-extra .radar-input {
-  max-width: 110px;
+.crypto-monitor-risk-extra .crypto-monitor-input {
+  max-width: 120px;
 }
 
-.crypto-monitor-risk-be-row {
-  display: flex;
-  gap: 0.35rem;
+.crypto-monitor-break-even-block {
+  margin-top: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px dashed color-mix(in srgb, var(--border) 75%, rgba(59, 130, 246, 0.35));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-panel) 94%, rgba(59, 130, 246, 0.05));
 }
 
-.crypto-monitor-risk-be-row .radar-input {
-  max-width: 72px;
+.crypto-monitor-break-even-title {
+  margin: 0 0 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.crypto-monitor-break-even-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem 0.65rem;
+}
+
+.crypto-monitor-break-even-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.crypto-monitor-future-auto-note {
+  font-style: italic;
+  opacity: 0.92;
 }
 
 .crypto-monitor-config-footnote {
@@ -3178,6 +3248,10 @@ table.radar-table thead .radar-table__sticky-col {
   .crypto-monitor-risk-grid {
     grid-template-columns: 1fr;
   }
+
+  .crypto-monitor-break-even-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 520px) {
@@ -3185,7 +3259,7 @@ table.radar-table thead .radar-table__sticky-col {
     grid-template-columns: 1fr;
   }
 
-  .crypto-monitor-config-card .radar-input {
+  .crypto-monitor-config-card .crypto-monitor-input {
     max-width: none;
   }
 }

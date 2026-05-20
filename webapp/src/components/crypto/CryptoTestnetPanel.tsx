@@ -77,9 +77,11 @@ const MAX_OPEN_ASSETS_TOOLTIP =
   "Cuenta cuántos activos distintos tienen posición Testnet registrada por la app. No es monto total invertido.";
 const MAX_USDT_EXPOSURE_FUTURE_NOTE =
   "Para limitar dinero total invertido usaremos exposición máxima USDT en un próximo paso.";
-const TESTNET_ORDER_SUCCESS_MESSAGE = "Orden ejecutada. Revisá Posición Testnet.";
+const TESTNET_ORDER_SUCCESS_MESSAGE = "Orden ejecutada. Posiciones actualizadas.";
 const TESTNET_BUY_SUCCESS_MESSAGE = TESTNET_ORDER_SUCCESS_MESSAGE;
 const TESTNET_SELL_SUCCESS_MESSAGE = TESTNET_ORDER_SUCCESS_MESSAGE;
+const TESTNET_DUPLICATE_POSITION_NOTE =
+  " En Testnet evitamos duplicar compras del mismo activo. Antes de operar real se revisará esta regla para permitir o no acumulación controlada.";
 const TESTNET_MANUAL_AUTO_DISABLED_NOTE =
   "La ejecución automática queda deshabilitada en Testnet por seguridad.";
 const MONITOR_CYCLES_COMPACT_DEFAULT = 5;
@@ -108,11 +110,19 @@ const MONITOR_TP_TOOLTIP = "Propone salida si la ganancia llega a este porcentaj
 const MONITOR_TRAIL_TOOLTIP =
   "Sigue el máximo alcanzado y propone salida si cae este porcentaje desde el máximo.";
 
+const MONITOR_BE_ACTIVATE_TOOLTIP =
+  "Cuando la posición gana este porcentaje, se habilita protección break-even.";
+const MONITOR_BE_STOP_TOOLTIP =
+  "Nivel de salida cercano al precio de compra para evitar volver a pérdida.";
+
+const MONITOR_FUTURE_AUTO_NOTE =
+  "Próximo paso: modo automático Testnet ficticio. Ejecutaría propuestas en sandbox, nunca en Binance real.";
+
 const PORTFOLIO_ASSETS_DISCLAIMER =
   "Estos saldos son ficticios del entorno Binance Spot Testnet/Sandbox.";
 
 const PORTFOLIO_NO_AUTO_EXPAND_NOTE =
-  "No se abre automáticamente después de operar; usá Posiciones Testnet para ver PnL.";
+  "Tras operar no cambiamos de módulo solo; refrescamos posiciones. Podés seguir en Monitor u Operar.";
 
 const STRATEGY_COOLDOWN_FIELD_HINT =
   "Tiempo mínimo antes de volver a proponer una entrada en el mismo activo.";
@@ -330,16 +340,20 @@ function CryptoTestnetStrategyModeField({
   disabled,
   id,
   fieldLabel = "Modo estrategia",
+  className,
+  selectClassName,
 }: {
   value: CryptoStrategyMode;
   onChange: (ev: ChangeEvent<HTMLSelectElement>) => void;
   disabled?: boolean;
   id?: string;
   fieldLabel?: string;
+  className?: string;
+  selectClassName?: string;
 }) {
   const hint = value === "daily_intraday" ? TESTNET_STRATEGY_DAILY_HINT : TESTNET_STRATEGY_TREND_HINT;
   return (
-    <label className="crypto-testnet-field">
+    <label className={className ? `crypto-testnet-field ${className}` : "crypto-testnet-field"}>
       <span className="crypto-testnet-field-label">
         <span className="msg-muted">{fieldLabel}</span>
         <button
@@ -353,7 +367,7 @@ function CryptoTestnetStrategyModeField({
       </span>
       <select
         id={id}
-        className="radar-input"
+        className={selectClassName ?? "radar-input"}
         value={value}
         onChange={onChange}
         disabled={disabled}
@@ -760,6 +774,10 @@ export function CryptoTestnetPanel() {
   const [monitorCyclesLoading, setMonitorCyclesLoading] = useState(false);
   const [monitorCyclesError, setMonitorCyclesError] = useState<string | null>(null);
   const [activeTestnetModule, setActiveTestnetModule] = useState<TestnetModule>("status");
+  const activeTestnetModuleRef = useRef<TestnetModule>("status");
+  useEffect(() => {
+    activeTestnetModuleRef.current = activeTestnetModule;
+  }, [activeTestnetModule]);
   const [securityCardCollapsed, setSecurityCardCollapsed] = useState(true);
   const [portfolioAssetsExpanded, setPortfolioAssetsExpanded] = useState(false);
   const [monitorCyclesShowAll, setMonitorCyclesShowAll] = useState(false);
@@ -1222,12 +1240,14 @@ export function CryptoTestnetPanel() {
     [executedProposalKeys],
   );
 
-  const goToPositionModule = useCallback((tab: "open" | "closed") => {
+  const navigateAfterOrderSuccess = useCallback((mod: TestnetModule, positionTab?: "open" | "closed") => {
     setPortfolioAssetsExpanded(false);
-    setActiveTestnetModule("position");
-    setAppPositionsTab(tab);
+    setActiveTestnetModule(mod);
+    if (positionTab && mod === "position") {
+      setAppPositionsTab(positionTab);
+    }
     window.requestAnimationFrame(() => {
-      document.getElementById("crypto-testnet-module-position")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      document.getElementById(`crypto-testnet-module-${mod}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }, []);
 
@@ -1244,6 +1264,7 @@ export function CryptoTestnetPanel() {
       symbol: string;
       quoteUsdt: number;
       signalPrice?: number | null;
+      successModule?: TestnetModule;
     }): Promise<{ ok: true } | { ok: false; error: string }> => {
       if (!connected) {
         return { ok: false, error: "Testnet desconectado. Revisá el estado de conexión arriba." };
@@ -1255,7 +1276,7 @@ export function CryptoTestnetPanel() {
       if (isEntryProposalExecuted(sym)) {
         return {
           ok: false,
-          error: `Ya existe una posición Testnet registrada por la app para ${sym} o la entrada ya fue ejecutada.`,
+          error: `Ya existe una posición Testnet registrada por la app para ${sym} o la entrada ya fue ejecutada.${TESTNET_DUPLICATE_POSITION_NOTE}`,
         };
       }
       const q = opts.quoteUsdt;
@@ -1304,7 +1325,8 @@ export function CryptoTestnetPanel() {
         setManualSymbol(sym);
         setManualSide("buy");
         await refreshAfterTestnetOrder();
-        goToPositionModule("open");
+        const mod = opts.successModule ?? activeTestnetModuleRef.current;
+        navigateAfterOrderSuccess(mod, mod === "position" ? "open" : undefined);
         setError(null);
         return { ok: true };
       } catch (e: unknown) {
@@ -1318,7 +1340,7 @@ export function CryptoTestnetPanel() {
       connected,
       isEntryProposalExecuted,
       markProposalExecuted,
-      goToPositionModule,
+      navigateAfterOrderSuccess,
       refreshAfterTestnetOrder,
     ],
   );
@@ -1329,6 +1351,7 @@ export function CryptoTestnetPanel() {
       asset: string;
       amountBase: number;
       fromProposal?: boolean;
+      successModule?: TestnetModule;
     }): Promise<{ ok: true } | { ok: false; error: string }> => {
       if (!connected) {
         return { ok: false, error: "Testnet desconectado. Revisá el estado de conexión arriba." };
@@ -1378,7 +1401,10 @@ export function CryptoTestnetPanel() {
         setManualSymbol(sym);
         setManualSide("sell");
         const appPos = await refreshAfterTestnetOrder();
-        goToPositionModule(appPositionsTabAfterSell(appPos, sym));
+        const mod = opts.successModule ?? activeTestnetModuleRef.current;
+        const tab = appPositionsTabAfterSell(appPos, sym);
+        setAppPositionsTab(tab);
+        navigateAfterOrderSuccess(mod, mod === "position" ? tab : undefined);
         setError(null);
         return { ok: true };
       } catch (e: unknown) {
@@ -1394,8 +1420,7 @@ export function CryptoTestnetPanel() {
       connected,
       isExitProposalExecuted,
       markProposalExecuted,
-      goToPositionModule,
-      goToOrdersModule,
+      navigateAfterOrderSuccess,
       refreshAfterTestnetOrder,
     ],
   );
@@ -1625,7 +1650,7 @@ export function CryptoTestnetPanel() {
         setAppPositionFeedbackMessage(TESTNET_BUY_SUCCESS_MESSAGE);
         setAppPositionFeedbackError(null);
           await refreshAfterTestnetOrder();
-          goToPositionModule("open");
+          navigateAfterOrderSuccess("operate");
           setError(null);
           return;
         }
@@ -1648,7 +1673,9 @@ export function CryptoTestnetPanel() {
         setAppPositionFeedbackMessage(TESTNET_SELL_SUCCESS_MESSAGE);
         setAppPositionFeedbackError(null);
         const appPos = await refreshAfterTestnetOrder();
-        goToPositionModule(appPositionsTabAfterSell(appPos, symTrim));
+        const tab = appPositionsTabAfterSell(appPos, symTrim);
+        setAppPositionsTab(tab);
+        navigateAfterOrderSuccess("operate");
         setError(null);
       } catch (err: unknown) {
         const raw = err instanceof Error ? err.message : "Error al enviar orden testnet";
@@ -1670,7 +1697,7 @@ export function CryptoTestnetPanel() {
       manualSide,
       manualSymbol,
       markProposalExecuted,
-      goToPositionModule,
+      navigateAfterOrderSuccess,
       goToOrdersModule,
       pairPrice,
       sellMode,
@@ -1747,6 +1774,7 @@ export function CryptoTestnetPanel() {
       symbol: p.symbol,
       quoteUsdt: p.quote_amount_usdt,
       signalPrice: signalPx,
+      successModule: "proposals",
     });
     if (result.ok) {
       setProposalOrderError(null);
@@ -1799,6 +1827,7 @@ export function CryptoTestnetPanel() {
         asset: prop.asset,
         amountBase: prop.amount_base,
         fromProposal: true,
+        successModule: "proposals",
       });
       if (!result.ok) {
         setProposalOrderError(result.error);
@@ -1822,6 +1851,7 @@ export function CryptoTestnetPanel() {
         asset: opts.asset,
         amountBase: opts.amountBase,
         fromProposal: false,
+        successModule: activeTestnetModuleRef.current,
       });
       if (result.ok) {
         setAppPositionFeedbackMessage(TESTNET_SELL_SUCCESS_MESSAGE);
@@ -1927,6 +1957,7 @@ export function CryptoTestnetPanel() {
       symbol: p.symbol,
       quoteUsdt: p.quote_amount_usdt,
       signalPrice: signalPx,
+      successModule: "monitor",
     });
     if (result.ok) {
       setProposalOrderError(null);
@@ -1955,6 +1986,7 @@ export function CryptoTestnetPanel() {
         asset: prop.asset,
         amountBase: prop.amount_base,
         fromProposal: true,
+        successModule: "monitor",
       });
       if (!result.ok) {
         setProposalOrderError(result.error);
@@ -2436,7 +2468,7 @@ export function CryptoTestnetPanel() {
                   <li>Take profit {assistedPayload.proposal.risk.take_profit_pct}%</li>
                   <li>Trailing {assistedPayload.proposal.risk.trailing_stop_pct}%</li>
                   <li>
-                    Break-even trigger {assistedPayload.proposal.risk.break_even_trigger_pct}% · más{" "}
+                    Activar break-even al ganar {assistedPayload.proposal.risk.break_even_trigger_pct}% · Stop break-even{" "}
                     {assistedPayload.proposal.risk.break_even_plus_pct}%
                   </li>
                 </ul>
@@ -2689,10 +2721,12 @@ export function CryptoTestnetPanel() {
                 value={testnetStrategyMode}
                 onChange={handleTestnetStrategyModeChange}
                 disabled={monInputsLocked || monitorActionBusy}
+                className="crypto-monitor-field"
+                selectClassName="radar-input crypto-monitor-input crypto-monitor-select"
               />
               <div className="crypto-monitor-timeframe-box">
                 <CryptoTimeframeField
-                  className="crypto-testnet-field crypto-testnet-field--timeframe"
+                  className="crypto-testnet-field crypto-testnet-field--timeframe crypto-monitor-field"
                   label="Timeframe"
                   value={monTf}
                   onChange={setMonTf}
@@ -2700,11 +2734,11 @@ export function CryptoTestnetPanel() {
                   id="crypto-testnet-monitor-timeframe"
                 />
               </div>
-              <label className="crypto-testnet-field">
-                <span className="crypto-testnet-field-label">USDT por entrada</span>
+              <label className="crypto-testnet-field crypto-monitor-field">
+                <span className="crypto-testnet-field-label crypto-monitor-field-label">USDT por entrada</span>
                 <input
                   type="number"
-                  className="radar-input"
+                  className="radar-input crypto-monitor-input"
                   min={MIN_TESTNET_ORDER_USDT}
                   max={TESTNET_MAX_ORDER_NOTIONAL_USDT}
                   step="0.01"
@@ -2717,11 +2751,11 @@ export function CryptoTestnetPanel() {
 
             <div className="crypto-monitor-config-card crypto-monitor-config-card--filters">
               <h5 className="crypto-monitor-config-card-heading">Filtros</h5>
-              <label className="crypto-testnet-field">
+              <label className="crypto-testnet-field crypto-monitor-field">
                 <CryptoTestnetMinScoreLabel />
                 <input
                   type="number"
-                  className="radar-input"
+                  className="radar-input crypto-monitor-input"
                   min={0}
                   max={100}
                   step="0.5"
@@ -2731,11 +2765,11 @@ export function CryptoTestnetPanel() {
                   disabled={monInputsLocked || monitorActionBusy}
                 />
               </label>
-              <label className="crypto-testnet-field">
+              <label className="crypto-testnet-field crypto-monitor-field">
                 <CryptoTestnetMaxOpenAssetsLabel />
                 <input
                   type="number"
-                  className="radar-input"
+                  className="radar-input crypto-monitor-input"
                   min={1}
                   max={50}
                   step={1}
@@ -2745,7 +2779,7 @@ export function CryptoTestnetPanel() {
                   title={MAX_OPEN_ASSETS_TOOLTIP}
                 />
               </label>
-              <label className="crypto-testnet-field crypto-testnet-radio">
+              <label className="crypto-testnet-field crypto-testnet-radio crypto-monitor-field">
                 <input
                   type="checkbox"
                   checked={monBtcTrend}
@@ -2758,11 +2792,11 @@ export function CryptoTestnetPanel() {
 
             <div className="crypto-monitor-config-card crypto-monitor-config-card--frequency">
               <h5 className="crypto-monitor-config-card-heading">Frecuencia</h5>
-              <label className="crypto-testnet-field">
-                <span className="crypto-testnet-field-label">Intervalo monitor (min)</span>
+              <label className="crypto-testnet-field crypto-monitor-field">
+                <span className="crypto-testnet-field-label crypto-monitor-field-label">Intervalo monitor (min)</span>
                 <input
                   type="number"
-                  className="radar-input"
+                  className="radar-input crypto-monitor-input"
                   min={1}
                   max={1440}
                   step={1}
@@ -2771,11 +2805,11 @@ export function CryptoTestnetPanel() {
                   disabled={monInputsLocked || monitorActionBusy}
                 />
               </label>
-              <label className="crypto-testnet-field">
+              <label className="crypto-testnet-field crypto-monitor-field">
                 <CryptoTestnetStrategyCooldownLabel />
                 <input
                   type="number"
-                  className="radar-input"
+                  className="radar-input crypto-monitor-input"
                   min={0}
                   max={10080}
                   step={1}
@@ -2791,11 +2825,11 @@ export function CryptoTestnetPanel() {
             <div className="crypto-monitor-config-card crypto-monitor-config-card--risk">
               <h5 className="crypto-monitor-config-card-heading">Riesgo (solo propuestas)</h5>
               <div className="crypto-monitor-risk-grid">
-                <label className="crypto-testnet-field" title={MONITOR_SL_TOOLTIP}>
-                  <span className="crypto-testnet-field-label">Stop Loss %</span>
+                <label className="crypto-testnet-field crypto-monitor-field" title={MONITOR_SL_TOOLTIP}>
+                  <span className="crypto-testnet-field-label crypto-monitor-field-label">Stop Loss %</span>
                   <input
                     type="number"
-                    className="radar-input"
+                    className="radar-input crypto-monitor-input"
                     min={0}
                     step="0.1"
                     value={monSl}
@@ -2803,11 +2837,11 @@ export function CryptoTestnetPanel() {
                     disabled={monInputsLocked || monitorActionBusy}
                   />
                 </label>
-                <label className="crypto-testnet-field" title={MONITOR_TP_TOOLTIP}>
-                  <span className="crypto-testnet-field-label">Take Profit %</span>
+                <label className="crypto-testnet-field crypto-monitor-field" title={MONITOR_TP_TOOLTIP}>
+                  <span className="crypto-testnet-field-label crypto-monitor-field-label">Take Profit %</span>
                   <input
                     type="number"
-                    className="radar-input"
+                    className="radar-input crypto-monitor-input"
                     min={0}
                     step="0.1"
                     value={monTp}
@@ -2815,11 +2849,11 @@ export function CryptoTestnetPanel() {
                     disabled={monInputsLocked || monitorActionBusy}
                   />
                 </label>
-                <label className="crypto-testnet-field" title={MONITOR_TRAIL_TOOLTIP}>
-                  <span className="crypto-testnet-field-label">Trailing Stop %</span>
+                <label className="crypto-testnet-field crypto-monitor-field" title={MONITOR_TRAIL_TOOLTIP}>
+                  <span className="crypto-testnet-field-label crypto-monitor-field-label">Trailing Stop %</span>
                   <input
                     type="number"
-                    className="radar-input"
+                    className="radar-input crypto-monitor-input"
                     min={0}
                     step="0.1"
                     placeholder="—"
@@ -2830,11 +2864,11 @@ export function CryptoTestnetPanel() {
                 </label>
               </div>
               <div className="crypto-monitor-risk-extra">
-                <label className="crypto-testnet-field">
-                  <span className="crypto-testnet-field-label">Mín. valor salida USDT</span>
+                <label className="crypto-testnet-field crypto-monitor-field">
+                  <span className="crypto-testnet-field-label crypto-monitor-field-label">Mín. valor salida USDT</span>
                   <input
                     type="number"
-                    className="radar-input"
+                    className="radar-input crypto-monitor-input"
                     min={0}
                     step="0.5"
                     value={monExitMin}
@@ -2842,29 +2876,41 @@ export function CryptoTestnetPanel() {
                     disabled={monInputsLocked || monitorActionBusy}
                   />
                 </label>
-                <label className="crypto-testnet-field">
-                  <span className="crypto-testnet-field-label">Break-even trig / +%</span>
-                  <div className="crypto-monitor-risk-be-row">
+              </div>
+              <div className="crypto-monitor-break-even-block">
+                <h6 className="crypto-monitor-break-even-title">Break-even (opcional)</h6>
+                <div className="crypto-monitor-break-even-grid">
+                  <label className="crypto-testnet-field crypto-monitor-field" title={MONITOR_BE_ACTIVATE_TOOLTIP}>
+                    <span className="crypto-testnet-field-label crypto-monitor-field-label">
+                      Activar break-even al ganar %
+                    </span>
                     <input
                       type="number"
-                      className="radar-input"
+                      className="radar-input crypto-monitor-input"
                       min={0}
                       step="0.1"
                       value={monBeTrig}
                       onChange={(ev) => setMonBeTrig(ev.target.value)}
                       disabled={monInputsLocked || monitorActionBusy}
                     />
+                  </label>
+                  <label className="crypto-testnet-field crypto-monitor-field" title={MONITOR_BE_STOP_TOOLTIP}>
+                    <span className="crypto-testnet-field-label crypto-monitor-field-label">Stop break-even %</span>
                     <input
                       type="number"
-                      className="radar-input"
+                      className="radar-input crypto-monitor-input"
                       min={0}
                       step="0.1"
                       value={monBePlus}
                       onChange={(ev) => setMonBePlus(ev.target.value)}
                       disabled={monInputsLocked || monitorActionBusy}
                     />
-                  </div>
-                </label>
+                  </label>
+                </div>
+                <p className="msg-muted crypto-monitor-break-even-hint">
+                  Equivale a un trigger de break-even (habilita la protección cuando la posición gana ese %). El stop
+                  fija la salida cerca del precio de compra.
+                </p>
               </div>
             </div>
           </div>
@@ -2915,6 +2961,7 @@ export function CryptoTestnetPanel() {
         <p className="msg-muted crypto-monitor-safe-hint" style={{ marginTop: "0.25rem" }}>
           {MONITOR_EXITS_HELP_TEXT}
         </p>
+        <p className="msg-muted crypto-monitor-safe-hint crypto-monitor-future-auto-note">{MONITOR_FUTURE_AUTO_NOTE}</p>
 
         {monitorBannerError ? (
           <p className="msg-error crypto-testnet-block-start" style={{ fontSize: "0.875rem", marginTop: "0.5rem" }}>
