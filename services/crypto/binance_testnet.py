@@ -9,7 +9,7 @@ import json
 import math
 import os
 import time as time_mod
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -1053,6 +1053,148 @@ def _rebuild_app_positions_for_symbol(
     return open_out, closed_out, realized_total
 
 
+def _parse_iso_datetime_for_stats(value: str | None) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _closed_position_entry_capital_usdt(pos: dict[str, Any]) -> float | None:
+    amt = _safe_ccxt_float(pos.get("amount_base")) or 0.0
+    if amt <= 0:
+        return None
+    entry = _safe_ccxt_float(pos.get("entry_price"))
+    if entry is not None and entry > 0 and math.isfinite(entry):
+        return float(amt * entry)
+    exit_px = _safe_ccxt_float(pos.get("exit_price"))
+    pnl = _safe_ccxt_float(pos.get("pnl_usdt"))
+    if (
+        exit_px is not None
+        and exit_px > 0
+        and math.isfinite(exit_px)
+        and pnl is not None
+        and math.isfinite(pnl)
+    ):
+        proceeds = float(amt * exit_px)
+        cost = proceeds - float(pnl)
+        if cost > 1e-12 and math.isfinite(cost):
+            return cost
+    return None
+
+
+def _compute_app_positions_summary(
+    *,
+    open_positions: list[dict[str, Any]],
+    closed_positions: list[dict[str, Any]],
+    realized_pnl_usdt: float,
+    unrealized_pnl_usdt: float | None,
+    has_unrealized: bool,
+) -> dict[str, Any]:
+    """Métricas agregadas desde FIFO local (cerradas + abiertas)."""
+    total_realized = float(realized_pnl_usdt) if math.isfinite(realized_pnl_usdt) else 0.0
+    total_unrealized: float | None = None
+    if has_unrealized and unrealized_pnl_usdt is not None and math.isfinite(unrealized_pnl_usdt):
+        total_unrealized = float(unrealized_pnl_usdt)
+    u_part = total_unrealized if total_unrealized is not None else 0.0
+    total_pnl = total_realized + u_part
+
+    closed_entry_capital = 0.0
+    for c in closed_positions:
+        cap = _closed_position_entry_capital_usdt(c)
+        if cap is not None and math.isfinite(cap) and cap > 0:
+            closed_entry_capital += cap
+
+    open_entry_capital = 0.0
+    for o in open_positions:
+        amt = _safe_ccxt_float(o.get("amount_base")) or 0.0
+        av = _safe_ccxt_float(o.get("avg_entry_price"))
+        if amt > 0 and av is not None and av > 0 and math.isfinite(av):
+            open_entry_capital += float(amt * av)
+
+    total_capital_operated = closed_entry_capital + open_entry_capital
+
+    total_closed = len(closed_positions)
+    winning = 0
+    losing = 0
+    for c in closed_positions:
+        pnl = _safe_ccxt_float(c.get("pnl_usdt"))
+        if pnl is None or not math.isfinite(pnl):
+            continue
+        if pnl > 1e-9:
+            winning += 1
+        elif pnl < -1e-9:
+            losing += 1
+
+    win_rate_pct: float | None = None
+    if total_closed > 0:
+        win_rate_pct = round((winning / total_closed) * 100.0, 2)
+
+    realized_return_on_operated_capital_pct: float | None = None
+    if closed_entry_capital > 1e-9:
+        realized_return_on_operated_capital_pct = round(
+            (total_realized / closed_entry_capital) * 100.0,
+            4,
+        )
+
+    historical_tna_pct: float | None = None
+    if total_closed > 0 and closed_entry_capital > 1e-9:
+        opened_times: list[datetime] = []
+        closed_times: list[datetime] = []
+        for c in closed_positions:
+            oa = _parse_iso_datetime_for_stats(
+                str(c.get("opened_at") or "") if c.get("opened_at") else None
+            )
+            ca = _parse_iso_datetime_for_stats(
+                str(c.get("closed_at") or "") if c.get("closed_at") else None
+            )
+            if oa is not None:
+                opened_times.append(oa)
+            if ca is not None:
+                closed_times.append(ca)
+        if opened_times and closed_times:
+            first_open = min(opened_times)
+            last_close = max(closed_times)
+            span_sec = (last_close - first_open).total_seconds()
+            days_eff = span_sec / 86400.0 if span_sec > 0 else 0.0
+            if days_eff > 1e-6:
+                ret_pct = (total_realized / closed_entry_capital) * 100.0
+                if math.isfinite(ret_pct):
+                    try:
+                        factor = (1.0 + ret_pct / 100.0) ** (365.0 / days_eff) - 1.0
+                        if math.isfinite(factor):
+                            historical_tna_pct = round(factor * 100.0, 4)
+                    except (OverflowError, OSError, ValueError):
+                        historical_tna_pct = None
+
+    return {
+        "total_realized_pnl_usdt": round(total_realized, 8),
+        "total_unrealized_pnl_usdt": round(total_unrealized, 8)
+        if total_unrealized is not None
+        else None,
+        "total_pnl_usdt": round(total_pnl, 8),
+        "total_closed_trades": total_closed,
+        "winning_trades": winning,
+        "losing_trades": losing,
+        "win_rate_pct": win_rate_pct,
+        "total_capital_operated_usdt": round(total_capital_operated, 8)
+        if total_capital_operated > 0
+        else 0.0,
+        "realized_return_on_operated_capital_pct": realized_return_on_operated_capital_pct,
+        "historical_tna_pct": historical_tna_pct,
+    }
+
+
 def get_testnet_app_positions() -> dict[str, Any]:
     """
     Posiciones Testnet reconstruidas desde data/crypto_testnet_orders.json (FIFO).
@@ -1128,6 +1270,14 @@ def get_testnet_app_positions() -> dict[str, Any]:
                 pos["unrealized_pnl_usdt"] = None
                 pos["unrealized_pnl_pct"] = None
 
+    summary = _compute_app_positions_summary(
+        open_positions=open_positions,
+        closed_positions=closed_positions,
+        realized_pnl_usdt=realized_pnl_usdt,
+        unrealized_pnl_usdt=unrealized_pnl_usdt if has_unrealized else None,
+        has_unrealized=has_unrealized,
+    )
+
     return {
         "ok": True,
         "error": None,
@@ -1137,6 +1287,7 @@ def get_testnet_app_positions() -> dict[str, Any]:
         "unrealized_pnl_usdt": round(unrealized_pnl_usdt, 8) if has_unrealized else None,
         "updated_at": updated_at,
         "source": "crypto_testnet_orders_json",
+        "summary": summary,
     }
 
 

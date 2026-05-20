@@ -2379,6 +2379,194 @@ table.radar-table thead .radar-table__sticky-col {
   gap: 1rem;
 }
 
+/* --- Testnet: campos editables (contraste alto, texto claro) --- */
+.crypto-testnet-dashboard input.radar-input:not([type="checkbox"]):not([type="radio"]),
+.crypto-testnet-dashboard textarea.radar-input,
+.crypto-testnet-dashboard select.radar-input,
+.crypto-testnet-dashboard select.radar-toolbar__select,
+.crypto-testnet-dashboard .radar-toolbar__input,
+.crypto-testnet-dashboard .crypto-testnet-input:not([type="checkbox"]):not([type="radio"]),
+.crypto-testnet-dashboard .crypto-testnet-select {
+  color: #f8fafc !important;
+  background-color: rgba(15, 23, 42, 0.92) !important;
+  border: 1px solid rgba(148, 163, 184, 0.5) !important;
+  border-radius: 10px !important;
+  caret-color: #f8fafc;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.crypto-testnet-dashboard input.radar-input::placeholder,
+.crypto-testnet-dashboard textarea.radar-input::placeholder,
+.crypto-testnet-dashboard .crypto-testnet-input::placeholder {
+  color: rgba(226, 232, 240, 0.72) !important;
+  opacity: 1;
+}
+
+.crypto-testnet-dashboard input.radar-input:hover:not(:disabled),
+.crypto-testnet-dashboard textarea.radar-input:hover:not(:disabled),
+.crypto-testnet-dashboard select.radar-input:hover:not(:disabled),
+.crypto-testnet-dashboard select.radar-toolbar__select:hover:not(:disabled),
+.crypto-testnet-dashboard .radar-toolbar__input:hover:not(:disabled),
+.crypto-testnet-dashboard .crypto-testnet-input:hover:not(:disabled),
+.crypto-testnet-dashboard .crypto-testnet-select:hover:not(:disabled) {
+  border-color: rgba(96, 165, 250, 0.55) !important;
+}
+
+.crypto-testnet-dashboard input.radar-input:focus-visible,
+.crypto-testnet-dashboard textarea.radar-input:focus-visible,
+.crypto-testnet-dashboard select.radar-input:focus-visible,
+.crypto-testnet-dashboard select.radar-toolbar__select:focus-visible,
+.crypto-testnet-dashboard .radar-toolbar__input:focus-visible,
+.crypto-testnet-dashboard .crypto-testnet-input:focus-visible,
+.crypto-testnet-dashboard .crypto-testnet-select:focus-visible {
+  outline: none !important;
+  border-color: rgba(147, 197, 253, 0.95) !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
+}
+
+.crypto-testnet-dashboard select.radar-input option,
+.crypto-testnet-dashboard select.radar-toolbar__select option,
+.crypto-testnet-dashboard .crypto-testnet-select option {
+  background-color: #0f172a;
+  color: #f8fafc;
+}
+
+.crypto-testnet-dashboard .crypto-monitor-input,
+.crypto-testnet-dashboard .crypto-monitor-select {
+  color: #f8fafc !important;
+  background-color: rgba(15, 23, 42, 0.92) !important;
+  border: 1px solid rgba(148, 163, 184, 0.5) !important;
+}
+
+.crypto-testnet-dashboard .crypto-monitor-timeframe-box .radar-toolbar__input,
+.crypto-testnet-dashboard .crypto-monitor-timeframe-box .radar-toolbar__select {
+  color: #f8fafc !important;
+  background-color: rgba(15, 23, 42, 0.92) !important;
+  border: 1px solid rgba(148, 163, 184, 0.5) !important;
+}
+
+.crypto-testnet-dashboard .msg-error.crypto-testnet-block-start,
+.crypto-testnet-dashboard .crypto-testnet-section .msg-error {
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.22);
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  border-radius: 10px;
+  padding: 0.5rem 0.65rem;
+}
+
+.crypto-testnet-dashboard .crypto-testnet-warn {
+  color: #ffedd5;
+  background: rgba(154, 52, 18, 0.2);
+  border: 1px solid rgba(251, 146, 60, 0.45);
+  border-radius: 10px;
+  padding: 0.5rem 0.65rem;
+}
+
+/* Pestañas Abiertas / Cerradas (posiciones app) */
+.crypto-testnet-poses-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.35rem;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.crypto-testnet-poses-tab {
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.38rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.75);
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.25;
+}
+
+.crypto-testnet-poses-tab:hover:not(:disabled) {
+  border-color: rgba(148, 163, 184, 0.45);
+  color: #f8fafc;
+}
+
+.crypto-testnet-poses-tab--active {
+  border-color: rgba(59, 130, 246, 0.65) !important;
+  background: rgba(59, 130, 246, 0.22) !important;
+  color: #f8fafc !important;
+  font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
+}
+
+.crypto-testnet-poses-tab-badge {
+  display: inline-block;
+  margin-left: 0.25rem;
+  padding: 0.05rem 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  vertical-align: middle;
+}
+
+.crypto-testnet-poses-tab--active .crypto-testnet-poses-tab-badge {
+  background: rgba(30, 58, 138, 0.55);
+  border-color: rgba(147, 197, 253, 0.45);
+}
+
+/* Auto Testnet (placeholder UI) */
+.crypto-testnet-auto-checklist {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.crypto-testnet-auto-checklist li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.crypto-testnet-auto-check-icon {
+  flex-shrink: 0;
+  width: 1.15rem;
+  text-align: center;
+  font-weight: 700;
+}
+
+.crypto-testnet-auto-check-icon--ok {
+  color: #86efac;
+}
+
+.crypto-testnet-auto-check-icon--pending {
+  color: rgba(226, 232, 240, 0.55);
+}
+
+.crypto-testnet-auto-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  align-items: center;
+}
+
+.crypto-testnet-auto-tooltip-wrap {
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.crypto-testnet-auto-tooltip-wrap[title] {
+  cursor: help;
+}
+
 .crypto-testnet-tabs,
 .crypto-testnet-panel-nav {
   display: flex;

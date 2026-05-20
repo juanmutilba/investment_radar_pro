@@ -14,6 +14,19 @@ function fmtNum(v: number | null | undefined): string {
   return Number(v).toLocaleString("es-AR", { maximumFractionDigits: 4 });
 }
 
+function fmtSignedUsdt(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  const s = v >= 0 ? "+" : "";
+  return `${s}${fmtNum(v)} USDT`;
+}
+
+function fmtPctSigned(v: number | null | undefined, insufficient: boolean): string {
+  if (insufficient) return "Sin datos suficientes";
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  const s = v >= 0 ? "+" : "";
+  return `${s}${v.toLocaleString("es-AR", { maximumFractionDigits: 2 })}%`;
+}
+
 const numFmt4 = new Intl.NumberFormat("es-AR", { maximumFractionDigits: 4 });
 
 function baseAssetFromPair(pair: string): string {
@@ -161,43 +174,124 @@ export function TestnetAppPositionsCard({
       {error ? <p className="msg-error crypto-testnet-block-start">{error}</p> : null}
       {payload?.ok ? (
         <>
-          <div className="crypto-testnet-mini-grid crypto-testnet-mini-grid--dense crypto-testnet-block-start">
-            <div className="crypto-testnet-kpi">
-              <span className="crypto-testnet-kpi-label">PnL realizado</span>
-              <span className="crypto-testnet-kpi-value">{fmtNum(payload.realized_pnl_usdt)} USDT</span>
-            </div>
-            <div className="crypto-testnet-kpi">
-              <span className="crypto-testnet-kpi-label">PnL no realizado</span>
-              <span className="crypto-testnet-kpi-value">
-                {payload.unrealized_pnl_usdt != null ? `${fmtNum(payload.unrealized_pnl_usdt)} USDT` : "—"}
-              </span>
-            </div>
-            <div className="crypto-testnet-kpi">
-              <span className="crypto-testnet-kpi-label">Abiertas</span>
-              <span className="crypto-testnet-kpi-value">{payload.open_positions.length}</span>
-            </div>
-            {!openOnly ? (
-              <div className="crypto-testnet-kpi">
-                <span className="crypto-testnet-kpi-label">Cerradas</span>
-                <span className="crypto-testnet-kpi-value">{payload.closed_positions.length}</span>
-              </div>
-            ) : null}
-          </div>
+          {(() => {
+            const s = payload.summary ?? null;
+            const closedTrades = s?.total_closed_trades ?? payload.closed_positions.length;
+            const histInsufficient = closedTrades < 1;
+            const realized =
+              s?.total_realized_pnl_usdt !== undefined ? s.total_realized_pnl_usdt : payload.realized_pnl_usdt;
+            const unreal =
+              s != null && s.total_unrealized_pnl_usdt != null
+                ? s.total_unrealized_pnl_usdt
+                : payload.unrealized_pnl_usdt;
+            const totalPnl =
+              s?.total_pnl_usdt ??
+              (() => {
+                const u = unreal != null && Number.isFinite(unreal) ? unreal : 0;
+                return payload.realized_pnl_usdt + u;
+              })();
+            return (
+              <>
+                <div className="crypto-testnet-mini-grid crypto-testnet-mini-grid--dense crypto-testnet-block-start">
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">PnL realizado</span>
+                    <span className="crypto-testnet-kpi-value">{fmtSignedUsdt(realized)}</span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">PnL no realizado</span>
+                    <span className="crypto-testnet-kpi-value">
+                      {unreal != null ? fmtSignedUsdt(unreal) : "—"}
+                    </span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">PnL total</span>
+                    <span className="crypto-testnet-kpi-value">{fmtSignedUsdt(totalPnl)}</span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Win rate</span>
+                    <span className="crypto-testnet-kpi-value">
+                      {histInsufficient
+                        ? "Sin datos suficientes"
+                        : s?.win_rate_pct != null
+                          ? `${fmtNum(s.win_rate_pct)}%`
+                          : "—"}
+                    </span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Capital operado</span>
+                    <span className="crypto-testnet-kpi-value">
+                      {s != null ? `${fmtNum(s.total_capital_operated_usdt)} USDT` : "—"}
+                    </span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Rentabilidad histórica</span>
+                    <span className="crypto-testnet-kpi-value">
+                      {fmtPctSigned(s?.realized_return_on_operated_capital_pct ?? null, histInsufficient)}
+                    </span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">TNA histórica</span>
+                    <span className="crypto-testnet-kpi-value">
+                      {histInsufficient || s?.historical_tna_pct == null
+                        ? "Sin datos suficientes"
+                        : `${fmtNum(s.historical_tna_pct)}%`}
+                    </span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Posiciones abiertas</span>
+                    <span className="crypto-testnet-kpi-value">{payload.open_positions.length}</span>
+                  </div>
+                  {!openOnly ? (
+                    <div className="crypto-testnet-kpi">
+                      <span className="crypto-testnet-kpi-label">Trades cerrados</span>
+                      <span className="crypto-testnet-kpi-value">{closedTrades}</span>
+                    </div>
+                  ) : null}
+                </div>
+                {!histInsufficient && s?.historical_tna_pct != null ? (
+                  <p
+                    className="msg-muted crypto-testnet-block-start"
+                    style={{ marginTop: "0.35rem", marginBottom: 0, fontSize: "0.74rem", lineHeight: 1.45 }}
+                  >
+                    TNA histórica estimada sobre trades cerrados de Testnet; no representa rendimiento futuro.
+                  </p>
+                ) : histInsufficient ? (
+                  <p
+                    className="msg-muted crypto-testnet-block-start"
+                    style={{ marginTop: "0.35rem", marginBottom: 0, fontSize: "0.74rem", lineHeight: 1.45 }}
+                  >
+                    Win rate, rentabilidad histórica y TNA requieren al menos un trade cerrado en el historial local de
+                    la app.
+                  </p>
+                ) : null}
+              </>
+            );
+          })()}
           {!openOnly ? (
-            <div className="crypto-testnet-toolbar crypto-testnet-block-start" style={{ gap: "0.35rem" }}>
+            <div
+              className="crypto-testnet-poses-tabs crypto-testnet-block-start"
+              role="tablist"
+              aria-label="Posiciones abiertas o cerradas"
+            >
               <button
                 type="button"
-                className={`radar-refresh-btn${tab === "open" ? " radar-refresh-btn--active" : ""}`}
+                role="tab"
+                aria-selected={tab === "open"}
+                className={`crypto-testnet-poses-tab${tab === "open" ? " crypto-testnet-poses-tab--active" : ""}`}
                 onClick={() => onTabChange("open")}
               >
-                Abiertas ({payload.open_positions.length})
+                Abiertas
+                <span className="crypto-testnet-poses-tab-badge">{payload.open_positions.length}</span>
               </button>
               <button
                 type="button"
-                className={`radar-refresh-btn${tab === "closed" ? " radar-refresh-btn--active" : ""}`}
+                role="tab"
+                aria-selected={tab === "closed"}
+                className={`crypto-testnet-poses-tab${tab === "closed" ? " crypto-testnet-poses-tab--active" : ""}`}
                 onClick={() => onTabChange("closed")}
               >
-                Cerradas ({payload.closed_positions.length})
+                Cerradas
+                <span className="crypto-testnet-poses-tab-badge">{payload.closed_positions.length}</span>
               </button>
             </div>
           ) : null}

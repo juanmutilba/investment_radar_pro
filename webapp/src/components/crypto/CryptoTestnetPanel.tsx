@@ -184,7 +184,7 @@ function resolveTestnetStrategyMode(
   return null;
 }
 
-type TestnetModule = "status" | "operate" | "position" | "proposals" | "monitor" | "orders";
+type TestnetModule = "status" | "operate" | "position" | "proposals" | "monitor" | "auto_testnet" | "orders";
 
 const TESTNET_MODULE_TABS: { id: TestnetModule; label: string }[] = [
   { id: "status", label: "Estado" },
@@ -192,6 +192,7 @@ const TESTNET_MODULE_TABS: { id: TestnetModule; label: string }[] = [
   { id: "position", label: "Posición" },
   { id: "proposals", label: "Propuestas" },
   { id: "monitor", label: "Monitor" },
+  { id: "auto_testnet", label: "Auto Testnet" },
   { id: "orders", label: "Órdenes" },
 ];
 
@@ -367,7 +368,7 @@ function CryptoTestnetStrategyModeField({
       </span>
       <select
         id={id}
-        className={selectClassName ?? "radar-input"}
+        className={selectClassName ?? "radar-input crypto-testnet-input crypto-testnet-select"}
         value={value}
         onChange={onChange}
         disabled={disabled}
@@ -2327,7 +2328,7 @@ export function CryptoTestnetPanel() {
             <span className="msg-muted">USDT por entrada</span>
             <input
               type="number"
-              className="radar-input"
+              className="radar-input crypto-testnet-input"
               min={MIN_TESTNET_ORDER_USDT}
               max={TESTNET_MAX_ORDER_NOTIONAL_USDT}
               step="0.01"
@@ -2340,7 +2341,7 @@ export function CryptoTestnetPanel() {
             <CryptoTestnetMaxOpenAssetsLabel />
             <input
               type="number"
-              className="radar-input"
+              className="radar-input crypto-testnet-input"
               min={1}
               max={20}
               step={1}
@@ -2357,7 +2358,7 @@ export function CryptoTestnetPanel() {
             <CryptoTestnetStrategyCooldownLabel />
             <input
               type="number"
-              className="radar-input"
+              className="radar-input crypto-testnet-input"
               min={0}
               max={10080}
               step={1}
@@ -2370,7 +2371,7 @@ export function CryptoTestnetPanel() {
             <CryptoTestnetMinScoreLabel />
             <input
               type="number"
-              className="radar-input"
+              className="radar-input crypto-testnet-input"
               min={0}
               max={100}
               step="0.5"
@@ -2579,7 +2580,7 @@ export function CryptoTestnetPanel() {
             <span className="msg-muted">Stop loss %</span>
             <input
               type="number"
-              className="radar-input"
+              className="radar-input crypto-testnet-input"
               min={0}
               max={100}
               step="0.1"
@@ -2592,7 +2593,7 @@ export function CryptoTestnetPanel() {
             <span className="msg-muted">Take profit %</span>
             <input
               type="number"
-              className="radar-input"
+              className="radar-input crypto-testnet-input"
               min={0}
               max={500}
               step="0.1"
@@ -2605,7 +2606,7 @@ export function CryptoTestnetPanel() {
             <span className="msg-muted">Mín. valor USDT</span>
             <input
               type="number"
-              className="radar-input"
+              className="radar-input crypto-testnet-input"
               min={0}
               max={1000}
               step="0.5"
@@ -2618,7 +2619,7 @@ export function CryptoTestnetPanel() {
             <span className="msg-muted">Trailing % (opcional)</span>
             <input
               type="number"
-              className="radar-input"
+              className="radar-input crypto-testnet-input"
               min={0}
               max={100}
               step="0.1"
@@ -2722,7 +2723,7 @@ export function CryptoTestnetPanel() {
                 onChange={handleTestnetStrategyModeChange}
                 disabled={monInputsLocked || monitorActionBusy}
                 className="crypto-monitor-field"
-                selectClassName="radar-input crypto-monitor-input crypto-monitor-select"
+                selectClassName="radar-input crypto-testnet-input crypto-monitor-input crypto-monitor-select crypto-testnet-select"
               />
               <div className="crypto-monitor-timeframe-box">
                 <CryptoTimeframeField
@@ -2738,7 +2739,7 @@ export function CryptoTestnetPanel() {
                 <span className="crypto-testnet-field-label crypto-monitor-field-label">USDT por entrada</span>
                 <input
                   type="number"
-                  className="radar-input crypto-monitor-input"
+                  className="radar-input crypto-testnet-input crypto-monitor-input"
                   min={MIN_TESTNET_ORDER_USDT}
                   max={TESTNET_MAX_ORDER_NOTIONAL_USDT}
                   step="0.01"
@@ -2755,7 +2756,7 @@ export function CryptoTestnetPanel() {
                 <CryptoTestnetMinScoreLabel />
                 <input
                   type="number"
-                  className="radar-input crypto-monitor-input"
+                  className="radar-input crypto-testnet-input crypto-monitor-input"
                   min={0}
                   max={100}
                   step="0.5"
@@ -2769,7 +2770,7 @@ export function CryptoTestnetPanel() {
                 <CryptoTestnetMaxOpenAssetsLabel />
                 <input
                   type="number"
-                  className="radar-input crypto-monitor-input"
+                  className="radar-input crypto-testnet-input crypto-monitor-input"
                   min={1}
                   max={50}
                   step={1}
@@ -2796,7 +2797,7 @@ export function CryptoTestnetPanel() {
                 <span className="crypto-testnet-field-label crypto-monitor-field-label">Intervalo monitor (min)</span>
                 <input
                   type="number"
-                  className="radar-input crypto-monitor-input"
+                  className="radar-input crypto-testnet-input crypto-monitor-input"
                   min={1}
                   max={1440}
                   step={1}
@@ -2809,7 +2810,7 @@ export function CryptoTestnetPanel() {
                 <CryptoTestnetStrategyCooldownLabel />
                 <input
                   type="number"
-                  className="radar-input crypto-monitor-input"
+                  className="radar-input crypto-testnet-input crypto-monitor-input"
                   min={0}
                   max={10080}
                   step={1}
@@ -2829,7 +2830,7 @@ export function CryptoTestnetPanel() {
                   <span className="crypto-testnet-field-label crypto-monitor-field-label">Stop Loss %</span>
                   <input
                     type="number"
-                    className="radar-input crypto-monitor-input"
+                    className="radar-input crypto-testnet-input crypto-monitor-input"
                     min={0}
                     step="0.1"
                     value={monSl}
@@ -2841,7 +2842,7 @@ export function CryptoTestnetPanel() {
                   <span className="crypto-testnet-field-label crypto-monitor-field-label">Take Profit %</span>
                   <input
                     type="number"
-                    className="radar-input crypto-monitor-input"
+                    className="radar-input crypto-testnet-input crypto-monitor-input"
                     min={0}
                     step="0.1"
                     value={monTp}
@@ -2853,7 +2854,7 @@ export function CryptoTestnetPanel() {
                   <span className="crypto-testnet-field-label crypto-monitor-field-label">Trailing Stop %</span>
                   <input
                     type="number"
-                    className="radar-input crypto-monitor-input"
+                    className="radar-input crypto-testnet-input crypto-monitor-input"
                     min={0}
                     step="0.1"
                     placeholder="—"
@@ -2868,7 +2869,7 @@ export function CryptoTestnetPanel() {
                   <span className="crypto-testnet-field-label crypto-monitor-field-label">Mín. valor salida USDT</span>
                   <input
                     type="number"
-                    className="radar-input crypto-monitor-input"
+                    className="radar-input crypto-testnet-input crypto-monitor-input"
                     min={0}
                     step="0.5"
                     value={monExitMin}
@@ -2886,7 +2887,7 @@ export function CryptoTestnetPanel() {
                     </span>
                     <input
                       type="number"
-                      className="radar-input crypto-monitor-input"
+                      className="radar-input crypto-testnet-input crypto-monitor-input"
                       min={0}
                       step="0.1"
                       value={monBeTrig}
@@ -2898,7 +2899,7 @@ export function CryptoTestnetPanel() {
                     <span className="crypto-testnet-field-label crypto-monitor-field-label">Stop break-even %</span>
                     <input
                       type="number"
-                      className="radar-input crypto-monitor-input"
+                      className="radar-input crypto-testnet-input crypto-monitor-input"
                       min={0}
                       step="0.1"
                       value={monBePlus}
@@ -3241,6 +3242,91 @@ export function CryptoTestnetPanel() {
       </div>
       ) : null}
 
+      {activeTestnetModule === "auto_testnet" ? (
+        <div className="crypto-testnet-module" id="crypto-testnet-module-auto_testnet" role="tabpanel">
+          <TestnetModuleHeader
+            title="Auto Testnet"
+            lead="Solo estructura y requisitos de seguridad. Sin ejecución automática en este paso."
+          />
+          <section className="card crypto-testnet-section">
+            <div className="crypto-testnet-mini-grid crypto-testnet-mini-grid--dense" style={{ marginBottom: "0.65rem" }}>
+              <div className="crypto-testnet-kpi">
+                <span className="crypto-testnet-kpi-label">Estado</span>
+                <span className="crypto-testnet-kpi-value">Desactivado</span>
+              </div>
+            </div>
+            <p className="msg-muted" style={{ margin: "0 0 0.75rem", fontSize: "0.88rem", lineHeight: 1.45 }}>
+              Modo automático solo para Binance Spot Testnet/Sandbox. Nunca opera Binance real.
+            </p>
+            <p className="crypto-testnet-note crypto-testnet-note--blue" style={{ marginBottom: "0.5rem" }}>
+              Este panel no envía órdenes. El runner automático se diseñará aparte con guardas de sandbox y límites.
+            </p>
+            <h4 className="crypto-testnet-subheading" style={{ marginBottom: "0.35rem" }}>
+              Checklist seguridad (objetivo)
+            </h4>
+            <ul className="crypto-testnet-auto-checklist">
+              <li>
+                <span
+                  className={`crypto-testnet-auto-check-icon ${
+                    status?.configured && status?.enabled ? "crypto-testnet-auto-check-icon--ok" : "crypto-testnet-auto-check-icon--pending"
+                  }`}
+                  aria-hidden
+                >
+                  {status?.configured && status?.enabled ? "✓" : "○"}
+                </span>
+                <span>Sandbox confirmado (testnet habilitado en esta app)</span>
+              </li>
+              <li>
+                <span className="crypto-testnet-auto-check-icon crypto-testnet-auto-check-icon--ok" aria-hidden>
+                  ✓
+                </span>
+                <span>Binance real no usado en este módulo (solo Spot Testnet)</span>
+              </li>
+              <li>
+                <span className="crypto-testnet-auto-check-icon crypto-testnet-auto-check-icon--ok" aria-hidden>
+                  ✓
+                </span>
+                <span>
+                  Límite por orden (política actual testnet: hasta {TESTNET_MAX_ORDER_NOTIONAL_USDT} USDT; el runner
+                  reforzará tope explícito)
+                </span>
+              </li>
+              <li>
+                <span className="crypto-testnet-auto-check-icon crypto-testnet-auto-check-icon--pending" aria-hidden>
+                  ○
+                </span>
+                <span>Máx. activos abiertos (pendiente en runner con guardas)</span>
+              </li>
+              <li>
+                <span className="crypto-testnet-auto-check-icon crypto-testnet-auto-check-icon--pending" aria-hidden>
+                  ○
+                </span>
+                <span>Stop loss / take profit / trailing configurados en el flujo automático</span>
+              </li>
+              <li>
+                <span className="crypto-testnet-auto-check-icon crypto-testnet-auto-check-icon--pending" aria-hidden>
+                  ○
+                </span>
+                <span>Botón de emergencia (kill switch) requerido antes de activar</span>
+              </li>
+            </ul>
+            <div className="crypto-testnet-auto-actions">
+              <span
+                className="crypto-testnet-auto-tooltip-wrap"
+                title="Pendiente: primero validamos monitor y métricas."
+              >
+                <button type="button" className="radar-refresh-btn" disabled>
+                  Activar Auto Testnet
+                </button>
+              </span>
+              <button type="button" className="radar-refresh-btn" disabled>
+                Detener Auto Testnet
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {activeTestnetModule === "operate" ? (
       <div className="crypto-testnet-module" id="crypto-testnet-module-operate" role="tabpanel">
         <TestnetModuleHeader
@@ -3308,7 +3394,7 @@ export function CryptoTestnetPanel() {
                 <label className="radar-toolbar__field">
                   <span className="radar-toolbar__label">Par</span>
                   <select
-                    className="radar-toolbar__select"
+                    className="radar-toolbar__select crypto-testnet-select crypto-manual-order-select"
                     value={manualSymbol}
                     onChange={(ev) => setManualSymbol(ev.target.value)}
                     disabled={orderBusy}
@@ -3398,7 +3484,7 @@ export function CryptoTestnetPanel() {
                     <span className="msg-muted">Cantidad ({baseAssetHint})</span>
                     <input
                       type="number"
-                      className="radar-input"
+                      className="radar-input crypto-testnet-input crypto-manual-order-input"
                       min={0}
                       step="any"
                       value={manualLimitQty}
@@ -3410,7 +3496,7 @@ export function CryptoTestnetPanel() {
                     <span className="msg-muted">Precio límite (USDT)</span>
                     <input
                       type="number"
-                      className="radar-input"
+                      className="radar-input crypto-testnet-input crypto-manual-order-input"
                       min={0}
                       step="any"
                       value={manualLimitPrice}
@@ -3434,7 +3520,7 @@ export function CryptoTestnetPanel() {
                   <span className="msg-muted">Monto en USDT (comprás contra {manualSymbol})</span>
                   <input
                     type="number"
-                    className="radar-input"
+                    className="radar-input crypto-testnet-input crypto-manual-order-input"
                     min={MIN_TESTNET_ORDER_USDT}
                     max={TESTNET_MAX_ORDER_NOTIONAL_USDT}
                     step="0.01"
@@ -3484,7 +3570,7 @@ export function CryptoTestnetPanel() {
                       <span className="msg-muted">Monto aproximado a vender en USDT</span>
                       <input
                         type="number"
-                        className="radar-input"
+                        className="radar-input crypto-testnet-input crypto-manual-order-input"
                         min={MIN_TESTNET_ORDER_USDT}
                         max={TESTNET_MAX_ORDER_NOTIONAL_USDT}
                         step="0.01"
@@ -3501,7 +3587,7 @@ export function CryptoTestnetPanel() {
                       <span className="msg-muted">Cantidad exacta en {baseAssetHint}</span>
                       <input
                         type="number"
-                        className="radar-input"
+                        className="radar-input crypto-testnet-input crypto-manual-order-input"
                         min={0}
                         step="any"
                         value={manualAmountBase}

@@ -341,6 +341,19 @@ export type CryptoTestnetAppClosedPosition = {
   closed_at?: string | null;
 };
 
+export type CryptoTestnetAppPositionsSummary = {
+  total_realized_pnl_usdt: number;
+  total_unrealized_pnl_usdt: number | null;
+  total_pnl_usdt: number;
+  total_closed_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate_pct: number | null;
+  total_capital_operated_usdt: number;
+  realized_return_on_operated_capital_pct: number | null;
+  historical_tna_pct: number | null;
+};
+
 export type CryptoTestnetAppPositionsPayload = {
   ok: boolean;
   error: string | null;
@@ -350,20 +363,44 @@ export type CryptoTestnetAppPositionsPayload = {
   unrealized_pnl_usdt: number | null;
   updated_at: string;
   source?: string;
+  summary?: CryptoTestnetAppPositionsSummary | null;
 };
 
 function isCryptoTestnetAppPositionsPayload(data: unknown): data is CryptoTestnetAppPositionsPayload {
   if (data === null || typeof data !== "object") return false;
   const o = data as Record<string, unknown>;
-  return (
-    typeof o.ok === "boolean" &&
-    (o.error === null || typeof o.error === "string") &&
-    Array.isArray(o.open_positions) &&
-    Array.isArray(o.closed_positions) &&
-    typeof o.realized_pnl_usdt === "number" &&
-    (o.unrealized_pnl_usdt === null || typeof o.unrealized_pnl_usdt === "number") &&
-    typeof o.updated_at === "string"
-  );
+  if (
+    !(
+      typeof o.ok === "boolean" &&
+      (o.error === null || typeof o.error === "string") &&
+      Array.isArray(o.open_positions) &&
+      Array.isArray(o.closed_positions) &&
+      typeof o.realized_pnl_usdt === "number" &&
+      (o.unrealized_pnl_usdt === null || typeof o.unrealized_pnl_usdt === "number") &&
+      typeof o.updated_at === "string"
+    )
+  ) {
+    return false;
+  }
+  if (o.summary !== undefined && o.summary !== null) {
+    if (typeof o.summary !== "object") return false;
+    const s = o.summary as Record<string, unknown>;
+    if (
+      typeof s.total_realized_pnl_usdt !== "number" ||
+      !(s.total_unrealized_pnl_usdt === null || typeof s.total_unrealized_pnl_usdt === "number") ||
+      typeof s.total_pnl_usdt !== "number" ||
+      typeof s.total_closed_trades !== "number" ||
+      typeof s.winning_trades !== "number" ||
+      typeof s.losing_trades !== "number" ||
+      !(s.win_rate_pct === null || typeof s.win_rate_pct === "number") ||
+      typeof s.total_capital_operated_usdt !== "number" ||
+      !(s.realized_return_on_operated_capital_pct === null || typeof s.realized_return_on_operated_capital_pct === "number") ||
+      !(s.historical_tna_pct === null || typeof s.historical_tna_pct === "number")
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export async function getCryptoTestnetAppPositions(): Promise<CryptoTestnetAppPositionsPayload> {
