@@ -13,7 +13,7 @@ _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 if _ENV_FILE.is_file():
     load_dotenv(_ENV_FILE, override=True)
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
 from api.portfolio import router as portfolio_router
@@ -676,6 +676,73 @@ def crypto_testnet_monitor_stop():
         return mon.stop_testnet_monitor()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Monitor testnet: {e}") from e
+
+
+class CryptoTestnetAutoStartBody(BaseModel):
+    """Parámetros del auto runner testnet (sandbox); todos opcionales con defaults seguros."""
+
+    strategy_mode: str = Field(default="daily_intraday", min_length=1, max_length=32)
+    timeframe: str = Field(default="30m", min_length=1, max_length=24)
+    limit: int = Field(default=200, ge=50, le=1000)
+    min_entry_score: float = Field(default=65, ge=0, le=100)
+    require_btc_trend_up: bool = False
+    cooldown_minutes: int = Field(default=60, ge=0)
+    max_open_positions: int = Field(default=3, ge=1, le=50)
+    quote_amount_usdt: float = Field(default=15, gt=0)
+    cycle_interval_minutes: float = Field(default=5, ge=1, le=1440)
+    stop_loss_pct: float = Field(default=1.2, ge=0)
+    take_profit_pct: float = Field(default=2.2, ge=0)
+    trailing_stop_pct: float = Field(default=1.0, ge=0)
+    break_even_trigger_pct: float = Field(default=1.0, ge=0)
+    break_even_plus_pct: float = Field(default=0.1, ge=0)
+    min_exit_value_usdt: float = Field(default=5, ge=0)
+    max_trades_per_day: int = Field(default=5, ge=1, le=100)
+    max_daily_loss_usdt: float = Field(default=10, gt=0)
+    max_total_exposure_usdt: float = Field(default=50, gt=0)
+    max_quote_per_order_usdt: float = Field(default=100, gt=0)
+
+
+@app.get("/crypto/testnet/auto/status")
+def crypto_testnet_auto_status():
+    """Estado del auto runner testnet (órdenes MARKET sólo sandbox)."""
+    from services.crypto import auto_testnet_runner as auto_tn
+
+    return auto_tn.get_testnet_auto_status()
+
+
+@app.get("/crypto/testnet/auto/cycles")
+def crypto_testnet_auto_cycles(limit: int = Query(50, ge=1, le=500)):
+    """Historial JSONL de ciclos del auto testnet."""
+    from services.crypto import auto_testnet_runner as auto_tn
+
+    return auto_tn.get_testnet_auto_cycles(limit=limit)
+
+
+@app.post("/crypto/testnet/auto/start")
+def crypto_testnet_auto_start(
+    body: CryptoTestnetAutoStartBody = Body(default_factory=CryptoTestnetAutoStartBody),
+):
+    """Activa el auto runner testnet (kill switch vía /auto/stop)."""
+    from services.crypto import auto_testnet_runner as auto_tn
+
+    payload = body.model_dump(exclude_none=True)
+    try:
+        return auto_tn.start_testnet_auto(params=payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Auto testnet: {e}") from e
+
+
+@app.post("/crypto/testnet/auto/stop")
+def crypto_testnet_auto_stop():
+    """Detiene el auto runner testnet."""
+    from services.crypto import auto_testnet_runner as auto_tn
+
+    try:
+        return auto_tn.stop_testnet_auto()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Auto testnet: {e}") from e
 
 
 @app.get("/crypto/testnet/ticker")

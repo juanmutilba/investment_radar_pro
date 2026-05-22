@@ -1742,6 +1742,45 @@ table.radar-table thead .radar-table__sticky-col {
   z-index: 2;
 }
 
+table.radar-table .radar-ticker-btn {
+  display: inline;
+  max-width: 100%;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent, #60a5fa);
+  cursor: pointer;
+  text-align: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent, #60a5fa) 55%, transparent);
+  text-underline-offset: 2px;
+}
+
+table.radar-table .radar-ticker-btn:hover {
+  color: color-mix(in srgb, var(--accent, #60a5fa) 88%, #fff);
+}
+
+table.radar-table .radar-ticker-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent, #60a5fa) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+table.radar-table .radar-ticker-btn--active {
+  color: color-mix(in srgb, var(--accent, #60a5fa) 100%, #fef08a);
+}
+
+table.radar-table tr.radar-table__row--selected td {
+  background: color-mix(in srgb, var(--accent, #3b82f6) 10%, var(--bg-panel));
+}
+
+table.radar-table tr.radar-table__row--selected .radar-table__sticky-col {
+  background: color-mix(in srgb, var(--accent, #3b82f6) 12%, var(--bg-panel));
+}
+
 .table-cell--empty {
   color: var(--text-muted);
   opacity: 0.28;
@@ -3391,6 +3430,30 @@ table.radar-table thead .radar-table__sticky-col {
 .crypto-testnet-btn-monitor-stop:hover:not(:disabled) {
   border-color: var(--danger);
   background: color-mix(in srgb, var(--danger) 20%, var(--bg-panel));
+}
+
+.crypto-testnet-btn-auto-start {
+  border-color: color-mix(in srgb, #16a34a 60%, var(--border));
+  background: color-mix(in srgb, #16a34a 28%, var(--bg-panel));
+  color: #166534;
+  font-weight: 600;
+}
+
+.crypto-testnet-btn-auto-start:hover:not(:disabled) {
+  border-color: #16a34a;
+  background: color-mix(in srgb, #16a34a 38%, var(--bg-panel));
+}
+
+.crypto-testnet-btn-auto-stop {
+  border-color: color-mix(in srgb, #dc2626 60%, var(--border));
+  background: color-mix(in srgb, #dc2626 22%, var(--bg-panel));
+  color: #991b1b;
+  font-weight: 600;
+}
+
+.crypto-testnet-btn-auto-stop:hover:not(:disabled) {
+  border-color: #dc2626;
+  background: color-mix(in srgb, #dc2626 32%, var(--bg-panel));
 }
 
 .crypto-monitor-safe-notice {

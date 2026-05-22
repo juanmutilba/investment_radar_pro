@@ -938,6 +938,137 @@ export async function getCryptoTestnetMonitorCycles(limit = 20): Promise<CryptoT
   return { ...data, total };
 }
 
+/** POST /crypto/testnet/auto/start — runner automático sólo sandbox (MARKET). */
+export type CryptoTestnetAutoStartBody = {
+  strategy_mode?: CryptoStrategyMode;
+  timeframe?: string;
+  limit?: number;
+  min_entry_score?: number;
+  require_btc_trend_up?: boolean;
+  cooldown_minutes?: number;
+  max_open_positions?: number;
+  quote_amount_usdt?: number;
+  cycle_interval_minutes?: number;
+  stop_loss_pct?: number;
+  take_profit_pct?: number;
+  trailing_stop_pct?: number;
+  break_even_trigger_pct?: number;
+  break_even_plus_pct?: number;
+  min_exit_value_usdt?: number;
+  max_trades_per_day?: number;
+  max_daily_loss_usdt?: number;
+  max_total_exposure_usdt?: number;
+  max_quote_per_order_usdt?: number;
+};
+
+export type CryptoTestnetAutoParamsSnapshot = Record<string, unknown>;
+
+export type CryptoTestnetAutoStatusPayload = {
+  ok: boolean;
+  enabled: boolean;
+  running: boolean;
+  stop_reason?: string | null;
+  last_run_at?: string | null;
+  next_run_at?: string | null;
+  last_error?: string | null;
+  last_action?: string | null;
+  last_cycle_started_at?: string | null;
+  last_cycle_finished_at?: string | null;
+  last_cycle_duration_ms?: number | null;
+  interval_seconds?: number;
+  params?: CryptoTestnetAutoParamsSnapshot;
+  utc_day?: string | null;
+  auto_entries_today?: number;
+  auto_daily_pnl_usdt?: number;
+  last_sandbox_status?: Record<string, unknown> | null;
+  last_cycle_record?: Record<string, unknown> | null;
+  app_total_pnl_usdt?: number | null;
+  app_realized_pnl_usdt?: number | null;
+  app_unrealized_pnl_usdt?: number | null;
+  app_positions_error?: string;
+};
+
+function isCryptoTestnetAutoStatusPayload(data: unknown): data is CryptoTestnetAutoStatusPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return typeof o.ok === "boolean" && typeof o.enabled === "boolean" && typeof o.running === "boolean";
+}
+
+export async function getCryptoTestnetAutoStatus(): Promise<CryptoTestnetAutoStatusPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/auto/status`, { headers: { Accept: "application/json" } });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetAutoStatusPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/testnet/auto/status");
+  }
+  return data;
+}
+
+export async function postCryptoTestnetAutoStart(body: CryptoTestnetAutoStartBody): Promise<CryptoTestnetAutoStatusPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/auto/start`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetAutoStatusPayload(data)) {
+    throw new Error("Respuesta inesperada: POST /crypto/testnet/auto/start");
+  }
+  return data;
+}
+
+export async function postCryptoTestnetAutoStop(): Promise<CryptoTestnetAutoStatusPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/auto/stop`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetAutoStatusPayload(data)) {
+    throw new Error("Respuesta inesperada: POST /crypto/testnet/auto/stop");
+  }
+  return data;
+}
+
+export type CryptoTestnetAutoCycleRow = Record<string, unknown>;
+
+export type CryptoTestnetAutoCyclesPayload = {
+  ok: boolean;
+  error?: string;
+  cycles: CryptoTestnetAutoCycleRow[];
+  total: number;
+};
+
+function isCryptoTestnetAutoCyclesPayload(data: unknown): data is CryptoTestnetAutoCyclesPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return typeof o.ok === "boolean" && Array.isArray(o.cycles);
+}
+
+export async function getCryptoTestnetAutoCycles(limit = 20): Promise<CryptoTestnetAutoCyclesPayload> {
+  const q = new URLSearchParams({ limit: String(Math.min(500, Math.max(1, limit))) });
+  const res = await fetch(`${BASE}/crypto/testnet/auto/cycles?${q}`, {
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetAutoCyclesPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/testnet/auto/cycles");
+  }
+  const total =
+    typeof data.total === "number" && Number.isFinite(data.total) ? data.total : data.cycles.length;
+  return { ...data, total };
+}
+
 export async function getCryptoTestnetTicker(symbol: string): Promise<CryptoTestnetTickerPayload> {
   const q = new URLSearchParams({ symbol: symbol.trim() });
   const res = await fetch(`${BASE}/crypto/testnet/ticker?${q.toString()}`);
