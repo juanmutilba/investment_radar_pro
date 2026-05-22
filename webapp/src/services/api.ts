@@ -2689,6 +2689,62 @@ export async function getUsaEventsUpdateStatus(): Promise<UsaEventsUpdateStatus>
   return data;
 }
 
+/** GET /events/usa/{ticker} — eventos desde cache local (sin Yahoo en vivo). */
+export type UsaEventsForTickerPayload = {
+  ok: boolean;
+  error?: string;
+  ticker: string | null;
+  found: boolean;
+  skipped: boolean | null;
+  skip_reason: string | null;
+  cache_row_error: { type?: string; msg?: string; detail?: string } | null;
+  fecha_ultimo_earnings: string | null;
+  fecha_proximo_earnings: string | null;
+  dias_desde_ultimo_earnings: number | null;
+  dias_hasta_proximo_earnings: number | null;
+  fecha_ultimo_dividendo: string | null;
+  fecha_ex_dividendo: string | null;
+  ultimo_dividendo: number | null;
+  fecha_proximo_dividendo_estimado: string | null;
+  dias_hasta_proximo_dividendo: number | null;
+  dividend_yield_pago_pct: number | null;
+  dividend_yield_anual_estimado_pct: number | null;
+  frecuencia_dividendos: string | null;
+  dias_promedio_entre_dividendos: number | null;
+  dividendos_estimados_12m: number | null;
+  flujo_dividendos_12m_por_accion: number | null;
+  earnings_en_7d: boolean | null;
+  earnings_en_30d: boolean | null;
+  updated_at: string | null;
+  cache_row_age_days: number | null;
+  cache_stale_warning: boolean;
+  evento_sensible: boolean;
+  evento_sensible_motivos: string[];
+  has_eventos_en_cache: boolean;
+};
+
+function isUsaEventsForTickerPayload(v: unknown): v is UsaEventsForTickerPayload {
+  if (v === null || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  if (typeof o.ok !== "boolean") return false;
+  if (typeof o.ticker !== "string" && o.ticker !== null) return false;
+  if (typeof o.found !== "boolean") return false;
+  return true;
+}
+
+export async function getUsaEventsForTicker(ticker: string): Promise<UsaEventsForTickerPayload> {
+  const t = encodeURIComponent(ticker.trim());
+  const res = await fetch(`${BASE}/events/usa/${t}`);
+  if (!res.ok) {
+    throw new Error(await readHttpErrorMessage(res));
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isUsaEventsForTickerPayload(data)) {
+    throw new Error("Respuesta inesperada: events usa ticker");
+  }
+  return data;
+}
+
 // --- Cartera (SQLite) ---
 
 export type PortfolioAssetType = "USA" | "Argentina" | "CEDEAR";

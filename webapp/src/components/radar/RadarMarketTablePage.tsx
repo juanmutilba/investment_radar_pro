@@ -10,6 +10,8 @@ import {
 
 import { type LatestRadarResponse, type RadarRow } from "@/services/api";
 
+import { UsaTickerEventsPanel } from "@/components/usa/UsaTickerEventsPanel";
+
 import { renderCellInner, type RenderCellKeys } from "./radarTableCells";
 import {
   cellForColumn,
@@ -41,6 +43,8 @@ export type RadarMarketTablePageProps = {
     keys: string[];
     options: string[];
   };
+  /** Si true y el filtro deja una sola fila (detalle), muestra eventos USA desde cache. */
+  usaTickerEventsDetail?: boolean;
 };
 
 function colKeys(columns: ColumnDef[], id: string): string[] {
@@ -62,6 +66,7 @@ export function RadarMarketTablePage({
   tickerSearchExact = false,
   renderRowActions,
   emptySheetMessage,
+  usaTickerEventsDetail = false,
 }: RadarMarketTablePageProps) {
   const cellOpts = useMemo<CellFormatOptions>(
     () =>
@@ -346,6 +351,14 @@ export function RadarMarketTablePage({
     return copy;
   }, [filteredRows, sortCriteria, columnById, tickerCol]);
 
+  const soloTicker = useMemo(() => {
+    if (!usaTickerEventsDetail || displayRows.length !== 1) return null;
+    const t = String(getRaw(displayRows[0], tickerCol.keys) ?? "")
+      .trim()
+      .toUpperCase();
+    return t || null;
+  }, [usaTickerEventsDetail, displayRows, tickerCol.keys]);
+
   const onHeaderSortClick = useCallback(
     (columnId: string, e: ReactMouseEvent<HTMLButtonElement>) => {
       const col = columnById[columnId];
@@ -595,6 +608,8 @@ export function RadarMarketTablePage({
               {universe && universeValue ? ` · ${universe.label.toLowerCase()}: ${universeValue}` : ""}
             </p>
           </div>
+
+          {soloTicker ? <UsaTickerEventsPanel ticker={soloTicker} /> : null}
 
           <div className="radar-table-wrap">
             <table className="radar-table">

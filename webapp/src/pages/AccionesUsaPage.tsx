@@ -21,6 +21,7 @@ export function AccionesUsaPage() {
       formatEbitda={formatEbitdaUsd}
       initialSearch={initialSearch}
       tickerSearchExact={tickerSearchExact}
+      usaTickerEventsDetail
       universe={{
         label: "Universo",
         allLabel: "Todas",

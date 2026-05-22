@@ -1933,3 +1933,14 @@ def get_update_events_usa_status():
     with _USA_EVENTS_LOCK:
         _apply_usa_events_progress_locked()
         return dict(_USA_EVENTS_UPDATE)
+
+
+@app.get("/events/usa/{ticker}")
+def get_events_usa_for_ticker(ticker: str):
+    """
+    Eventos USA desde data/events_cache_usa.json (sin Yahoo en vivo).
+    Pensado para cruzar con el detalle de Acciones USA / radar.
+    """
+    from services.usa_events_cache import get_events_for_ticker
+
+    return get_events_for_ticker(ticker)
