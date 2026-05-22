@@ -1,4 +1,4 @@
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { PortfolioRowTradeButtons } from "@/components/cartera/PortfolioRowTradeButtons";
 import { RadarMarketTablePage } from "@/components/radar/RadarMarketTablePage";
 import { formatEbitdaUsd, getRaw, parseNumberLoose } from "@/components/radar/radarTableCore";
@@ -9,6 +9,7 @@ const TICKER_KEYS = COLUMNS_USA.find((c) => c.id === "ticker")!.keys;
 const PRECIO_KEYS = COLUMNS_USA.find((c) => c.id === "precio")!.keys;
 
 export function AccionesUsaPage() {
+  const navigate = useNavigate();
   const [params] = useSearchParams();
   const initialSearch = params.get("ticker")?.trim() || undefined;
   const tickerSearchExact = params.get("exact") === "1";
@@ -21,7 +22,16 @@ export function AccionesUsaPage() {
       formatEbitda={formatEbitdaUsd}
       initialSearch={initialSearch}
       tickerSearchExact={tickerSearchExact}
-      usaTickerEventsDetail
+      usaTickerScreenerDetail
+      onTickerClick={(t) => {
+        const q = new URLSearchParams();
+        q.set("ticker", t);
+        q.set("exact", "1");
+        navigate(`/acciones-usa?${q.toString()}`, { replace: true });
+      }}
+      onTickerDetailClose={() => {
+        navigate("/acciones-usa", { replace: true });
+      }}
       universe={{
         label: "Universo",
         allLabel: "Todas",

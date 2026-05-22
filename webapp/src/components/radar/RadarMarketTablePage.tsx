@@ -10,7 +10,7 @@ import {
 
 import { type LatestRadarResponse, type RadarRow } from "@/services/api";
 
-import { UsaTickerEventsPanel } from "@/components/usa/UsaTickerEventsPanel";
+import { UsaTickerDetailPanel } from "@/components/usa/UsaTickerDetailPanel";
 
 import { renderCellInner, type RenderCellKeys } from "./radarTableCells";
 import {
@@ -43,8 +43,17 @@ export type RadarMarketTablePageProps = {
     keys: string[];
     options: string[];
   };
-  /** Si true y el filtro deja una sola fila (detalle), muestra eventos USA desde cache. */
-  usaTickerEventsDetail?: boolean;
+  /**
+   * USA: ticker clicable + panel de detalle bajo la tabla (screener intacto).
+   * No usar en Argentina para no cambiar UX allí.
+   */
+  usaTickerScreenerDetail?: boolean;
+  /**
+   * USA: al hacer clic en el ticker (p. ej. navegar a `?ticker=X&exact=1` para alinear con el filtro manual).
+   */
+  onTickerClick?: (ticker: string) => void;
+  /** USA: cerrar detalle (p. ej. limpiar query de la ruta). */
+  onTickerDetailClose?: () => void;
 };
 
 function colKeys(columns: ColumnDef[], id: string): string[] {
@@ -66,7 +75,9 @@ export function RadarMarketTablePage({
   tickerSearchExact = false,
   renderRowActions,
   emptySheetMessage,
-  usaTickerEventsDetail = false,
+  usaTickerScreenerDetail = false,
+  onTickerClick,
+  onTickerDetailClose,
 }: RadarMarketTablePageProps) {
   const cellOpts = useMemo<CellFormatOptions>(
     () =>
@@ -351,13 +362,34 @@ export function RadarMarketTablePage({
     return copy;
   }, [filteredRows, sortCriteria, columnById, tickerCol]);
 
-  const soloTicker = useMemo(() => {
-    if (!usaTickerEventsDetail || displayRows.length !== 1) return null;
-    const t = String(getRaw(displayRows[0], tickerCol.keys) ?? "")
+  const usaShowTickerDetail =
+    Boolean(usaTickerScreenerDetail && onTickerClick && tickerSearchExact && displayRows.length === 1);
+
+  const usaDetailRow = useMemo(() => {
+    if (!usaShowTickerDetail) return null;
+    return displayRows[0] ?? null;
+  }, [usaShowTickerDetail, displayRows]);
+
+  const usaDetailTicker = useMemo(() => {
+    if (!usaDetailRow) return null;
+    const t = String(getRaw(usaDetailRow, tickerCol.keys) ?? "")
       .trim()
       .toUpperCase();
     return t || null;
-  }, [usaTickerEventsDetail, displayRows, tickerCol.keys]);
+  }, [usaDetailRow, tickerCol.keys]);
+
+  const usaPanelOpen = Boolean(
+    usaShowTickerDetail && usaDetailTicker && search.trim().toUpperCase() === usaDetailTicker,
+  );
+
+  const handleUsaTickerNavigate = useCallback(
+    (raw: string) => {
+      const tick = raw.trim().toUpperCase();
+      if (!tick || !onTickerClick) return;
+      onTickerClick(tick);
+    },
+    [onTickerClick],
+  );
 
   const onHeaderSortClick = useCallback(
     (columnId: string, e: ReactMouseEvent<HTMLButtonElement>) => {
@@ -609,8 +641,6 @@ export function RadarMarketTablePage({
             </p>
           </div>
 
-          {soloTicker ? <UsaTickerEventsPanel ticker={soloTicker} /> : null}
-
           <div className="radar-table-wrap">
             <table className="radar-table">
               <thead>
@@ -699,8 +729,16 @@ export function RadarMarketTablePage({
                 </tr>
               </thead>
               <tbody>
-                {displayRows.map((row, i) => (
-                  <tr key={`${cellForColumn(tickerCol, row, cellOpts).text}-${String(i)}`}>
+                {displayRows.map((row, i) => {
+                  const rowTick = String(getRaw(row, tickerCol.keys) ?? "")
+                    .trim()
+                    .toUpperCase();
+                  const rowSelected = Boolean(usaPanelOpen && rowTick === usaDetailTicker);
+                  return (
+                  <tr
+                    key={`${cellForColumn(tickerCol, row, cellOpts).text}-${String(i)}`}
+                    className={rowSelected ? "radar-table__row--selected" : undefined}
+                  >
                     {columns.map((c) => {
                       const { text, missing } = cellForColumn(c, row, cellOpts);
                       const w = colWidths[c.id] ?? c.minWidth;
@@ -723,7 +761,18 @@ export function RadarMarketTablePage({
                                   : undefined
                           }
                         >
-                          {renderCellInner(c, row, text, missing, renderKeys)}
+                          {c.id === "ticker" && usaTickerScreenerDetail && onTickerClick && !missing ? (
+                            <button
+                              type="button"
+                              className={`radar-ticker-btn${usaPanelOpen && rowTick === usaDetailTicker ? " radar-ticker-btn--active" : ""}`}
+                              onClick={() => handleUsaTickerNavigate(text)}
+                              title={`Ver detalle de ${text.trim()}`}
+                            >
+                              {text}
+                            </button>
+                          ) : (
+                            renderCellInner(c, row, text, missing, renderKeys)
+                          )}
                         </td>
                       );
                     })}
@@ -736,10 +785,23 @@ export function RadarMarketTablePage({
                       </td>
                     ) : null}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
+
+          {usaPanelOpen && usaDetailTicker ? (
+            <UsaTickerDetailPanel
+              ticker={usaDetailTicker}
+              row={usaDetailRow}
+              columns={columns}
+              cellOpts={cellOpts}
+              renderKeys={renderKeys}
+              onClose={() => onTickerDetailClose?.()}
+            />
+          ) : null}
+
           {radar?.file ? (
             <p
               className="msg-muted"
