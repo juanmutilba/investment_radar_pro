@@ -5,6 +5,7 @@ No usa BINANCE_API_KEY / BINANCE_API_SECRET (cuenta real).
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -2137,10 +2138,14 @@ def propose_testnet_exits(
     min_value_usdt: float = 5.0,
     break_even_trigger_pct: float = 0.0,
     break_even_plus_pct: float = 0.0,
+    persist_trailing_state: bool = True,
 ) -> dict[str, Any]:
     """
     Propone ventas testnet desde posiciones abiertas registradas por la app (FIFO local).
     Evalúa SL/TP por precio, trailing y break-even opcional. Sin ejecutar órdenes.
+
+    persist_trailing_state: si False, evalúa con copia en memoria del estado de trailing
+    (no escribe disco). Útil para diagnóstico en lecturas frecuentes (p. ej. GET auto/status).
     """
     if not math.isfinite(stop_loss_pct) or stop_loss_pct < 0:
         raise ValueError("stop_loss_pct inválido")
@@ -2174,7 +2179,11 @@ def propose_testnet_exits(
         }
 
     bal_payload = get_testnet_balances()
-    position_state = _load_testnet_position_state()
+    position_state_disk = _load_testnet_position_state()
+    if persist_trailing_state:
+        position_state = position_state_disk
+    else:
+        position_state = copy.deepcopy(position_state_disk)
     position_state_dirty = False
     active_symbols: set[str] = set()
     proposals: list[dict[str, Any]] = []
@@ -2226,7 +2235,7 @@ def propose_testnet_exits(
         position_state.clear()
         position_state.update(pruned)
         position_state_dirty = True
-    if position_state_dirty:
+    if position_state_dirty and persist_trailing_state:
         _atomic_write_testnet_position_state(position_state)
 
     _log(
@@ -2309,9 +2318,12 @@ def _append_manual_testnet_order_record(
     order_type: str = "MARKET",
     limit_price: float | None = None,
     amount: float | None = None,
+    order_context: dict[str, Any] | None = None,
 ) -> None:
     """Persiste sólo campos permitidos (sin secrets)."""
     ot = (order_type or "MARKET").strip().upper()
+    ctx = order_context if isinstance(order_context, dict) else {}
+    origin = str(ctx.get("order_origin") or "").strip() or "manual_testnet"
     row: dict[str, Any] = {
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "symbol": summary.get("symbol"),
@@ -2327,8 +2339,23 @@ def _append_manual_testnet_order_record(
         "average": summary.get("average"),
         "timestamp_exchange": summary.get("timestamp"),
         "raw_status": _normalize_raw_status_for_store(raw_ccxt_order.get("status")),
-        "source": "manual_testnet",
+        "source": origin,
     }
+    st = str(ctx.get("setup_type") or "").strip()
+    if st:
+        row["setup_type"] = st
+    es = ctx.get("entry_score")
+    if es is not None and str(es).strip() != "":
+        try:
+            row["entry_score"] = float(es)
+        except (TypeError, ValueError):
+            row["entry_score"] = es
+    sm = str(ctx.get("strategy_mode") or "").strip()
+    if sm:
+        row["strategy_mode"] = sm
+    tf = str(ctx.get("timeframe") or "").strip()
+    if tf:
+        row["timeframe"] = tf
 
     prev = _load_testnet_orders_json()
     prev.append(row)
@@ -2544,6 +2571,7 @@ def place_testnet_market_order(
     amount_base: float | None = None,
     sell_quote_amount_usdt: float | None = None,
     max_quote_usdt: float = TESTNET_MAX_ORDER_NOTIONAL_USDT,
+    order_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Orden market sólo testnet (sandbox).
@@ -2776,7 +2804,7 @@ def place_testnet_market_order(
         summary = _summarize_ccxt_order(sym, "sell", raw, order_type="market")
 
     try:
-        _append_manual_testnet_order_record(summary, raw, order_type="MARKET")
+        _append_manual_testnet_order_record(summary, raw, order_type="MARKET", order_context=order_context)
     except Exception as e:
         _log(f"orders_json: fallo persistencia (orden ya ejecutada en exchange): {_safe_error(e)}")
 

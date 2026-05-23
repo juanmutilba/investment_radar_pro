@@ -956,12 +956,45 @@ export type CryptoTestnetAutoStartBody = {
   break_even_plus_pct?: number;
   min_exit_value_usdt?: number;
   max_trades_per_day?: number;
+  /** Alias aceptado por el backend → max_trades_per_day */
+  max_entries_per_day?: number;
   max_daily_loss_usdt?: number;
   max_total_exposure_usdt?: number;
   max_quote_per_order_usdt?: number;
 };
 
 export type CryptoTestnetAutoParamsSnapshot = Record<string, unknown>;
+
+export type CryptoTestnetAutoOpenPositionRiskRow = {
+  symbol: string;
+  asset?: string | null;
+  avg_entry_price?: number | null;
+  current_price?: number | null;
+  unrealized_pnl_pct?: number | null;
+  stop_loss_price?: number | null;
+  take_profit_price?: number | null;
+  trailing_stop_price?: number | null;
+  break_even_price?: number | null;
+  highest_price?: number | null;
+  distance_to_stop_loss_pct?: number | null;
+  distance_to_take_profit_pct?: number | null;
+  exit_reason?: string | null;
+  position_status?: string | null;
+  evaluation_status?: string | null;
+  risk_status?: string;
+  risk_detail?: string | null;
+  message?: string | null;
+};
+
+export type CryptoTestnetAutoOpenPositionRiskPayload = {
+  ok: boolean;
+  error?: string | null;
+  evaluated_at?: string | null;
+  persist_trailing_state?: boolean;
+  open_positions_count?: number;
+  trailing_stop_pct_effective?: number | null;
+  positions: CryptoTestnetAutoOpenPositionRiskRow[];
+};
 
 export type CryptoTestnetAutoStatusPayload = {
   ok: boolean;
@@ -986,6 +1019,18 @@ export type CryptoTestnetAutoStatusPayload = {
   app_realized_pnl_usdt?: number | null;
   app_unrealized_pnl_usdt?: number | null;
   app_positions_error?: string;
+  /** Primer ciclo (ISO UTC) donde falló la guardia de sandbox consecutivamente. */
+  guard_first_failure_cycle_at?: string | null;
+  guard_last_failure_snapshot?: Record<string, unknown> | null;
+  last_guard_error_code?: string | null;
+  /** Última petición efectiva pre-clamp (merge defaults + estado + body). */
+  last_params_request?: Record<string, unknown> | null;
+  params_clamp_audit?: Array<{ field: string; requested: unknown; applied: unknown }>;
+  guard_advice?: string | null;
+  /** Diagnóstico de riesgo por posición (misma evaluación que propose_testnet_exits). */
+  open_position_risk?: CryptoTestnetAutoOpenPositionRiskPayload;
+  /** Alias de open_position_risk. */
+  auto_position_risk?: CryptoTestnetAutoOpenPositionRiskPayload;
 };
 
 function isCryptoTestnetAutoStatusPayload(data: unknown): data is CryptoTestnetAutoStatusPayload {
@@ -1033,6 +1078,62 @@ export async function postCryptoTestnetAutoStop(): Promise<CryptoTestnetAutoStat
   const data: unknown = await res.json().catch(() => null);
   if (!isCryptoTestnetAutoStatusPayload(data)) {
     throw new Error("Respuesta inesperada: POST /crypto/testnet/auto/stop");
+  }
+  return data;
+}
+
+export type CryptoTestnetStrategySetupAgg = {
+  trades?: number;
+  pnl_usdt?: number;
+  win_rate_pct?: number | null;
+};
+
+export type CryptoTestnetStrategyRecommendation = {
+  code?: string;
+  text?: string;
+  severity?: string;
+};
+
+export type CryptoTestnetStrategyAnalysisPayload = {
+  ok: boolean;
+  source?: string;
+  closed_trades_source?: string;
+  note?: string;
+  closed_trades_count?: number;
+  wins?: number;
+  losses?: number;
+  win_rate_pct?: number | null;
+  total_pnl_usdt?: number;
+  avg_pnl_per_trade_usdt?: number | null;
+  best_trade_usdt?: number | null;
+  worst_trade_usdt?: number | null;
+  avg_hold_duration_hours?: number | null;
+  by_symbol?: Record<string, CryptoTestnetStrategySetupAgg>;
+  by_hour_utc?: Record<string, CryptoTestnetStrategySetupAgg>;
+  by_setup?: Record<string, CryptoTestnetStrategySetupAgg>;
+  entry_score_samples?: number;
+  entry_score_avg?: number | null;
+  auto_cycles_sampled?: number;
+  auto_cycles_strategy_mode_counts?: Record<string, number>;
+  auto_cycles_buy_actions_count?: number;
+  auto_cycles_sell_ok_count?: number;
+  recommendations?: CryptoTestnetStrategyRecommendation[];
+};
+
+function isCryptoTestnetStrategyAnalysisPayload(data: unknown): data is CryptoTestnetStrategyAnalysisPayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return typeof o.ok === "boolean";
+}
+
+export async function getCryptoTestnetStrategyAnalysis(): Promise<CryptoTestnetStrategyAnalysisPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/strategy-analysis`, { headers: { Accept: "application/json" } });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetStrategyAnalysisPayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/testnet/strategy-analysis");
   }
   return data;
 }

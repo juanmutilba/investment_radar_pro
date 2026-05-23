@@ -14,7 +14,7 @@ if _ENV_FILE.is_file():
     load_dotenv(_ENV_FILE, override=True)
 
 from fastapi import Body, FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 from api.portfolio import router as portfolio_router
 from persistence.sqlite import init_database
@@ -696,10 +696,26 @@ class CryptoTestnetAutoStartBody(BaseModel):
     break_even_trigger_pct: float = Field(default=1.0, ge=0)
     break_even_plus_pct: float = Field(default=0.1, ge=0)
     min_exit_value_usdt: float = Field(default=5, ge=0)
-    max_trades_per_day: int = Field(default=5, ge=1, le=100)
+    max_trades_per_day: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices("max_trades_per_day", "max_entries_per_day"),
+    )
     max_daily_loss_usdt: float = Field(default=10, gt=0)
     max_total_exposure_usdt: float = Field(default=50, gt=0)
     max_quote_per_order_usdt: float = Field(default=100, gt=0)
+
+
+@app.get("/crypto/testnet/strategy-analysis")
+def crypto_testnet_strategy_analysis():
+    """Diagnóstico de rendimiento testnet (órdenes/ciclos/posiciones app); no ajusta parámetros."""
+    from services.crypto.testnet_strategy_analysis import analyze_testnet_strategy_performance
+
+    try:
+        return analyze_testnet_strategy_performance()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Strategy analysis: {e}") from e
 
 
 @app.get("/crypto/testnet/auto/status")
@@ -725,7 +741,7 @@ def crypto_testnet_auto_start(
     """Activa el auto runner testnet (kill switch vía /auto/stop)."""
     from services.crypto import auto_testnet_runner as auto_tn
 
-    payload = body.model_dump(exclude_none=True)
+    payload = body.model_dump(exclude_none=True, exclude_unset=True)
     try:
         return auto_tn.start_testnet_auto(params=payload)
     except ValueError as e:

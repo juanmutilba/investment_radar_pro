@@ -3456,6 +3456,27 @@ table.radar-table tr.radar-table__row--selected .radar-table__sticky-col {
   background: color-mix(in srgb, #dc2626 32%, var(--bg-panel));
 }
 
+.crypto-auto-risk-badge {
+  display: inline-block;
+  padding: 0.1rem 0.42rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.crypto-auto-risk-badge--hold {
+  border: 1px solid color-mix(in srgb, var(--border) 80%, #64748b);
+  background: color-mix(in srgb, var(--bg-panel) 88%, #64748b);
+  color: var(--text-muted, #64748b);
+}
+
+.crypto-auto-risk-badge--exit {
+  border: 1px solid color-mix(in srgb, #dc2626 55%, var(--border));
+  background: color-mix(in srgb, #dc2626 16%, var(--bg-panel));
+  color: #991b1b;
+}
+
 .crypto-monitor-safe-notice {
   margin-top: 0.65rem;
   margin-bottom: 0;

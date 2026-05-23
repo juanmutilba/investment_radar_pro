@@ -33,6 +33,7 @@ import {
   getCryptoTestnetOpenOrders,
   getCryptoTestnetOrders,
   getCryptoTestnetStatus,
+  getCryptoTestnetStrategyAnalysis,
   getCryptoTestnetTicker,
   postCryptoTestnetCancelOrder,
   postCryptoTestnetLimitOrder,
@@ -61,6 +62,7 @@ import {
   type CryptoTestnetProposeExitsPayload,
   type CryptoTestnetStoredOrder,
   type CryptoTestnetStatusPayload,
+  type CryptoTestnetStrategyAnalysisPayload,
   type CryptoTestnetTickerPayload,
   type CryptoStrategyMode,
 } from "@/services/api";
@@ -124,6 +126,29 @@ const MONITOR_BE_STOP_TOOLTIP =
 const MONITOR_FUTURE_AUTO_NOTE =
   "El modo automático con órdenes MARKET está en la pestaña Auto Testnet (sandbox; kill switch y límites).";
 
+/** Etiquetas cortas para auditoría de clamps (parámetros auto testnet). */
+const AUTO_PARAM_FIELD_LABELS: Record<string, string> = {
+  max_open_positions: "Máx. activos abiertos",
+  max_trades_per_day: "Máx. entradas / día",
+  quote_amount_usdt: "USDT por entrada",
+  max_total_exposure_usdt: "Máx. exposición USDT",
+  max_quote_per_order_usdt: "Tope orden USDT",
+  cycle_interval_minutes: "Intervalo ciclo (min)",
+  min_entry_score: "Score mínimo",
+  cooldown_minutes: "Cooldown (min)",
+  limit: "Velas (limit)",
+  stop_loss_pct: "Stop loss %",
+  take_profit_pct: "Take profit %",
+  trailing_stop_pct: "Trailing %",
+  break_even_trigger_pct: "BE activar %",
+  break_even_plus_pct: "BE stop %",
+  min_exit_value_usdt: "Mín. valor salida USDT",
+  max_daily_loss_usdt: "Máx. pérdida día USDT",
+  strategy_mode: "Modo estrategia",
+  timeframe: "Timeframe",
+  require_btc_trend_up: "Requerir BTC alcista",
+};
+
 const PORTFOLIO_ASSETS_DISCLAIMER =
   "Estos saldos son ficticios del entorno Binance Spot Testnet/Sandbox.";
 
@@ -179,6 +204,19 @@ function testnetStrategyModeLabel(mode: string | null | undefined): string {
   if (mode === "daily_intraday") return "Daily / Intradía";
   if (mode === "trend_swing") return "Trend / Swing";
   return mode?.trim() ? mode : "—";
+}
+
+function autoOpenRiskStatusLabel(code: string | null | undefined): string {
+  const c = (code ?? "").trim();
+  const labels: Record<string, string> = {
+    salida_sugerida: "Salida sugerida",
+    cerca_sl: "Cerca SL",
+    cerca_tp: "Cerca TP",
+    trailing_activo: "Trailing activo",
+    holding: "Mantener",
+    sin_evaluar: "Sin evaluar",
+  };
+  return labels[c] || (c ? c : "—");
 }
 
 function resolveTestnetStrategyMode(
@@ -808,6 +846,9 @@ export function CryptoTestnetPanel() {
   const [autoCycles, setAutoCycles] = useState<CryptoTestnetAutoCycleRow[]>([]);
   const [autoCyclesLoading, setAutoCyclesLoading] = useState(false);
   const [autoCyclesError, setAutoCyclesError] = useState<string | null>(null);
+  const [strategyAnalysis, setStrategyAnalysis] = useState<CryptoTestnetStrategyAnalysisPayload | null>(null);
+  const [strategyAnalysisLoading, setStrategyAnalysisLoading] = useState(false);
+  const [strategyAnalysisError, setStrategyAnalysisError] = useState<string | null>(null);
   const [autoStrategyMode, setAutoStrategyMode] = useState<CryptoStrategyMode>("daily_intraday");
   const [autoCycleMinutes, setAutoCycleMinutes] = useState("5");
   const [autoQuote, setAutoQuote] = useState("15");
@@ -1317,6 +1358,20 @@ export function CryptoTestnetPanel() {
     }
   }, []);
 
+  const loadStrategyAnalysis = useCallback(async () => {
+    setStrategyAnalysisLoading(true);
+    setStrategyAnalysisError(null);
+    try {
+      const r = await getCryptoTestnetStrategyAnalysis();
+      setStrategyAnalysis(r);
+    } catch (e: unknown) {
+      setStrategyAnalysisError(e instanceof Error ? e.message : "Error análisis estrategia");
+      setStrategyAnalysis(null);
+    } finally {
+      setStrategyAnalysisLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadStatus(false);
   }, [loadStatus]);
@@ -1339,8 +1394,9 @@ export function CryptoTestnetPanel() {
     if (activeTestnetModule !== "auto_testnet") return undefined;
     void loadAutoStatus();
     void loadAutoCycles(15);
+    void loadStrategyAnalysis();
     return undefined;
-  }, [activeTestnetModule, loadAutoStatus, loadAutoCycles]);
+  }, [activeTestnetModule, loadAutoStatus, loadAutoCycles, loadStrategyAnalysis]);
 
   useEffect(() => {
     if (!autoStatus?.enabled) return undefined;
@@ -2220,6 +2276,7 @@ export function CryptoTestnetPanel() {
       setAutoStatus(s);
       void loadAutoCycles(15);
       void loadAppPositions();
+      void loadStrategyAnalysis();
     } catch (e: unknown) {
       setAutoCyclesError(e instanceof Error ? e.message : "No se pudo activar Auto Testnet");
     } finally {
@@ -2247,6 +2304,7 @@ export function CryptoTestnetPanel() {
     autoLimit,
     loadAutoCycles,
     loadAppPositions,
+    loadStrategyAnalysis,
   ]);
 
   const handleAutoStop = useCallback(async () => {
@@ -3571,6 +3629,60 @@ export function CryptoTestnetPanel() {
                 {autoCyclesError}
               </p>
             ) : null}
+            {autoStatus?.last_guard_error_code ? (
+              <div
+                className="crypto-testnet-note crypto-testnet-note--neutral"
+                style={{
+                  margin: "0 0 0.65rem",
+                  padding: "0.55rem 0.65rem",
+                  borderRadius: "6px",
+                  fontSize: "0.84rem",
+                  lineHeight: 1.45,
+                  border: "1px solid rgba(220, 53, 69, 0.35)",
+                  background: "rgba(220, 53, 69, 0.06)",
+                }}
+                role="status"
+              >
+                <strong>Último error de guardia</strong>
+                <div style={{ marginTop: "0.25rem", fontFamily: "monospace", fontSize: "0.8rem" }}>
+                  {autoStatus.last_guard_error_code}
+                </div>
+                {autoStatus.guard_first_failure_cycle_at ? (
+                  <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.8rem" }}>
+                    Primer ciclo con fallo (UTC):{" "}
+                    <strong>{fmtIsoLocalShort(String(autoStatus.guard_first_failure_cycle_at))}</strong>
+                  </p>
+                ) : null}
+                {autoStatus.guard_advice ? (
+                  <p style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>{autoStatus.guard_advice}</p>
+                ) : (
+                  <p style={{ margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
+                    Revisar credenciales/permisos Testnet o regenerar claves si expiraron.
+                  </p>
+                )}
+                {autoStatus.guard_last_failure_snapshot &&
+                typeof autoStatus.guard_last_failure_snapshot === "object" ? (
+                  <p className="msg-muted" style={{ margin: "0.35rem 0 0", fontSize: "0.76rem" }}>
+                    Diagnosis:{" "}
+                    <code>{String((autoStatus.guard_last_failure_snapshot as Record<string, unknown>).diagnosis ?? "—")}</code>
+                    {" · "}
+                    balance:{" "}
+                    <code>
+                      {String(
+                        (autoStatus.guard_last_failure_snapshot as Record<string, unknown>).can_read_balance ?? "—",
+                      )}
+                    </code>
+                    {" · "}
+                    ticker:{" "}
+                    <code>
+                      {String(
+                        (autoStatus.guard_last_failure_snapshot as Record<string, unknown>).can_read_ticker ?? "—",
+                      )}
+                    </code>
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="crypto-testnet-toolbar crypto-testnet-block-start" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
               <button
@@ -3606,6 +3718,368 @@ export function CryptoTestnetPanel() {
                 {autoStatusLoading ? "…" : "Refrescar"}
               </button>
               <CryptoRefreshBadge active={autoStatusLoading && Boolean(autoStatus?.enabled)} label="Auto…" />
+            </div>
+
+            <div className="crypto-testnet-block-start" style={{ marginTop: "0.85rem" }}>
+              <TestnetAppPositionsCard
+                payload={appPositionsPayload}
+                error={appPositionsError}
+                loading={appPositionsLoading}
+                tab="open"
+                onTabChange={() => {}}
+                onRefresh={() => void loadAppPositions()}
+                connected={connected}
+                lookupFreeBase={lookupFreeBaseForAsset}
+                onSell={handleSellFromAppPosition}
+                sellBusySymbol={appPositionSellBusy}
+                feedbackMessage={appPositionFeedbackMessage}
+                feedbackError={appPositionFeedbackError}
+                onOpenManualSell={openOperateWithSell}
+                openOnly
+                sectionTitle="Posiciones abiertas"
+              />
+            </div>
+
+            <div className="crypto-monitor-cycles-block crypto-testnet-block-start" style={{ marginTop: "0.85rem" }}>
+              <div className="crypto-testnet-section-head">
+                <div>
+                  <h4 className="crypto-monitor-subsection-title" style={{ margin: 0 }}>
+                    Estado de riesgo
+                  </h4>
+                  <p className="msg-muted" style={{ margin: "0.3rem 0 0", fontSize: "0.78rem" }}>
+                    Misma lógica que <code>propose_testnet_exits</code> (monitor / auto); sólo diagnóstico, sin órdenes.
+                    {autoStatus?.open_position_risk?.evaluated_at ? (
+                      <>
+                        {" "}
+                        Evaluado: {fmtIsoLocalShort(String(autoStatus.open_position_risk.evaluated_at))}
+                      </>
+                    ) : null}
+                  </p>
+                </div>
+              </div>
+              {!autoStatus?.open_position_risk?.ok ? (
+                <p className="msg-error" style={{ margin: "0.5rem 0 0", fontSize: "0.82rem" }}>
+                  {autoStatus?.open_position_risk?.error ?? "Sin datos de riesgo"}
+                </p>
+              ) : (autoStatus.open_position_risk.positions?.length ?? 0) === 0 ? (
+                <p className="msg-muted" style={{ margin: "0.5rem 0 0", fontSize: "0.82rem" }}>
+                  Sin posiciones abiertas registradas por la app.
+                </p>
+              ) : (
+                <div className="table-wrap crypto-testnet-cycle-list-compact" style={{ marginTop: "0.55rem" }}>
+                  <table className="crypto-testnet-table crypto-testnet-table--compact">
+                    <thead>
+                      <tr>
+                        <th>Par</th>
+                        <th className="crypto-testnet-num">Entrada</th>
+                        <th className="crypto-testnet-num">Actual</th>
+                        <th className="crypto-testnet-num">PnL %</th>
+                        <th className="crypto-testnet-num">SL</th>
+                        <th className="crypto-testnet-num">TP</th>
+                        <th className="crypto-testnet-num">Trailing</th>
+                        <th className="crypto-testnet-num">BE</th>
+                        <th className="crypto-testnet-num">Dist. SL</th>
+                        <th className="crypto-testnet-num">Dist. TP</th>
+                        <th>Estado</th>
+                        <th>Motivo</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(autoStatus.open_position_risk.positions ?? []).map((row) => {
+                        const suggested = row.risk_status === "salida_sugerida";
+                        const stateLabel = autoOpenRiskStatusLabel(row.risk_status);
+                        return (
+                          <tr key={row.symbol}>
+                            <td style={{ whiteSpace: "nowrap" }}>{row.symbol}</td>
+                            <td className="crypto-testnet-num">{fmtNum(row.avg_entry_price ?? null)}</td>
+                            <td className="crypto-testnet-num">{fmtNum(row.current_price ?? null)}</td>
+                            <td className="crypto-testnet-num">{fmtNum(row.unrealized_pnl_pct ?? null)}</td>
+                            <td className="crypto-testnet-num">{fmtNum(row.stop_loss_price ?? null)}</td>
+                            <td className="crypto-testnet-num">{fmtNum(row.take_profit_price ?? null)}</td>
+                            <td className="crypto-testnet-num">{fmtNum(row.trailing_stop_price ?? null)}</td>
+                            <td className="crypto-testnet-num">{fmtNum(row.break_even_price ?? null)}</td>
+                            <td className="crypto-testnet-num">
+                              {row.distance_to_stop_loss_pct != null && Number.isFinite(Number(row.distance_to_stop_loss_pct))
+                                ? `${fmtNum(Number(row.distance_to_stop_loss_pct))}%`
+                                : "—"}
+                            </td>
+                            <td className="crypto-testnet-num">
+                              {row.distance_to_take_profit_pct != null &&
+                              Number.isFinite(Number(row.distance_to_take_profit_pct))
+                                ? `${fmtNum(Number(row.distance_to_take_profit_pct))}%`
+                                : "—"}
+                            </td>
+                            <td style={{ whiteSpace: "nowrap" }}>
+                              <span
+                                className={
+                                  suggested
+                                    ? "crypto-auto-risk-badge crypto-auto-risk-badge--exit"
+                                    : "crypto-auto-risk-badge crypto-auto-risk-badge--hold"
+                                }
+                              >
+                                {stateLabel}
+                              </span>
+                            </td>
+                            <td style={{ fontSize: "0.76rem", maxWidth: "14rem" }}>
+                              {suggested && row.exit_reason
+                                ? exitProposalReasonLabel(row.exit_reason)
+                                : row.risk_detail ?? row.message ?? "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="crypto-monitor-cycles-block crypto-testnet-block-start" style={{ marginTop: "0.85rem" }}>
+              <h4 className="crypto-monitor-subsection-title" style={{ margin: "0 0 0.35rem" }}>
+                Último ciclo Auto Testnet
+              </h4>
+              {autoStatus?.last_cycle_record && typeof autoStatus.last_cycle_record === "object" ? (
+                <div className="crypto-testnet-mini-grid crypto-testnet-mini-grid--dense" style={{ marginTop: "0.25rem" }}>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Inicio</span>
+                    <span className="crypto-testnet-kpi-value" style={{ fontSize: "0.78rem" }}>
+                      {fmtIsoLocalShort(
+                        String(
+                          (autoStatus.last_cycle_record as Record<string, unknown>).cycle_started_at ??
+                            (autoStatus.last_cycle_record as Record<string, unknown>).timestamp ??
+                            "",
+                        ),
+                      )}
+                    </span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Fin</span>
+                    <span className="crypto-testnet-kpi-value" style={{ fontSize: "0.78rem" }}>
+                      {fmtIsoLocalShort(
+                        String((autoStatus.last_cycle_record as Record<string, unknown>).cycle_finished_at ?? ""),
+                      )}
+                    </span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Duración</span>
+                    <span className="crypto-testnet-kpi-value">
+                      {(autoStatus.last_cycle_record as Record<string, unknown>).duration_ms != null
+                        ? `${String((autoStatus.last_cycle_record as Record<string, unknown>).duration_ms)} ms`
+                        : "—"}
+                    </span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Estado ciclo</span>
+                    <span className="crypto-testnet-kpi-value" style={{ fontSize: "0.78rem" }}>
+                      {String((autoStatus.last_cycle_record as Record<string, unknown>).status ?? "—")}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <p className="msg-muted" style={{ margin: "0.25rem 0 0", fontSize: "0.82rem" }}>
+                  Sin ciclo registrado aún (el auto aún no completó una vuelta o está detenido).
+                </p>
+              )}
+              {autoStatus?.last_cycle_record &&
+              Array.isArray((autoStatus.last_cycle_record as Record<string, unknown>).errors) &&
+              ((autoStatus.last_cycle_record as Record<string, unknown>).errors as unknown[]).length > 0 ? (
+                <p className="msg-error" style={{ margin: "0.45rem 0 0", fontSize: "0.78rem" }}>
+                  {((autoStatus.last_cycle_record as Record<string, unknown>).errors as string[]).join("; ")}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="crypto-monitor-cycles-block crypto-testnet-block-start" style={{ marginTop: "0.85rem" }}>
+              <h4 className="crypto-monitor-subsection-title" style={{ margin: "0 0 0.35rem" }}>
+                Parámetros activos (servidor)
+              </h4>
+              <p className="msg-muted" style={{ margin: "0 0 0.45rem", fontSize: "0.78rem" }}>
+                Tras iniciar o refrescar, reflejan lo que aplica el runner (post-clamp). Compará con el formulario si
+                dudás de límites.
+              </p>
+              {autoStatus?.params && typeof autoStatus.params === "object" ? (
+                <div className="table-wrap crypto-testnet-cycle-list-compact">
+                  <table className="crypto-testnet-table crypto-testnet-table--compact">
+                    <thead>
+                      <tr>
+                        <th>Parámetro</th>
+                        <th className="crypto-testnet-num">Valor aplicado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(autoStatus.params as Record<string, unknown>)
+                        .sort(([a], [b]) => a.localeCompare(b))
+                        .map(([k, v]) => (
+                          <tr key={k}>
+                            <td>{AUTO_PARAM_FIELD_LABELS[k] ?? k}</td>
+                            <td className="crypto-testnet-num" style={{ fontSize: "0.8rem" }}>
+                              {typeof v === "number" && Number.isFinite(v) ? fmtNum(v) : String(v ?? "—")}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="msg-muted" style={{ margin: 0, fontSize: "0.82rem" }}>
+                  Sin parámetros en estado (refrescá o iniciá el auto).
+                </p>
+              )}
+              <h5 className="crypto-monitor-config-card-heading" style={{ marginTop: "0.75rem" }}>
+                Ajustes por límites (último POST /auto/start)
+              </h5>
+              {(autoStatus?.params_clamp_audit?.length ?? 0) > 0 ? (
+                <div className="table-wrap crypto-testnet-cycle-list-compact" style={{ marginTop: "0.35rem" }}>
+                  <table className="crypto-testnet-table crypto-testnet-table--compact">
+                    <thead>
+                      <tr>
+                        <th>Campo</th>
+                        <th className="crypto-testnet-num">Ingresado</th>
+                        <th className="crypto-testnet-num">Aplicado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(autoStatus?.params_clamp_audit ?? []).map((row) => (
+                        <tr key={row.field}>
+                          <td>{AUTO_PARAM_FIELD_LABELS[row.field] ?? row.field}</td>
+                          <td className="crypto-testnet-num" style={{ fontSize: "0.78rem" }}>
+                            {typeof row.requested === "number" && Number.isFinite(Number(row.requested))
+                              ? fmtNum(Number(row.requested))
+                              : String(row.requested ?? "—")}
+                          </td>
+                          <td className="crypto-testnet-num" style={{ fontSize: "0.78rem" }}>
+                            {typeof row.applied === "number" && Number.isFinite(Number(row.applied))
+                              ? fmtNum(Number(row.applied))
+                              : String(row.applied ?? "—")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="msg-muted" style={{ margin: "0.25rem 0 0", fontSize: "0.8rem" }}>
+                  Sin clamps en el último inicio: lo solicitado coincidió con los límites de seguridad (p. ej. máx. 50
+                  activos, 100 entradas/día).
+                </p>
+              )}
+            </div>
+
+            <div className="crypto-monitor-cycles-block crypto-testnet-block-start" style={{ marginTop: "0.85rem" }}>
+              <div className="crypto-testnet-section-head">
+                <div>
+                  <h4 className="crypto-monitor-subsection-title" style={{ margin: 0 }}>
+                    Análisis de estrategia Testnet
+                  </h4>
+                  <p className="msg-muted" style={{ margin: "0.3rem 0 0", fontSize: "0.78rem" }}>
+                    Diagnóstico basado en operaciones Testnet. No modifica parámetros automáticamente.
+                  </p>
+                </div>
+                <div className="crypto-testnet-toolbar">
+                  <button
+                    type="button"
+                    className="radar-refresh-btn crypto-testnet-btn-compact"
+                    onClick={() => void loadStrategyAnalysis()}
+                    disabled={strategyAnalysisLoading}
+                  >
+                    {strategyAnalysisLoading ? "…" : "Refrescar análisis"}
+                  </button>
+                </div>
+              </div>
+              {strategyAnalysisError ? (
+                <p className="msg-error" style={{ margin: "0.45rem 0 0", fontSize: "0.82rem" }}>
+                  {strategyAnalysisError}
+                </p>
+              ) : null}
+              {strategyAnalysis?.ok ? (
+                <div className="crypto-testnet-mini-grid crypto-testnet-mini-grid--dense" style={{ marginTop: "0.45rem" }}>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Trades cerrados</span>
+                    <span className="crypto-testnet-kpi-value">{strategyAnalysis.closed_trades_count ?? "—"}</span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Win rate</span>
+                    <span className="crypto-testnet-kpi-value">
+                      {strategyAnalysis.win_rate_pct != null && Number.isFinite(Number(strategyAnalysis.win_rate_pct))
+                        ? `${fmtNum(Number(strategyAnalysis.win_rate_pct))}%`
+                        : "—"}
+                    </span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">PnL total</span>
+                    <span className="crypto-testnet-kpi-value">
+                      {strategyAnalysis.total_pnl_usdt != null && Number.isFinite(Number(strategyAnalysis.total_pnl_usdt))
+                        ? fmtNum(Number(strategyAnalysis.total_pnl_usdt))
+                        : "—"}
+                    </span>
+                  </div>
+                  <div className="crypto-testnet-kpi">
+                    <span className="crypto-testnet-kpi-label">Fuente cierres</span>
+                    <span className="crypto-testnet-kpi-value" style={{ fontSize: "0.72rem" }}>
+                      {strategyAnalysis.closed_trades_source ?? "—"}
+                    </span>
+                  </div>
+                </div>
+              ) : strategyAnalysisLoading ? (
+                <p className="msg-muted" style={{ margin: "0.45rem 0 0", fontSize: "0.82rem" }}>
+                  Cargando análisis…
+                </p>
+              ) : (
+                <p className="msg-muted" style={{ margin: "0.45rem 0 0", fontSize: "0.82rem" }}>
+                  Sin datos de análisis todavía.
+                </p>
+              )}
+              {strategyAnalysis?.ok && strategyAnalysis.by_setup && Object.keys(strategyAnalysis.by_setup).length > 0 ? (
+                <div style={{ marginTop: "0.55rem" }}>
+                  <h5 className="crypto-monitor-config-card-heading" style={{ margin: "0 0 0.35rem" }}>
+                    Por setup (órdenes / FIFO)
+                  </h5>
+                  <div className="table-wrap crypto-testnet-cycle-list-compact">
+                    <table className="crypto-testnet-table crypto-testnet-table--compact">
+                      <thead>
+                        <tr>
+                          <th>Setup</th>
+                          <th className="crypto-testnet-num">Trades</th>
+                          <th className="crypto-testnet-num">Win %</th>
+                          <th className="crypto-testnet-num">PnL USDT</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(strategyAnalysis.by_setup)
+                          .sort((a, b) => (b[1].pnl_usdt ?? 0) - (a[1].pnl_usdt ?? 0))
+                          .map(([setup, agg]) => (
+                            <tr key={setup}>
+                              <td>{setup}</td>
+                              <td className="crypto-testnet-num">{agg.trades ?? "—"}</td>
+                              <td className="crypto-testnet-num">
+                                {agg.win_rate_pct != null && Number.isFinite(Number(agg.win_rate_pct))
+                                  ? `${fmtNum(Number(agg.win_rate_pct))}%`
+                                  : "—"}
+                              </td>
+                              <td className="crypto-testnet-num">
+                                {agg.pnl_usdt != null && Number.isFinite(Number(agg.pnl_usdt))
+                                  ? fmtNum(Number(agg.pnl_usdt))
+                                  : "—"}
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
+              {strategyAnalysis?.ok && Array.isArray(strategyAnalysis.recommendations) && strategyAnalysis.recommendations.length > 0 ? (
+                <div style={{ marginTop: "0.55rem" }}>
+                  <h5 className="crypto-monitor-config-card-heading" style={{ margin: "0 0 0.35rem" }}>
+                    Recomendaciones (orientativas)
+                  </h5>
+                  <ul style={{ margin: 0, paddingLeft: "1.1rem", fontSize: "0.82rem", lineHeight: 1.45 }}>
+                    {strategyAnalysis.recommendations.map((rec, i) => (
+                      <li key={`${rec.code ?? "r"}-${i}`}>{rec.text ?? rec.code}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
 
             <div className="crypto-monitor-config-layout crypto-testnet-block-start">

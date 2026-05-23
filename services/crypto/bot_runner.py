@@ -1354,6 +1354,7 @@ def propose_testnet_entry_from_strategy(
             "reason": reason_txt,
             "timeframe": tf,
             "risk": risk_block,
+            "setup_type": (str(c.get("setup_type") or "").strip() or None),
         }
         _append("selected", reason_txt)
         primary_reason = None

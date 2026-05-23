@@ -71,6 +71,11 @@ _STATE: dict[str, Any] = {
     "auto_daily_pnl_usdt": 0.0,
     "last_app_total_pnl_usdt": None,
     "last_sandbox_status": None,
+    "guard_first_failure_cycle_at": None,
+    "guard_last_failure_snapshot": None,
+    "last_guard_error_code": None,
+    "last_params_request": None,
+    "params_clamp_audit": [],
 }
 
 
@@ -164,6 +169,9 @@ def _hard_guard_testnet_trading() -> tuple[bool, str, dict[str, Any]]:
         "diagnosis": st.get("diagnosis"),
         "can_read_balance": st.get("can_read_balance"),
         "can_read_ticker": st.get("can_read_ticker"),
+        "message": st.get("message"),
+        "balance_error": st.get("balance_error"),
+        "ticker_error": st.get("ticker_error"),
     }
     if not st.get("enabled"):
         return False, "testnet_disabled", snippet
@@ -231,14 +239,26 @@ def _append_auto_cycle_record(record: dict[str, Any]) -> None:
     _log_cycle(f"jsonl status={record.get('status')} actions={record.get('actions_taken')}")
 
 
-def _merge_params(overrides: dict[str, Any] | None) -> dict[str, Any]:
-    base = dict(_DEFAULT_PARAMS)
-    if overrides:
-        for k, v in overrides.items():
-            if k in _DEFAULT_PARAMS and v is not None:
-                base[k] = v
-    base["strategy_mode"] = normalize_strategy_mode(str(base.get("strategy_mode") or "daily_intraday"))
-    return base
+def _merge_params(prior_state: dict[str, Any] | None, request: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Capas: defaults → estado previo del runner → body del último POST /auto/start.
+    Acepta alias max_entries_per_day → max_trades_per_day.
+    """
+    out = dict(_DEFAULT_PARAMS)
+    for layer in (prior_state, request):
+        if not layer:
+            continue
+        for k, v in layer.items():
+            if v is None:
+                continue
+            kk = k
+            if kk == "max_entries_per_day":
+                kk = "max_trades_per_day"
+            if kk not in _DEFAULT_PARAMS:
+                continue
+            out[kk] = v
+    out["strategy_mode"] = normalize_strategy_mode(str(out.get("strategy_mode") or "daily_intraday"))
+    return out
 
 
 def _clamp_params(p: dict[str, Any]) -> dict[str, Any]:
@@ -259,6 +279,17 @@ def _clamp_params(p: dict[str, Any]) -> dict[str, Any]:
     out["cycle_interval_minutes"] = max(1.0, min(float(out.get("cycle_interval_minutes") or 5), 1440.0))
     out["min_exit_value_usdt"] = max(0.0, float(out.get("min_exit_value_usdt") or 5))
     return out
+
+
+def _clamp_params_with_audit(p: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    before = copy.deepcopy(dict(p))
+    after = _clamp_params(dict(p))
+    diffs: list[dict[str, Any]] = []
+    for k in sorted(_DEFAULT_PARAMS.keys()):
+        b, a = before.get(k), after.get(k)
+        if b != a:
+            diffs.append({"field": k, "requested": b, "applied": a})
+    return after, diffs
 
 
 def _schedule_next_run_locked(interval_seconds: int) -> None:
@@ -295,7 +326,30 @@ def _run_cycle() -> None:
     ok_sand, sand_reason, sand_snip = _hard_guard_testnet_trading()
     with _LOCK:
         _STATE["last_sandbox_status"] = sand_snip
+        if not ok_sand:
+            if _STATE.get("guard_first_failure_cycle_at") is None:
+                _STATE["guard_first_failure_cycle_at"] = cycle_started
+            _STATE["guard_last_failure_snapshot"] = copy.deepcopy(sand_snip)
+            _STATE["last_guard_error_code"] = str(sand_reason)
+        else:
+            _STATE["guard_first_failure_cycle_at"] = None
+            _STATE["guard_last_failure_snapshot"] = None
+            _STATE["last_guard_error_code"] = None
 
+    sandbox_guard_record: dict[str, Any] = {
+        "ok": ok_sand,
+        "reason": sand_reason,
+        "diagnosis": sand_snip.get("diagnosis"),
+        "enabled": sand_snip.get("enabled"),
+        "configured": sand_snip.get("configured"),
+        "sandbox_mode": sand_snip.get("sandbox_mode"),
+        "urls_api_safe": sand_snip.get("urls_api_safe"),
+        "can_read_balance": sand_snip.get("can_read_balance"),
+        "can_read_ticker": sand_snip.get("can_read_ticker"),
+        "message": sand_snip.get("message"),
+        "balance_error": sand_snip.get("balance_error"),
+        "ticker_error": sand_snip.get("ticker_error"),
+    }
     if not ok_sand:
         errs.append(f"sandbox_guard:{sand_reason}")
         _log(f"abort ciclo: {sand_reason} snippet={sand_snip}")
@@ -465,11 +519,22 @@ def _run_cycle() -> None:
                                     if not ok5:
                                         errs.append(f"sandbox_guard_pre_buy:{sand_reason5}")
                                     else:
+                                        buy_ctx: dict[str, Any] = {
+                                            "order_origin": "auto_testnet",
+                                            "strategy_mode": str(params.get("strategy_mode") or ""),
+                                            "timeframe": str(params.get("timeframe") or ""),
+                                        }
+                                        st_prop = prop.get("setup_type")
+                                        if st_prop:
+                                            buy_ctx["setup_type"] = str(st_prop).strip()
+                                        if prop.get("score") is not None:
+                                            buy_ctx["entry_score"] = prop.get("score")
                                         buy_res = place_testnet_market_order(
                                             sym_b,
                                             "buy",
                                             quote_amount_usdt=q_buy,
                                             max_quote_usdt=float(params.get("max_quote_per_order_usdt") or MAX_MARKET_ORDER_QUOTE_USDT),
+                                            order_context=buy_ctx,
                                         )
                                         actions.append(
                                             {
@@ -478,6 +543,8 @@ def _run_cycle() -> None:
                                                 "quote_amount_usdt": q_buy,
                                                 "ok": bool(buy_res.get("ok")),
                                                 "error": buy_res.get("error"),
+                                                "setup_type": buy_ctx.get("setup_type"),
+                                                "entry_score": buy_ctx.get("entry_score"),
                                             }
                                         )
                                         if buy_res.get("ok"):
@@ -508,12 +575,13 @@ def _run_cycle() -> None:
         "cycle_started_at": cycle_started,
         "cycle_finished_at": finished,
         "duration_ms": duration_ms,
+        "sandbox_guard": sandbox_guard_record,
         "sandbox_ok_initial": ok_sand,
         "sandbox_reason_initial": sand_reason,
         "sandbox_snippet": sand_snip,
         "actions_taken": actions,
         "errors": errs[:12],
-        "params_snapshot": {k: params.get(k) for k in sorted(params.keys())} if ok_sand else None,
+        "params_snapshot": {k: params.get(k) for k in sorted(params.keys())},
     }
     status = "error" if errs and not actions else "ok"
     if any(a.get("type") == "kill" for a in actions):
@@ -568,12 +636,21 @@ def _worker_loop() -> None:
 def start_testnet_auto(*, params: dict[str, Any] | None = None) -> dict[str, Any]:
     """Activa el auto runner; actualiza parámetros si ya estaba activo."""
     global _THREAD
-    merged = _clamp_params(_merge_params(params))
+    with _LOCK:
+        prior = copy.deepcopy(_STATE.get("params") or {})
+    merged_raw = _merge_params(prior, params)
+    merged, audits = _clamp_params_with_audit(merged_raw)
+    _log(
+        f"start merge max_open={merged.get('max_open_positions')} max_trades_day={merged.get('max_trades_per_day')} "
+        f"clamp_diffs={len(audits)}"
+    )
 
     with _LOCK:
         _STATE["enabled"] = True
         _STATE["stop_reason"] = None
         _STATE["params"] = merged
+        _STATE["last_params_request"] = copy.deepcopy(merged_raw)
+        _STATE["params_clamp_audit"] = audits
         _reset_daily_counters_if_needed_locked()
         interval_sec = max(60, int(float(merged["cycle_interval_minutes"]) * 60))
         _STATE["interval_seconds"] = interval_sec
@@ -609,10 +686,174 @@ def stop_testnet_auto() -> dict[str, Any]:
     return get_testnet_auto_status()
 
 
+def _derive_auto_risk_status(ev: dict[str, Any], *, sl_pct: float, tp_pct: float) -> tuple[str, str | None]:
+    """
+    Estado UI agregado (no altera propose_testnet_exits):
+    salida_sugerida | cerca_sl | cerca_tp | trailing_activo | holding | sin_evaluar
+    """
+    st = str(ev.get("status") or "")
+    if st == "proposed":
+        er = str(ev.get("exit_reason") or ev.get("reason") or "").strip() or None
+        return "salida_sugerida", er
+    if st == "skipped":
+        return "sin_evaluar", str(ev.get("reason") or ev.get("message") or "").strip() or None
+
+    def _f(x: Any) -> float | None:
+        try:
+            v = float(x)
+            return v if math.isfinite(v) else None
+        except (TypeError, ValueError):
+            return None
+
+    dsl = _f(ev.get("distance_to_stop_loss_pct"))
+    dtp = _f(ev.get("distance_to_take_profit_pct"))
+    near_sl_thr = max(0.05, float(sl_pct) * 0.35) if sl_pct > 0 else 0.05
+    near_tp_thr = max(0.05, float(tp_pct) * 0.35) if tp_pct > 0 else 0.05
+    if dsl is not None and dsl >= 0 and dsl <= near_sl_thr:
+        return "cerca_sl", None
+    if dtp is not None and dtp >= 0 and dtp <= near_tp_thr:
+        return "cerca_tp", None
+
+    hi_f = _f(ev.get("highest_price"))
+    avg_f = _f(ev.get("avg_entry_price"))
+    tr_f = _f(ev.get("trailing_stop_price"))
+    pnl_f = _f(ev.get("pnl_pct"))
+    if tr_f is not None and avg_f is not None and avg_f > 0 and hi_f is not None and hi_f > avg_f * 1.0002:
+        if pnl_f is None or pnl_f > -1e-6:
+            return "trailing_activo", None
+
+    if st == "evaluated" or st == "holding":
+        return "holding", None
+    return "sin_evaluar", str(ev.get("reason") or st or "").strip() or None
+
+
+def _open_position_risk_from_params(params: dict[str, Any]) -> dict[str, Any]:
+    from services.crypto.binance_testnet import propose_testnet_exits
+
+    p = _clamp_params(dict(params))
+    try:
+        payload = propose_testnet_exits(
+            stop_loss_pct=float(p["stop_loss_pct"]),
+            take_profit_pct=float(p["take_profit_pct"]),
+            trailing_stop_pct=float(p["trailing_stop_pct"]),
+            min_value_usdt=float(p["min_exit_value_usdt"]),
+            break_even_trigger_pct=float(p["break_even_trigger_pct"]),
+            break_even_plus_pct=float(p["break_even_plus_pct"]),
+            persist_trailing_state=False,
+        )
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "positions": [],
+            "evaluated_at": _utc_now_iso(),
+            "persist_trailing_state": False,
+        }
+
+    if not payload.get("ok"):
+        return {
+            "ok": False,
+            "error": str(payload.get("error") or "exit_propose_failed"),
+            "positions": [],
+            "evaluated_at": _utc_now_iso(),
+            "persist_trailing_state": False,
+        }
+
+    sl_pct = float(payload.get("stop_loss_pct") or 0)
+    tp_pct = float(payload.get("take_profit_pct") or 0)
+    rows: list[dict[str, Any]] = []
+    for ev in payload.get("evaluated") or []:
+        if not isinstance(ev, dict):
+            continue
+        sym = str(ev.get("symbol") or "").strip()
+        if not sym:
+            continue
+        risk_status, risk_detail = _derive_auto_risk_status(ev, sl_pct=sl_pct, tp_pct=tp_pct)
+        rows.append(
+            {
+                "symbol": sym,
+                "asset": ev.get("asset"),
+                "avg_entry_price": ev.get("avg_entry_price"),
+                "current_price": ev.get("current_price"),
+                "unrealized_pnl_pct": ev.get("pnl_pct") if ev.get("pnl_pct") is not None else ev.get("unrealized_pnl_pct"),
+                "stop_loss_price": ev.get("stop_loss_price"),
+                "take_profit_price": ev.get("take_profit_price"),
+                "trailing_stop_price": ev.get("trailing_stop_price"),
+                "break_even_price": ev.get("break_even_price"),
+                "highest_price": ev.get("highest_price"),
+                "distance_to_stop_loss_pct": ev.get("distance_to_stop_loss_pct"),
+                "distance_to_take_profit_pct": ev.get("distance_to_take_profit_pct"),
+                "exit_reason": ev.get("exit_reason") if str(ev.get("status") or "") == "proposed" else None,
+                "position_status": ev.get("position_status"),
+                "evaluation_status": ev.get("status"),
+                "risk_status": risk_status,
+                "risk_detail": risk_detail,
+                "message": ev.get("message"),
+            }
+        )
+
+    return {
+        "ok": True,
+        "error": None,
+        "evaluated_at": _utc_now_iso(),
+        "persist_trailing_state": False,
+        "open_positions_count": int(payload.get("open_positions_count") or 0),
+        "trailing_stop_pct_effective": payload.get("trailing_stop_pct_effective"),
+        "positions": rows,
+    }
+
+
+def _guard_advice_text(error_code: str | None, snapshot: dict[str, Any] | None) -> str | None:
+    """Texto UI (no relaja la guarda): orienta según último fallo del ciclo."""
+    if not error_code:
+        return None
+    ec = str(error_code).strip()
+    snap = snapshot if isinstance(snapshot, dict) else {}
+    diag = str(snap.get("diagnosis") or "").strip()
+    bal_err = str(snap.get("balance_error") or "").strip()
+    tick_err = str(snap.get("ticker_error") or "").strip()
+
+    if ec.startswith("diagnosis_not_ok:") and diag == "keys_or_permissions":
+        parts = [
+            "El guardia detuvo el auto: en testnet el ticker responde pero la lectura de balance falla (típico de API keys,"
+            " permisos de lectura, IP whitelist o claves expiradas en testnet.binance.vision).",
+            "Revisá credenciales/permisos Testnet o regenerá claves si expiraron.",
+        ]
+        if bal_err:
+            parts.append(f"Detalle balance: {bal_err}")
+        return " ".join(parts)
+
+    if ec == "cannot_read_balance":
+        msg = "No se pudo leer balance testnet; sin balance no se opera. Revisá permisos de la API key y el error devuelto por el exchange."
+        return f"{msg} {('Detalle: ' + bal_err) if bal_err else ''}".strip()
+
+    if ec.startswith("diagnosis_not_ok:"):
+        return (
+            f"Diagnosis testnet «{diag or ec}»: el auto no opera hasta que el estado vuelva a diagnosis=ok "
+            f"(ver Estado testnet). {('Balance: ' + bal_err) if bal_err else ''} {('Ticker: ' + tick_err) if tick_err else ''}"
+        ).strip()
+
+    if "urls_api_safe" in ec or ec.startswith("urls_api_safe_unsafe"):
+        return "URLs del cliente no clasificadas como sandbox/testnet; no se reactiva trading hasta corregir configuración ccxt."
+
+    if ec == "testnet_disabled":
+        return "Testnet deshabilitado por configuración (BINANCE_TESTNET_ENABLED)."
+
+    if ec == "testnet_not_configured":
+        return "Faltan API key/secret de testnet en .env."
+
+    if ec == "sandbox_mode_not_detected":
+        return "Sandbox mode no detectado en el exchange ccxt; revisá que sólo se use Binance Spot Testnet."
+
+    return f"Guardia sandbox: «{ec}». Corregí el estado testnet antes de reactivar el auto."
+
+
 def get_testnet_auto_status() -> dict[str, Any]:
     from services.crypto.binance_testnet import get_testnet_app_positions
 
     with _LOCK:
+        guard_snap = copy.deepcopy(_STATE.get("guard_last_failure_snapshot"))
+        guard_code = _STATE.get("last_guard_error_code")
         out = {
             "ok": True,
             "enabled": bool(_STATE["enabled"]),
@@ -632,6 +873,15 @@ def get_testnet_auto_status() -> dict[str, Any]:
             "auto_daily_pnl_usdt": float(_STATE.get("auto_daily_pnl_usdt") or 0.0),
             "last_sandbox_status": copy.deepcopy(_STATE.get("last_sandbox_status")),
             "last_cycle_record": copy.deepcopy(_STATE.get("last_cycle_record")),
+            "guard_first_failure_cycle_at": _STATE.get("guard_first_failure_cycle_at"),
+            "guard_last_failure_snapshot": guard_snap,
+            "last_guard_error_code": guard_code,
+            "last_params_request": copy.deepcopy(_STATE.get("last_params_request")),
+            "params_clamp_audit": copy.deepcopy(_STATE.get("params_clamp_audit") or []),
+            "guard_advice": _guard_advice_text(
+                str(guard_code) if guard_code is not None else None,
+                guard_snap if isinstance(guard_snap, dict) else None,
+            ),
         }
 
     try:
@@ -645,6 +895,12 @@ def get_testnet_auto_status() -> dict[str, Any]:
             out["app_positions_error"] = str(app.get("error") or "unknown")
     except Exception as e:
         out["app_positions_error"] = f"{type(e).__name__}: {e}"
+
+    merged_risk = dict(_DEFAULT_PARAMS)
+    if isinstance(out.get("params"), dict):
+        merged_risk.update(out["params"])
+    out["open_position_risk"] = _open_position_risk_from_params(_clamp_params(merged_risk))
+    out["auto_position_risk"] = out["open_position_risk"]
 
     return out
 
