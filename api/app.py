@@ -690,11 +690,12 @@ class CryptoTestnetAutoStartBody(BaseModel):
     max_open_positions: int = Field(default=3, ge=1, le=50)
     quote_amount_usdt: float = Field(default=15, gt=0)
     cycle_interval_minutes: float = Field(default=5, ge=1, le=1440)
-    stop_loss_pct: float = Field(default=1.2, ge=0)
-    take_profit_pct: float = Field(default=2.2, ge=0)
-    trailing_stop_pct: float = Field(default=1.0, ge=0)
-    break_even_trigger_pct: float = Field(default=1.0, ge=0)
-    break_even_plus_pct: float = Field(default=0.1, ge=0)
+    stop_loss_pct: float = Field(default=0.8, ge=0)
+    take_profit_pct: float = Field(default=1.0, ge=0)
+    trailing_stop_pct: float = Field(default=0.5, ge=0)
+    trailing_activation_pct: float = Field(default=1.0, ge=0)
+    break_even_trigger_pct: float = Field(default=0.0, ge=0)
+    break_even_plus_pct: float = Field(default=0.0, ge=0)
     min_exit_value_usdt: float = Field(default=5, ge=0)
     max_trades_per_day: int = Field(
         default=5,
@@ -705,6 +706,36 @@ class CryptoTestnetAutoStartBody(BaseModel):
     max_daily_loss_usdt: float = Field(default=10, gt=0)
     max_total_exposure_usdt: float = Field(default=50, gt=0)
     max_quote_per_order_usdt: float = Field(default=100, gt=0)
+
+
+class CryptoTestnetAutoUpdateParamsBody(BaseModel):
+    """Actualización en caliente: sólo campos enviados en el JSON (exclude_unset)."""
+
+    strategy_mode: str | None = Field(default=None, min_length=1, max_length=32)
+    timeframe: str | None = Field(default=None, min_length=1, max_length=24)
+    limit: int | None = Field(default=None, ge=50, le=1000)
+    min_entry_score: float | None = Field(default=None, ge=0, le=100)
+    require_btc_trend_up: bool | None = None
+    cooldown_minutes: int | None = Field(default=None, ge=0)
+    max_open_positions: int | None = Field(default=None, ge=1, le=50)
+    quote_amount_usdt: float | None = Field(default=None, gt=0)
+    cycle_interval_minutes: float | None = Field(default=None, ge=1, le=1440)
+    stop_loss_pct: float | None = Field(default=None, ge=0)
+    take_profit_pct: float | None = Field(default=None, ge=0)
+    trailing_stop_pct: float | None = Field(default=None, ge=0)
+    trailing_activation_pct: float | None = Field(default=None, ge=0)
+    break_even_trigger_pct: float | None = Field(default=None, ge=0)
+    break_even_plus_pct: float | None = Field(default=None, ge=0)
+    min_exit_value_usdt: float | None = Field(default=None, ge=0)
+    max_trades_per_day: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices("max_trades_per_day", "max_entries_per_day"),
+    )
+    max_daily_loss_usdt: float | None = Field(default=None, gt=0)
+    max_total_exposure_usdt: float | None = Field(default=None, gt=0)
+    max_quote_per_order_usdt: float | None = Field(default=None, gt=0)
 
 
 @app.get("/crypto/testnet/strategy-analysis")
@@ -748,6 +779,22 @@ def crypto_testnet_auto_start(
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Auto testnet: {e}") from e
+
+
+@app.post("/crypto/testnet/auto/update-params")
+def crypto_testnet_auto_update_params(body: CryptoTestnetAutoUpdateParamsBody = Body(...)):
+    """Actualiza parámetros del auto testnet sin reiniciar el hilo (aplican en el próximo ciclo)."""
+    from services.crypto import auto_testnet_runner as auto_tn
+
+    payload = body.model_dump(exclude_none=True, exclude_unset=True)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Sin campos para actualizar (body vacío o sólo null).")
+    try:
+        return auto_tn.update_testnet_auto_params(params=payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Auto testnet update-params: {e}") from e
 
 
 @app.post("/crypto/testnet/auto/stop")

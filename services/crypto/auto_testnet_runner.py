@@ -40,11 +40,12 @@ _DEFAULT_PARAMS: dict[str, Any] = {
     "max_open_positions": 3,
     "quote_amount_usdt": 15.0,
     "cycle_interval_minutes": 5.0,
-    "stop_loss_pct": 1.2,
-    "take_profit_pct": 2.2,
-    "trailing_stop_pct": 1.0,
-    "break_even_trigger_pct": 1.0,
-    "break_even_plus_pct": 0.1,
+    "stop_loss_pct": 0.8,
+    "take_profit_pct": 1.0,
+    "trailing_stop_pct": 0.5,
+    "trailing_activation_pct": 1.0,
+    "break_even_trigger_pct": 0.0,
+    "break_even_plus_pct": 0.0,
     "min_exit_value_usdt": 5.0,
     "max_trades_per_day": 5,
     "max_daily_loss_usdt": 10.0,
@@ -76,6 +77,8 @@ _STATE: dict[str, Any] = {
     "last_guard_error_code": None,
     "last_params_request": None,
     "params_clamp_audit": [],
+    "params_last_update_at": None,
+    "params_last_update_changed_fields": [],
 }
 
 
@@ -323,6 +326,14 @@ def _run_cycle() -> None:
     actions: list[dict[str, Any]] = []
     errs: list[str] = []
 
+    exit_scan_count = 0
+    exit_proposals_count = 0
+    exit_execution_attempted_count = 0
+    exit_execution_success_count = 0
+    exit_execution_error_count = 0
+    last_exit_block_reason: str | None = None
+    exit_position_evaluations: list[dict[str, Any]] = []
+
     ok_sand, sand_reason, sand_snip = _hard_guard_testnet_trading()
     with _LOCK:
         _STATE["last_sandbox_status"] = sand_snip
@@ -353,6 +364,7 @@ def _run_cycle() -> None:
     if not ok_sand:
         errs.append(f"sandbox_guard:{sand_reason}")
         _log(f"abort ciclo: {sand_reason} snippet={sand_snip}")
+        last_exit_block_reason = "guard_fail"
         with _LOCK:
             _STATE["last_action"] = f"abort:{sand_reason}"
     else:
@@ -383,28 +395,46 @@ def _run_cycle() -> None:
 
             if not app_pos.get("ok"):
                 errs.append(str(app_pos.get("error") or "app_positions_failed"))
+                last_exit_block_reason = "no_app_position"
             else:
                 # --- Salidas ---
                 ok2, sand_reason2, _ = _hard_guard_testnet_trading()
                 if not ok2:
                     errs.append(f"sandbox_guard_pre_exits:{sand_reason2}")
+                    last_exit_block_reason = "guard_fail"
                 else:
                     exit_payload = propose_testnet_exits(
                         stop_loss_pct=float(params["stop_loss_pct"]),
                         take_profit_pct=float(params["take_profit_pct"]),
                         trailing_stop_pct=float(params["trailing_stop_pct"]),
+                        trailing_activation_pct=float(params["trailing_activation_pct"]),
                         min_value_usdt=float(params["min_exit_value_usdt"]),
                         break_even_trigger_pct=float(params["break_even_trigger_pct"]),
                         break_even_plus_pct=float(params["break_even_plus_pct"]),
                     )
                     if not exit_payload.get("ok"):
                         errs.append(str(exit_payload.get("error") or "exit_propose_failed"))
+                        last_exit_block_reason = "proposal_missing"
                     else:
+                        evaluated_raw = exit_payload.get("evaluated") or []
+                        evaluated_list = [e for e in evaluated_raw if isinstance(e, dict)]
+                        exit_scan_count = len(evaluated_list)
                         proposals = [p for p in (exit_payload.get("proposals") or []) if isinstance(p, dict)]
+                        exit_proposals_count = len(proposals)
+                        for ev in evaluated_list:
+                            ev_out = {k: v for k, v in ev.items() if k != "proposal"}
+                            exit_position_evaluations.append(ev_out)
+                            br = ev.get("blocked_reason")
+                            if last_exit_block_reason is None and br:
+                                last_exit_block_reason = str(br)
+                        if exit_proposals_count == 0 and last_exit_block_reason is None:
+                            if exit_payload.get("balances_fetch_ok") is False:
+                                last_exit_block_reason = "guard_fail"
                         for prop in proposals:
                             ok3, sand_reason3, _ = _hard_guard_testnet_trading()
                             if not ok3:
                                 errs.append(f"sandbox_guard_pre_sell:{sand_reason3}")
+                                last_exit_block_reason = "guard_fail"
                                 break
                             sym = str(prop.get("symbol") or "").strip()
                             amt_base = prop.get("amount_base")
@@ -413,14 +443,33 @@ def _run_cycle() -> None:
                             except (TypeError, ValueError):
                                 amt_f = 0.0
                             if not sym or amt_f <= 0:
-                                actions.append({"type": "sell_skip", "symbol": sym, "reason": "invalid_proposal"})
+                                actions.append(
+                                    {
+                                        "type": "sell_skip",
+                                        "symbol": sym,
+                                        "reason": "invalid_proposal",
+                                        "blocked_reason": "proposal_missing",
+                                    }
+                                )
+                                if last_exit_block_reason is None:
+                                    last_exit_block_reason = "proposal_missing"
                                 continue
+                            exit_execution_attempted_count += 1
                             pnl_est = _estimate_sell_pnl_usdt(prop)
+                            sell_ctx: dict[str, Any] = {
+                                "order_origin": "auto_testnet",
+                                "strategy_mode": str(params.get("strategy_mode") or ""),
+                                "timeframe": str(params.get("timeframe") or ""),
+                            }
+                            er_sell = prop.get("exit_reason")
+                            if er_sell:
+                                sell_ctx["exit_reason"] = str(er_sell).strip()
                             sell_res = place_testnet_market_order(
                                 sym,
                                 "sell",
                                 amount_base=amt_f,
                                 max_quote_usdt=float(params.get("max_quote_per_order_usdt") or MAX_MARKET_ORDER_QUOTE_USDT),
+                                order_context=sell_ctx,
                             )
                             rec = {
                                 "type": "sell_market",
@@ -429,9 +478,11 @@ def _run_cycle() -> None:
                                 "ok": bool(sell_res.get("ok")),
                                 "error": sell_res.get("error"),
                                 "exit_reason": prop.get("exit_reason"),
+                                "blocked_reason": None if sell_res.get("ok") else "exchange_error",
                             }
                             actions.append(rec)
                             if sell_res.get("ok"):
+                                exit_execution_success_count += 1
                                 _log(
                                     f"SELL OK symbol={sym} base={amt_f} reason={prop.get('exit_reason')} "
                                     f"pnl_est={pnl_est}"
@@ -453,6 +504,8 @@ def _run_cycle() -> None:
                                 if not still_go:
                                     break
                             else:
+                                exit_execution_error_count += 1
+                                last_exit_block_reason = "exchange_error"
                                 errs.append(f"sell_failed:{sym}:{sell_res.get('error')}")
                                 with _LOCK:
                                     _STATE["last_action"] = f"sell_failed:{sym}"
@@ -582,6 +635,13 @@ def _run_cycle() -> None:
         "actions_taken": actions,
         "errors": errs[:12],
         "params_snapshot": {k: params.get(k) for k in sorted(params.keys())},
+        "exit_scan_count": exit_scan_count,
+        "exit_proposals_count": exit_proposals_count,
+        "exit_execution_attempted_count": exit_execution_attempted_count,
+        "exit_execution_success_count": exit_execution_success_count,
+        "exit_execution_error_count": exit_execution_error_count,
+        "last_exit_block_reason": last_exit_block_reason,
+        "exit_position_evaluations": exit_position_evaluations,
     }
     status = "error" if errs and not actions else "ok"
     if any(a.get("type") == "kill" for a in actions):
@@ -670,6 +730,42 @@ def start_testnet_auto(*, params: dict[str, Any] | None = None) -> dict[str, Any
     return get_testnet_auto_status()
 
 
+def update_testnet_auto_params(*, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    """
+    Actualiza parámetros en caliente sin reiniciar el hilo ni cambiar enabled.
+    _run_cycle ya relee _STATE['params'] al inicio de cada ciclo.
+    """
+    with _LOCK:
+        prior = copy.deepcopy(_STATE.get("params") or {})
+    merged_raw = _merge_params(prior, params)
+    merged, audits = _clamp_params_with_audit(merged_raw)
+    changed = sorted([k for k in _DEFAULT_PARAMS if prior.get(k) != merged.get(k)])
+
+    with _LOCK:
+        _STATE["params"] = merged
+        _STATE["last_params_request"] = copy.deepcopy(merged_raw)
+        _STATE["params_clamp_audit"] = audits
+        _STATE["params_last_update_at"] = _utc_now_iso()
+        _STATE["params_last_update_changed_fields"] = copy.deepcopy(changed)
+        new_interval = max(60, int(float(merged["cycle_interval_minutes"]) * 60))
+        old_interval = max(60, int(_STATE.get("interval_seconds") or 300))
+        if new_interval != old_interval:
+            _STATE["interval_seconds"] = new_interval
+            if _STATE.get("enabled"):
+                _schedule_next_run_locked(new_interval)
+
+    if changed:
+        _log(
+            f"update_params changed={changed} max_open={merged.get('max_open_positions')} "
+            f"max_trades_day={merged.get('max_trades_per_day')} clamp_diffs={len(audits)}"
+        )
+    else:
+        _log("update_params: sin cambios efectivos respecto al estado actual")
+
+    _WAKE.set()
+    return get_testnet_auto_status()
+
+
 def stop_testnet_auto() -> dict[str, Any]:
     """Detiene el auto runner (kill switch)."""
     global _THREAD
@@ -718,6 +814,8 @@ def _derive_auto_risk_status(ev: dict[str, Any], *, sl_pct: float, tp_pct: float
     avg_f = _f(ev.get("avg_entry_price"))
     tr_f = _f(ev.get("trailing_stop_price"))
     pnl_f = _f(ev.get("pnl_pct"))
+    if ev.get("trailing_activated") is True:
+        return "trailing_activo", None
     if tr_f is not None and avg_f is not None and avg_f > 0 and hi_f is not None and hi_f > avg_f * 1.0002:
         if pnl_f is None or pnl_f > -1e-6:
             return "trailing_activo", None
@@ -736,6 +834,7 @@ def _open_position_risk_from_params(params: dict[str, Any]) -> dict[str, Any]:
             stop_loss_pct=float(p["stop_loss_pct"]),
             take_profit_pct=float(p["take_profit_pct"]),
             trailing_stop_pct=float(p["trailing_stop_pct"]),
+            trailing_activation_pct=float(p["trailing_activation_pct"]),
             min_value_usdt=float(p["min_exit_value_usdt"]),
             break_even_trigger_pct=float(p["break_even_trigger_pct"]),
             break_even_plus_pct=float(p["break_even_plus_pct"]),
@@ -769,28 +868,39 @@ def _open_position_risk_from_params(params: dict[str, Any]) -> dict[str, Any]:
         if not sym:
             continue
         risk_status, risk_detail = _derive_auto_risk_status(ev, sl_pct=sl_pct, tp_pct=tp_pct)
-        rows.append(
-            {
-                "symbol": sym,
-                "asset": ev.get("asset"),
-                "avg_entry_price": ev.get("avg_entry_price"),
-                "current_price": ev.get("current_price"),
-                "unrealized_pnl_pct": ev.get("pnl_pct") if ev.get("pnl_pct") is not None else ev.get("unrealized_pnl_pct"),
-                "stop_loss_price": ev.get("stop_loss_price"),
-                "take_profit_price": ev.get("take_profit_price"),
-                "trailing_stop_price": ev.get("trailing_stop_price"),
-                "break_even_price": ev.get("break_even_price"),
-                "highest_price": ev.get("highest_price"),
-                "distance_to_stop_loss_pct": ev.get("distance_to_stop_loss_pct"),
-                "distance_to_take_profit_pct": ev.get("distance_to_take_profit_pct"),
-                "exit_reason": ev.get("exit_reason") if str(ev.get("status") or "") == "proposed" else None,
-                "position_status": ev.get("position_status"),
-                "evaluation_status": ev.get("status"),
-                "risk_status": risk_status,
-                "risk_detail": risk_detail,
-                "message": ev.get("message"),
-            }
-        )
+        row: dict[str, Any] = {
+            "symbol": sym,
+            "asset": ev.get("asset"),
+            "avg_entry_price": ev.get("avg_entry_price"),
+            "current_price": ev.get("current_price"),
+            "unrealized_pnl_pct": ev.get("pnl_pct") if ev.get("pnl_pct") is not None else ev.get("unrealized_pnl_pct"),
+            "stop_loss_price": ev.get("stop_loss_price"),
+            "take_profit_price": ev.get("take_profit_price"),
+            "trailing_stop_price": ev.get("trailing_stop_price"),
+            "trailing_activation_pct": ev.get("trailing_activation_pct"),
+            "trailing_activated": ev.get("trailing_activated"),
+            "max_favorable_pct": ev.get("max_favorable_pct"),
+            "exit_rule_version": ev.get("exit_rule_version"),
+            "break_even_price": ev.get("break_even_price"),
+            "highest_price": ev.get("highest_price"),
+            "distance_to_stop_loss_pct": ev.get("distance_to_stop_loss_pct"),
+            "distance_to_take_profit_pct": ev.get("distance_to_take_profit_pct"),
+            "exit_reason": ev.get("exit_reason") if str(ev.get("status") or "") == "proposed" else None,
+            "position_status": ev.get("position_status"),
+            "evaluation_status": ev.get("status"),
+            "risk_status": risk_status,
+            "risk_detail": risk_detail,
+            "message": ev.get("message"),
+            "stop_loss_pct": ev.get("stop_loss_pct"),
+            "take_profit_pct": ev.get("take_profit_pct"),
+            "free_balance_base": ev.get("free_balance_base"),
+            "sell_amount_base": ev.get("sell_amount_base"),
+            "eligible_for_auto_sell": ev.get("eligible_for_auto_sell"),
+            "blocked_reason": ev.get("blocked_reason"),
+            "take_profit_triggered": ev.get("take_profit_triggered"),
+            "value_usdt": ev.get("value_usdt"),
+        }
+        rows.append(row)
 
     return {
         "ok": True,
@@ -799,6 +909,10 @@ def _open_position_risk_from_params(params: dict[str, Any]) -> dict[str, Any]:
         "persist_trailing_state": False,
         "open_positions_count": int(payload.get("open_positions_count") or 0),
         "trailing_stop_pct_effective": payload.get("trailing_stop_pct_effective"),
+        "trailing_activation_pct": payload.get("trailing_activation_pct"),
+        "exit_rule_version": payload.get("exit_rule_version"),
+        "balances_fetch_ok": payload.get("balances_fetch_ok"),
+        "balances_fetch_error": payload.get("balances_fetch_error"),
         "positions": rows,
     }
 
@@ -882,6 +996,8 @@ def get_testnet_auto_status() -> dict[str, Any]:
                 str(guard_code) if guard_code is not None else None,
                 guard_snap if isinstance(guard_snap, dict) else None,
             ),
+            "params_last_update_at": _STATE.get("params_last_update_at"),
+            "params_last_update_changed_fields": copy.deepcopy(_STATE.get("params_last_update_changed_fields") or []),
         }
 
     try:

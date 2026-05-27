@@ -20,7 +20,12 @@ _CANCEL_ORDER_LOG_PREFIX = "[CRYPTO_TESTNET_CANCEL_ORDER]"
 _LIMIT_ORDER_LOG_PREFIX = "[CRYPTO_TESTNET_LIMIT_ORDER]"
 _SYNC_ORDERS_LOG_PREFIX = "[CRYPTO_TESTNET_SYNC_ORDERS]"
 _TRAILING_EXIT_LOG_PREFIX = "[CRYPTO_TESTNET_TRAILING_EXIT]"
-DEFAULT_TESTNET_TRAILING_STOP_PCT: float = 1.5
+_EXIT_RULE_LOG_PREFIX = "[CRYPTO_EXIT_RULE]"
+DEFAULT_TESTNET_STOP_LOSS_PCT: float = 0.8
+DEFAULT_TESTNET_TAKE_PROFIT_PCT: float = 1.0
+DEFAULT_TESTNET_TRAILING_STOP_PCT: float = 0.5
+DEFAULT_TESTNET_TRAILING_ACTIVATION_PCT: float = 1.0
+TESTNET_EXIT_RULE_VERSION = "testnet_tp1_sl08_trail05_activation1"
 
 # Estados LIMIT en historial local que pueden cambiar en el exchange (solo lectura/sync).
 _SYNCABLE_LIMIT_STATUSES = frozenset(
@@ -1233,25 +1238,45 @@ def get_testnet_app_positions() -> dict[str, Any]:
 
     if open_positions and is_testnet_enabled() and _ccxt_available():
         ex = _build_sandbox_exchange(with_credentials=False)
+        ex_auth_fallback = None
+        if is_testnet_configured():
+            try:
+                cand = get_testnet_exchange()
+                if cand is not None:
+                    _assert_exchange_is_sandbox(cand, "app_positions_ticker_fallback")
+                    ex_auth_fallback = cand
+            except Exception as e:
+                _log(f"app_positions: ticker fallback exchange no disponible {_safe_error(e)}")
+                ex_auth_fallback = None
+
         for pos in open_positions:
             sym = str(pos.get("symbol") or "").strip()
             if not sym:
                 continue
             px: float | None = prices.get(sym)
             if sym not in prices:
-                try:
-                    tk = ex.fetch_ticker(sym)
-                    if isinstance(tk, dict):
-                        raw_px = tk.get("last") or tk.get("bid") or tk.get("close")
-                        px = _safe_ccxt_float(raw_px)
-                        if px is not None and px <= 0:
-                            px = None
-                    else:
-                        px = None
-                except Exception as e:
-                    _log(f"app_positions: ticker {sym} falló {_safe_error(e)}")
-                    px = None
-                prices[sym] = px
+                px_res: float | None = None
+                for label, client in (("public", ex), ("auth_fallback", ex_auth_fallback)):
+                    if client is None:
+                        continue
+                    try:
+                        tk = client.fetch_ticker(sym)
+                        if isinstance(tk, dict):
+                            raw_px = tk.get("last") or tk.get("bid") or tk.get("close")
+                            px_res = _safe_ccxt_float(raw_px)
+                            if px_res is not None and px_res <= 0:
+                                px_res = None
+                        else:
+                            px_res = None
+                        if px_res is not None:
+                            break
+                    except Exception as e:
+                        _log(f"app_positions: ticker {sym} ({label}) falló {_safe_error(e)}")
+                        px_res = None
+                prices[sym] = px_res
+                px = px_res
+            else:
+                px = prices.get(sym)
 
             amt = _safe_ccxt_float(pos.get("amount_base")) or 0.0
             entry = _safe_ccxt_float(pos.get("avg_entry_price"))
@@ -1823,35 +1848,66 @@ def _effective_trailing_stop_pct(trailing_stop_pct: float | None) -> float:
     return float(trailing_stop_pct)
 
 
+def _log_exit_rule(event: str, *, symbol: str | None = None, **extra: Any) -> None:
+    parts = [f"{_EXIT_RULE_LOG_PREFIX} {event}"]
+    if symbol:
+        parts.append(f"symbol={symbol}")
+    for k, v in extra.items():
+        if v is not None:
+            parts.append(f"{k}={v}")
+    print(" ".join(parts), flush=True)
+
+
 def _update_trailing_state_entry(
     state: dict[str, dict[str, Any]],
     symbol: str,
     current_price: float,
     trailing_stop_pct: float,
+    *,
+    avg_entry: float,
+    trailing_activation_pct: float = 0.0,
 ) -> tuple[dict[str, Any], bool]:
     """
-    Actualiza highest_price para el par y devuelve snapshot + si hubo cambio en disco.
-    trailing_stop_price = highest * (1 - pct/100).
+    Actualiza highest_price y activación diferida del trailing.
+    trailing_stop_price sólo existe tras activación (highest >= entry * (1 + activation%/100)).
     """
     key = _position_state_symbol_key(symbol)
     prev = state.get(key) if isinstance(state.get(key), dict) else {}
     prev_high = _safe_ccxt_float(prev.get("highest_price"))
-    highest = prev_high if prev_high is not None and prev_high > 0 else current_price
-    if current_price > highest:
-        highest = current_price
+    highest = avg_entry
+    if prev_high is not None and prev_high > highest:
+        highest = prev_high
+    highest = max(highest, current_price, avg_entry)
 
-    trail_price = highest * (1.0 - trailing_stop_pct / 100.0)
+    was_activated = bool(prev.get("trailing_activated"))
+    if trailing_activation_pct <= 0:
+        trailing_activated = True
+    else:
+        activation_px = avg_entry * (1.0 + trailing_activation_pct / 100.0)
+        trailing_activated = was_activated or highest >= activation_px - 1e-12
+
+    trail_price: float | None = None
+    triggered = False
+    if trailing_activated and trailing_stop_pct > 0:
+        trail_price = highest * (1.0 - trailing_stop_pct / 100.0)
+        triggered = current_price <= trail_price + 1e-12
+
     now_iso = datetime.now().astimezone().isoformat(timespec="seconds")
     entry = {
+        **prev,
         "highest_price": round(highest, 8),
         "trailing_stop_pct": round(trailing_stop_pct, 6),
-        "trailing_stop_price": round(trail_price, 8),
+        "trailing_stop_price": round(trail_price, 8) if trail_price is not None else None,
+        "trailing_activated": trailing_activated,
+        "trailing_activation_pct": round(trailing_activation_pct, 6),
         "updated_at": now_iso,
     }
     changed = (
         prev.get("highest_price") != entry["highest_price"]
         or prev.get("trailing_stop_pct") != entry["trailing_stop_pct"]
         or prev.get("trailing_stop_price") != entry["trailing_stop_price"]
+        or prev.get("trailing_activated") != entry["trailing_activated"]
+        or prev.get("trailing_activation_pct") != entry["trailing_activation_pct"]
         or prev.get("updated_at") != entry["updated_at"]
     )
     state[key] = entry
@@ -1859,10 +1915,36 @@ def _update_trailing_state_entry(
         "highest_price": entry["highest_price"],
         "trailing_stop_pct": entry["trailing_stop_pct"],
         "trailing_stop_price": entry["trailing_stop_price"],
+        "trailing_activated": trailing_activated,
+        "trailing_activation_pct": entry["trailing_activation_pct"],
         "updated_at": entry["updated_at"],
-        "triggered": current_price <= trail_price + 1e-12,
+        "triggered": triggered,
+        "was_activated_before": was_activated,
     }
     return snapshot, changed
+
+
+def _attach_testnet_exit_rule_metadata(
+    eval_row: dict[str, Any],
+    *,
+    avg_entry: float,
+    trailing_activation_pct: float,
+    trailing_activated: bool,
+    highest_price: float | None,
+    trailing_stop_price: float | None,
+    current_price: float | None = None,
+) -> None:
+    hi = highest_price if highest_price is not None and highest_price > 0 else avg_entry
+    if (hi is None or hi <= avg_entry) and current_price is not None and current_price > avg_entry:
+        hi = current_price
+    eval_row["exit_rule_version"] = TESTNET_EXIT_RULE_VERSION
+    eval_row["trailing_activation_pct"] = float(trailing_activation_pct)
+    eval_row["trailing_activated"] = bool(trailing_activated)
+    if trailing_stop_price is not None:
+        eval_row["trailing_stop_price"] = trailing_stop_price
+    eval_row["max_favorable_pct"] = (
+        round((hi - avg_entry) / avg_entry * 100.0, 4) if avg_entry > 0 else None
+    )
 
 
 def _base_asset_from_symbol(symbol: str) -> str:
@@ -1934,6 +2016,39 @@ def _build_testnet_exit_proposal(
     return obj
 
 
+def canonical_auto_exit_block_reason(internal: str | None) -> str | None:
+    """
+    Códigos estables para UI / JSONL (Auto Testnet).
+    Mapea razones internas de evaluación a un conjunto acotado explícito.
+    """
+    if not internal:
+        return None
+    r = str(internal).strip()
+    identity = {
+        "guard_fail",
+        "no_free_balance",
+        "no_app_position",
+        "proposal_missing",
+        "amount_too_small",
+        "exchange_error",
+        "already_sold",
+        "params_not_applied",
+    }
+    if r in identity:
+        return r
+    mapping: dict[str, str] = {
+        "no_free_base": "no_free_balance",
+        "no_sellable_amount": "already_sold",
+        "below_min_value": "amount_too_small",
+        "no_symbol": "no_app_position",
+        "no_app_position": "no_app_position",
+        "missing_avg_entry": "no_app_position",
+        "no_price": "proposal_missing",
+        "balances_read_failed": "guard_fail",
+    }
+    return mapping.get(r, "proposal_missing")
+
+
 def _evaluate_app_open_position_exit(
     pos: dict[str, Any],
     *,
@@ -1942,10 +2057,13 @@ def _evaluate_app_open_position_exit(
     take_profit_pct: float,
     effective_trail: float,
     trailing_active: bool,
+    trailing_activation_pct: float,
     min_value_usdt: float,
     break_even_trigger_pct: float,
     break_even_plus_pct: float,
     position_state: dict[str, dict[str, Any]],
+    balances_fetch_ok: bool = True,
+    balances_fetch_error: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """
     Evalúa salida para una posición abierta reconstruida por la app (FIFO local).
@@ -1975,15 +2093,26 @@ def _evaluate_app_open_position_exit(
         "current_pnl_pct": _safe_ccxt_float(pos.get("unrealized_pnl_pct")),
         "pnl_pct": _safe_ccxt_float(pos.get("unrealized_pnl_pct")),
         "free_base": free_base,
+        "free_balance_base": free_base,
         "stop_loss_price": None,
         "take_profit_price": None,
+        "stop_loss_pct": float(stop_loss_pct),
+        "take_profit_pct": float(take_profit_pct),
         "break_even_price": None,
         "trailing_stop_price": None,
         "highest_price": None,
         "trailing_stop_pct": None,
         "distance_to_stop_loss_pct": None,
         "distance_to_take_profit_pct": None,
+        "sell_amount_base": None,
+        "eligible_for_auto_sell": False,
+        "blocked_reason": None,
+        "take_profit_triggered": False,
         "message": "Posición en seguimiento; sin salida sugerida.",
+        "exit_rule_version": TESTNET_EXIT_RULE_VERSION,
+        "trailing_activation_pct": float(trailing_activation_pct),
+        "trailing_activated": False,
+        "max_favorable_pct": None,
     }
 
     state_dirty = False
@@ -1993,6 +2122,8 @@ def _evaluate_app_open_position_exit(
         eval_row["position_status"] = "skipped"
         eval_row["reason"] = "no_symbol"
         eval_row["message"] = "Símbolo inválido."
+        eval_row["blocked_reason"] = canonical_auto_exit_block_reason("no_symbol")
+        eval_row["eligible_for_auto_sell"] = False
         return eval_row, state_dirty
 
     if amt <= 1e-12:
@@ -2000,6 +2131,8 @@ def _evaluate_app_open_position_exit(
         eval_row["position_status"] = "skipped"
         eval_row["reason"] = "no_app_position"
         eval_row["message"] = "Sin cantidad en posición app."
+        eval_row["blocked_reason"] = canonical_auto_exit_block_reason("no_app_position")
+        eval_row["eligible_for_auto_sell"] = False
         return eval_row, state_dirty
 
     if avg_entry is None or avg_entry <= 0 or not math.isfinite(avg_entry):
@@ -2007,28 +2140,72 @@ def _evaluate_app_open_position_exit(
         eval_row["position_status"] = "skipped"
         eval_row["reason"] = "missing_avg_entry"
         eval_row["message"] = "Sin precio de entrada promedio en historial local."
+        eval_row["blocked_reason"] = canonical_auto_exit_block_reason("missing_avg_entry")
+        eval_row["eligible_for_auto_sell"] = False
         return eval_row, state_dirty
 
     eval_row["avg_entry_price"] = round(avg_entry, 8)
     eval_row["avg_entry_usdt"] = round(avg_entry, 8)
     eval_row["break_even_price"] = round(avg_entry, 8)
 
+    sl_price = avg_entry * (1.0 - stop_loss_pct / 100.0) if stop_loss_pct > 0 else None
+    tp_price = avg_entry * (1.0 + take_profit_pct / 100.0) if take_profit_pct > 0 else None
+    if sl_price is not None:
+        eval_row["stop_loss_price"] = round(sl_price, 8)
+    if tp_price is not None:
+        eval_row["take_profit_price"] = round(tp_price, 8)
+
     if px is None or px <= 0 or not math.isfinite(px):
         eval_row["status"] = "skipped"
         eval_row["position_status"] = "skipped"
         eval_row["reason"] = "no_price"
         eval_row["message"] = "Precio actual no disponible."
+        eval_row["blocked_reason"] = canonical_auto_exit_block_reason("no_price")
+        eval_row["eligible_for_auto_sell"] = False
+        return eval_row, state_dirty
+
+    pnl_pct = (px - avg_entry) / avg_entry * 100.0
+    eval_row["pnl_pct"] = round(pnl_pct, 6)
+    eval_row["current_pnl_pct"] = round(pnl_pct, 6)
+
+    if sl_price is not None:
+        eval_row["distance_to_stop_loss_pct"] = round((px - sl_price) / avg_entry * 100.0, 4)
+    if tp_price is not None:
+        eval_row["distance_to_take_profit_pct"] = round((tp_price - px) / avg_entry * 100.0, 4)
+
+    eps_preview = max(1e-12, avg_entry * 1e-9)
+    eval_row["take_profit_triggered"] = bool(
+        take_profit_pct > 0 and tp_price is not None and px + 1e-12 >= tp_price - eps_preview
+    )
+
+    if not balances_fetch_ok:
+        eval_row["status"] = "skipped"
+        eval_row["position_status"] = "skipped"
+        eval_row["reason"] = "balances_read_failed"
+        eval_row["message"] = (
+            f"No se pudo leer balance testnet ({balances_fetch_error or 'sin detalle'}); "
+            "no se propone venta automática sin confirmar saldo libre."
+        )
+        eval_row["blocked_reason"] = canonical_auto_exit_block_reason("balances_read_failed")
+        eval_row["eligible_for_auto_sell"] = False
+        eval_row["free_balance_base"] = None
+        eval_row["free_base"] = None
+        eval_row["sell_amount_base"] = None
         return eval_row, state_dirty
 
     sellable = min(amt, max(free_base, 0.0))
     value_sellable = sellable * px
     eval_row["value_usdt"] = round(value_sellable, 8)
+    eval_row["sell_amount_base"] = round(sellable, 12) if sellable > 1e-12 else 0.0
+    eval_row["free_balance_base"] = free_base
 
     if free_base <= 1e-12:
         eval_row["status"] = "skipped"
         eval_row["position_status"] = "skipped"
         eval_row["reason"] = "no_free_base"
         eval_row["message"] = "Sin saldo libre testnet para vender."
+        eval_row["blocked_reason"] = canonical_auto_exit_block_reason("no_free_base")
+        eval_row["eligible_for_auto_sell"] = False
         return eval_row, state_dirty
 
     if sellable <= 1e-12:
@@ -2036,6 +2213,8 @@ def _evaluate_app_open_position_exit(
         eval_row["position_status"] = "skipped"
         eval_row["reason"] = "no_sellable_amount"
         eval_row["message"] = "Cantidad vendible nula (posición app vs saldo libre)."
+        eval_row["blocked_reason"] = canonical_auto_exit_block_reason("no_sellable_amount")
+        eval_row["eligible_for_auto_sell"] = False
         return eval_row, state_dirty
 
     if value_sellable + 1e-9 < min_value_usdt:
@@ -2043,31 +2222,58 @@ def _evaluate_app_open_position_exit(
         eval_row["position_status"] = "skipped"
         eval_row["reason"] = "below_min_value"
         eval_row["message"] = f"Valor vendible por debajo del mínimo ({min_value_usdt} USDT)."
+        eval_row["blocked_reason"] = canonical_auto_exit_block_reason("below_min_value")
+        eval_row["eligible_for_auto_sell"] = False
         return eval_row, state_dirty
 
-    pnl_pct = (px - avg_entry) / avg_entry * 100.0
-    eval_row["pnl_pct"] = round(pnl_pct, 6)
-    eval_row["current_pnl_pct"] = round(pnl_pct, 6)
-
-    sl_price = avg_entry * (1.0 - stop_loss_pct / 100.0) if stop_loss_pct > 0 else None
-    tp_price = avg_entry * (1.0 + take_profit_pct / 100.0) if take_profit_pct > 0 else None
-    if sl_price is not None:
-        eval_row["stop_loss_price"] = round(sl_price, 8)
-        eval_row["distance_to_stop_loss_pct"] = round((px - sl_price) / avg_entry * 100.0, 4)
-    if tp_price is not None:
-        eval_row["take_profit_price"] = round(tp_price, 8)
-        eval_row["distance_to_take_profit_pct"] = round((tp_price - px) / avg_entry * 100.0, 4)
-
     trailing_snapshot: dict[str, Any] | None = None
+    trailing_activated = False
     if trailing_active and effective_trail > 0:
         trailing_snapshot, st_changed = _update_trailing_state_entry(
-            position_state, sym, px, effective_trail
+            position_state,
+            sym,
+            px,
+            effective_trail,
+            avg_entry=avg_entry,
+            trailing_activation_pct=float(trailing_activation_pct),
         )
         if st_changed:
             state_dirty = True
+        trailing_activated = bool(trailing_snapshot.get("trailing_activated"))
         eval_row["highest_price"] = trailing_snapshot.get("highest_price")
         eval_row["trailing_stop_pct"] = trailing_snapshot.get("trailing_stop_pct")
         eval_row["trailing_stop_price"] = trailing_snapshot.get("trailing_stop_price")
+        was_before = bool(trailing_snapshot.get("was_activated_before"))
+        if trailing_activated and not was_before:
+            _log_exit_rule(
+                "trailing_active",
+                symbol=sym,
+                highest=trailing_snapshot.get("highest_price"),
+                trailing_stop_price=trailing_snapshot.get("trailing_stop_price"),
+            )
+        elif not trailing_activated:
+            key_tr = _position_state_symbol_key(sym)
+            st_tr = position_state.get(key_tr) if isinstance(position_state.get(key_tr), dict) else {}
+            if not st_tr.get("exit_rule_inactive_logged"):
+                activation_px = avg_entry * (1.0 + float(trailing_activation_pct) / 100.0)
+                _log_exit_rule(
+                    "trailing_inactive_until_activation",
+                    symbol=sym,
+                    highest=trailing_snapshot.get("highest_price"),
+                    activation_price=round(activation_px, 8),
+                )
+                position_state[key_tr] = {**st_tr, "exit_rule_inactive_logged": True}
+                state_dirty = True
+
+    _attach_testnet_exit_rule_metadata(
+        eval_row,
+        avg_entry=avg_entry,
+        trailing_activation_pct=float(trailing_activation_pct),
+        trailing_activated=trailing_activated,
+        highest_price=_safe_ccxt_float(eval_row.get("highest_price")),
+        trailing_stop_price=_safe_ccxt_float(eval_row.get("trailing_stop_price")),
+        current_price=px,
+    )
 
     key = _position_state_symbol_key(sym)
     st_entry = position_state.get(key) if isinstance(position_state.get(key), dict) else {}
@@ -2092,6 +2298,7 @@ def _evaluate_app_open_position_exit(
     elif (
         trailing_active
         and trailing_snapshot is not None
+        and trailing_activated
         and trailing_snapshot.get("triggered")
     ):
         exit_reason = "trailing_stop"
@@ -2104,8 +2311,22 @@ def _evaluate_app_open_position_exit(
         eval_row["status"] = "holding"
         eval_row["position_status"] = "holding"
         eval_row["reason"] = "holding"
-        eval_row["message"] = "Posición en seguimiento; sin salida sugerida."
+        eval_row["eligible_for_auto_sell"] = False
+        if bool(eval_row.get("take_profit_triggered")):
+            eval_row["blocked_reason"] = "params_not_applied"
+            eval_row["message"] = (
+                "El precio cumple condición de take profit según avg/tp_pct, pero la regla no activó salida; "
+                "revisá coherencia de parámetros (p. ej. take_profit_pct en 0) o reportá el caso."
+            )
+        else:
+            eval_row["blocked_reason"] = None
+            eval_row["message"] = "Posición en seguimiento; sin salida sugerida."
         return eval_row, state_dirty
+
+    if exit_reason == "stop_loss":
+        _log_exit_rule("stop_loss", symbol=sym, px=round(px, 8), pnl_pct=round(pnl_pct, 6))
+    elif exit_reason == "take_profit":
+        _log_exit_rule("take_profit", symbol=sym, px=round(px, 8), pnl_pct=round(pnl_pct, 6))
 
     proposal_obj = _build_testnet_exit_proposal(
         asset=asset,
@@ -2127,14 +2348,17 @@ def _evaluate_app_open_position_exit(
     eval_row["exit_reason"] = exit_reason
     eval_row["proposal"] = proposal_obj
     eval_row["message"] = f"Salida sugerida: {exit_reason}."
+    eval_row["eligible_for_auto_sell"] = True
+    eval_row["blocked_reason"] = None
     return eval_row, state_dirty
 
 
 def propose_testnet_exits(
     *,
-    stop_loss_pct: float = 2.0,
-    take_profit_pct: float = 4.0,
+    stop_loss_pct: float = DEFAULT_TESTNET_STOP_LOSS_PCT,
+    take_profit_pct: float = DEFAULT_TESTNET_TAKE_PROFIT_PCT,
     trailing_stop_pct: float | None = None,
+    trailing_activation_pct: float = DEFAULT_TESTNET_TRAILING_ACTIVATION_PCT,
     min_value_usdt: float = 5.0,
     break_even_trigger_pct: float = 0.0,
     break_even_plus_pct: float = 0.0,
@@ -2161,6 +2385,8 @@ def propose_testnet_exits(
         raise ValueError("break_even_trigger_pct inválido")
     if not math.isfinite(break_even_plus_pct) or break_even_plus_pct < 0:
         raise ValueError("break_even_plus_pct inválido")
+    if not math.isfinite(trailing_activation_pct) or trailing_activation_pct < 0:
+        raise ValueError("trailing_activation_pct inválido")
 
     effective_trail = _effective_trailing_stop_pct(trailing_stop_pct)
     trailing_active = effective_trail > 0
@@ -2179,6 +2405,11 @@ def propose_testnet_exits(
         }
 
     bal_payload = get_testnet_balances()
+    balances_fetch_ok = bool(bal_payload.get("ok"))
+    balances_fetch_error: str | None = (
+        str(bal_payload.get("error") or "").strip() or None if not balances_fetch_ok else None
+    )
+
     position_state_disk = _load_testnet_position_state()
     if persist_trailing_state:
         position_state = position_state_disk
@@ -2209,10 +2440,13 @@ def propose_testnet_exits(
             take_profit_pct=float(take_profit_pct),
             effective_trail=effective_trail,
             trailing_active=trailing_active,
+            trailing_activation_pct=float(trailing_activation_pct),
             min_value_usdt=float(min_value_usdt),
             break_even_trigger_pct=float(break_even_trigger_pct),
             break_even_plus_pct=float(break_even_plus_pct),
             position_state=position_state,
+            balances_fetch_ok=balances_fetch_ok,
+            balances_fetch_error=balances_fetch_error,
         )
         if row_dirty:
             position_state_dirty = True
@@ -2251,11 +2485,15 @@ def propose_testnet_exits(
         "default_trailing_stop_pct": DEFAULT_TESTNET_TRAILING_STOP_PCT,
         "stop_loss_pct": float(stop_loss_pct),
         "take_profit_pct": float(take_profit_pct),
+        "trailing_activation_pct": float(trailing_activation_pct),
+        "exit_rule_version": TESTNET_EXIT_RULE_VERSION,
         "min_value_usdt": float(min_value_usdt),
         "break_even_trigger_pct": float(break_even_trigger_pct),
         "break_even_plus_pct": float(break_even_plus_pct),
         "position_source": TESTNET_POSITION_SOURCE,
         "open_positions_count": len(open_positions),
+        "balances_fetch_ok": balances_fetch_ok,
+        "balances_fetch_error": balances_fetch_error,
     }
 
 
@@ -2356,6 +2594,9 @@ def _append_manual_testnet_order_record(
     tf = str(ctx.get("timeframe") or "").strip()
     if tf:
         row["timeframe"] = tf
+    exr = str(ctx.get("exit_reason") or "").strip()
+    if exr:
+        row["exit_reason"] = exr[:160]
 
     prev = _load_testnet_orders_json()
     prev.append(row)

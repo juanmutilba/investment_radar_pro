@@ -679,6 +679,10 @@ export type CryptoTestnetExitEvaluatedRow = {
   highest_price?: number | null;
   trailing_stop_pct?: number | null;
   trailing_stop_price?: number | null;
+  trailing_activation_pct?: number | null;
+  trailing_activated?: boolean | null;
+  max_favorable_pct?: number | null;
+  exit_rule_version?: string | null;
   distance_to_stop_loss_pct?: number | null;
   distance_to_take_profit_pct?: number | null;
   exit_reason?: string | null;
@@ -696,6 +700,8 @@ export type CryptoTestnetProposeExitsPayload = {
   default_trailing_stop_pct?: number;
   stop_loss_pct?: number;
   take_profit_pct?: number;
+  trailing_activation_pct?: number;
+  exit_rule_version?: string;
   min_value_usdt?: number;
   break_even_trigger_pct?: number;
   break_even_plus_pct?: number;
@@ -952,6 +958,7 @@ export type CryptoTestnetAutoStartBody = {
   stop_loss_pct?: number;
   take_profit_pct?: number;
   trailing_stop_pct?: number;
+  trailing_activation_pct?: number;
   break_even_trigger_pct?: number;
   break_even_plus_pct?: number;
   min_exit_value_usdt?: number;
@@ -962,6 +969,9 @@ export type CryptoTestnetAutoStartBody = {
   max_total_exposure_usdt?: number;
   max_quote_per_order_usdt?: number;
 };
+
+/** POST /crypto/testnet/auto/update-params — mismo shape que start, campos opcionales. */
+export type CryptoTestnetAutoUpdateParamsBody = Partial<CryptoTestnetAutoStartBody>;
 
 export type CryptoTestnetAutoParamsSnapshot = Record<string, unknown>;
 
@@ -974,6 +984,10 @@ export type CryptoTestnetAutoOpenPositionRiskRow = {
   stop_loss_price?: number | null;
   take_profit_price?: number | null;
   trailing_stop_price?: number | null;
+  trailing_activation_pct?: number | null;
+  trailing_activated?: boolean | null;
+  max_favorable_pct?: number | null;
+  exit_rule_version?: string | null;
   break_even_price?: number | null;
   highest_price?: number | null;
   distance_to_stop_loss_pct?: number | null;
@@ -984,6 +998,14 @@ export type CryptoTestnetAutoOpenPositionRiskRow = {
   risk_status?: string;
   risk_detail?: string | null;
   message?: string | null;
+  stop_loss_pct?: number | null;
+  take_profit_pct?: number | null;
+  free_balance_base?: number | null;
+  sell_amount_base?: number | null;
+  eligible_for_auto_sell?: boolean | null;
+  blocked_reason?: string | null;
+  take_profit_triggered?: boolean | null;
+  value_usdt?: number | null;
 };
 
 export type CryptoTestnetAutoOpenPositionRiskPayload = {
@@ -993,6 +1015,10 @@ export type CryptoTestnetAutoOpenPositionRiskPayload = {
   persist_trailing_state?: boolean;
   open_positions_count?: number;
   trailing_stop_pct_effective?: number | null;
+  trailing_activation_pct?: number | null;
+  exit_rule_version?: string | null;
+  balances_fetch_ok?: boolean | null;
+  balances_fetch_error?: string | null;
   positions: CryptoTestnetAutoOpenPositionRiskRow[];
 };
 
@@ -1027,6 +1053,8 @@ export type CryptoTestnetAutoStatusPayload = {
   last_params_request?: Record<string, unknown> | null;
   params_clamp_audit?: Array<{ field: string; requested: unknown; applied: unknown }>;
   guard_advice?: string | null;
+  params_last_update_at?: string | null;
+  params_last_update_changed_fields?: string[];
   /** Diagnóstico de riesgo por posición (misma evaluación que propose_testnet_exits). */
   open_position_risk?: CryptoTestnetAutoOpenPositionRiskPayload;
   /** Alias de open_position_risk. */
@@ -1047,6 +1075,24 @@ export async function getCryptoTestnetAutoStatus(): Promise<CryptoTestnetAutoSta
   const data: unknown = await res.json().catch(() => null);
   if (!isCryptoTestnetAutoStatusPayload(data)) {
     throw new Error("Respuesta inesperada: /crypto/testnet/auto/status");
+  }
+  return data;
+}
+
+export async function postCryptoTestnetAutoUpdateParams(
+  body: CryptoTestnetAutoUpdateParamsBody,
+): Promise<CryptoTestnetAutoStatusPayload> {
+  const res = await fetch(`${BASE}/crypto/testnet/auto/update-params`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoTestnetAutoStatusPayload(data)) {
+    throw new Error("Respuesta inesperada: POST /crypto/testnet/auto/update-params");
   }
   return data;
 }
