@@ -15,6 +15,7 @@ from services.crypto.strategy_modes import (
 )
 
 _LOG_PREFIX = "[CRYPTO]"
+_SCORE_LOG_PREFIX = "[CRYPTO_SCORE]"
 
 Trend = Literal["alcista", "bajista", "lateral"]
 Momentum = Literal["positivo", "negativo", "neutro"]
@@ -27,6 +28,10 @@ MIN_OHLCV_ROWS = 55
 
 def _log(msg: str) -> None:
     print(f"{_LOG_PREFIX} {msg}", flush=True)
+
+
+def _score_log(msg: str) -> None:
+    print(f"{_SCORE_LOG_PREFIX} {msg}", flush=True)
 
 
 def sma(values: list[float], period: int) -> float | None:
@@ -178,6 +183,152 @@ def _parse_candles(candles: list[list[Any]]) -> tuple[list[float], list[float]]:
     return closes, volumes
 
 
+def _ohlcv_matrix_for_indicators(candles: list[list[Any]]) -> list[list[float]]:
+    """Velas [ts, o, h, l, c, v] float para _build_indicator_matrix (btc_trend_backtest)."""
+    if not isinstance(candles, list) or len(candles) < MIN_OHLCV_ROWS:
+        raise ValueError(
+            f"Se requieren al menos {MIN_OHLCV_ROWS} velas para SMA50/MACD/RSI; recibidas {len(candles) if isinstance(candles, list) else 0}."
+        )
+    out: list[list[float]] = []
+    for i, row in enumerate(candles):
+        if not isinstance(row, (list, tuple)) or len(row) < 6:
+            raise ValueError(f"Vela inválida en índice {i}: se espera [ts, o, h, l, c, v] para scoring ADX/volumen.")
+        ts = float(row[0])
+        o = float(row[1])
+        h = float(row[2])
+        l = float(row[3])
+        c = float(row[4])
+        v_raw = row[5]
+        if not isinstance(v_raw, (int, float)) or isinstance(v_raw, bool):
+            v = 0.0
+        else:
+            v = float(v_raw)
+            if not math.isfinite(v) or v < 0:
+                v = 0.0
+        for name, x in (("open", o), ("high", h), ("low", l), ("close", c)):
+            if not math.isfinite(x):
+                raise ValueError(f"{name} no finito en vela {i}.")
+        out.append([ts, o, h, l, c, v])
+    return out
+
+
+def _last_bar_pack(candles_matrix: list[list[float]]) -> tuple[Any, Any]:
+    """Import diferido: evita ciclo de import al cargar btc_trend_backtest."""
+    from services.crypto.btc_trend_backtest import _build_indicator_matrix
+
+    regimes, indicators = _build_indicator_matrix(candles_matrix)
+    return regimes[-1], indicators[-1]
+
+
+def _weighted_entry_score_parts(
+    *,
+    bi: Any,
+    rsi_v: float,
+    mh: float,
+    mh_prev: float | None,
+    ema_bull_layout: bool,
+    ema_bear_layout: bool,
+    risk: Risk,
+    breakout20: bool,
+    pullback_ema20: bool,
+) -> dict[str, Any]:
+    """Ponderación de entrada. `btc_trend_score` fijo 0 (filtro BTC trend bull sin cambios)."""
+    adx = getattr(bi, "adx14", None)
+    vr = getattr(bi, "volume_ratio", None)
+
+    adx_score = 0.0
+    if adx is not None and math.isfinite(float(adx)):
+        ax = float(adx)
+        if ax >= 25.0:
+            adx_score = 8.0
+        elif ax >= 20.0:
+            adx_score = 3.0
+        else:
+            adx_score = -4.0
+
+    volume_score = 0.0
+    if vr is not None and math.isfinite(float(vr)):
+        r = float(vr)
+        if r >= 1.2:
+            volume_score = 8.0
+        elif r >= 1.1:
+            volume_score = 4.0
+        elif r < 0.9:
+            volume_score = -10.0
+
+    trigger_score = 0.0
+    if breakout20 or pullback_ema20:
+        trigger_score += 6.0
+        if adx is not None and math.isfinite(float(adx)) and float(adx) >= 25.0:
+            trigger_score += 4.0
+
+    rsi_score = 0.0
+    if 50.0 <= rsi_v <= 60.0:
+        rsi_score = 0.0
+    elif 60.0 < rsi_v <= 70.0:
+        ok = (adx is not None and math.isfinite(float(adx)) and float(adx) >= 25.0) and (
+            vr is not None and math.isfinite(float(vr)) and float(vr) >= 1.1
+        )
+        if ok:
+            rsi_score = 6.0
+    elif rsi_v < 40.0:
+        ok = ema_bull_layout or (adx is not None and math.isfinite(float(adx)) and float(adx) >= 20.0) or pullback_ema20
+        if ok:
+            rsi_score = 5.0
+    elif rsi_v > 70.0:
+        if breakout20 and adx is not None and math.isfinite(float(adx)) and float(adx) >= 25.0:
+            rsi_score = -1.0
+        else:
+            rsi_score = -4.0
+
+    macd_cross_up = mh_prev is not None and float(mh_prev) < 0.0 and mh > 0.0
+    macd_score = 0.0
+    if macd_cross_up:
+        macd_score = 8.0
+    elif mh > 0.0:
+        macd_score = 3.0
+    if mh > 0.0 and adx is not None and math.isfinite(float(adx)) and float(adx) < 20.0:
+        macd_score -= 6.0
+
+    ema_score = 0.0
+    if ema_bull_layout:
+        ema_score = 10.0
+    elif ema_bear_layout:
+        ema_score = -8.0
+
+    btc_trend_score = 0.0
+    risk_penalty = -10.0 if risk == "alto" else 0.0
+
+    base = 34.0
+    total = (
+        base
+        + adx_score
+        + volume_score
+        + trigger_score
+        + rsi_score
+        + macd_score
+        + ema_score
+        + btc_trend_score
+        + risk_penalty
+    )
+    score_i = int(max(0, min(100, round(total))))
+
+    breakdown = {
+        "base": round(base, 4),
+        "adx_score": round(adx_score, 4),
+        "volume_score": round(volume_score, 4),
+        "trigger_score": round(trigger_score, 4),
+        "rsi_score": round(rsi_score, 4),
+        "macd_score": round(macd_score, 4),
+        "ema_score": round(ema_score, 4),
+        "btc_trend_score": round(btc_trend_score, 4),
+        "risk_penalty": round(risk_penalty, 4),
+        "total_before_clamp": round(total, 4),
+        "macd_cross_up": macd_cross_up,
+    }
+    return {"score": score_i, "score_breakdown": breakdown, "score_components": breakdown}
+
+
 def _ema_periods_for_timeframe(timeframe: str, *, daily_mode: bool) -> tuple[int, int]:
     tf = (timeframe or "1h").strip().lower()
     if not daily_mode:
@@ -272,7 +423,7 @@ def _pick_daily_setup_type(
     return None
 
 
-def _analyze_trend_swing(closes: list[float], volumes: list[float], timeframe: str) -> dict[str, Any]:
+def _analyze_trend_swing(closes: list[float], volumes: list[float], timeframe: str, candles: list[list[Any]]) -> dict[str, Any]:
     price = closes[-1]
     sma_20 = sma(closes, 20)
     sma_50 = sma(closes, 50)
@@ -289,22 +440,33 @@ def _analyze_trend_swing(closes: list[float], volumes: list[float], timeframe: s
     assert sma_20 is not None and sma_50 is not None and ema_20 is not None and rsi_14 is not None
     assert m is not None and ms is not None and mh is not None
 
+    mat = _ohlcv_matrix_for_indicators(candles)
+    _reg, bi = _last_bar_pack(mat)
+    mh_prev_bar = getattr(bi, "macd_hist_prev", None)
+    if mh_prev_bar is None:
+        mh_prev_bar = _macd_hist_prev(closes)
+    breakout20 = bool(getattr(bi, "breakout20", False))
+    pullback_ema20 = bool(getattr(bi, "pullback_valid", False))
+
     trend = _trend_label(price, sma_20, sma_50)
     momentum = _momentum_label(mh, rsi_14)
     risk = _risk_label(rsi_14)
+    ema_bull = trend == "alcista"
+    ema_bear = trend == "bajista"
 
-    score = 50
-    if trend == "alcista":
-        score += 20
-    elif trend == "bajista":
-        score -= 20
-    if momentum == "positivo":
-        score += 15
-    elif momentum == "negativo":
-        score -= 15
-    if risk == "alto":
-        score -= 10
-    score_i = int(max(0, min(100, round(score))))
+    scored = _weighted_entry_score_parts(
+        bi=bi,
+        rsi_v=float(rsi_14),
+        mh=float(mh),
+        mh_prev=float(mh_prev_bar) if mh_prev_bar is not None and math.isfinite(float(mh_prev_bar)) else None,
+        ema_bull_layout=ema_bull,
+        ema_bear_layout=ema_bear,
+        risk=risk,
+        breakout20=breakout20,
+        pullback_ema20=pullback_ema20,
+    )
+    score_i = int(scored["score"])
+    bd = scored["score_breakdown"]
     sig = _signal_label(score_i, risk)
 
     return {
@@ -316,10 +478,18 @@ def _analyze_trend_swing(closes: list[float], volumes: list[float], timeframe: s
         "macd": round(m, 8),
         "macd_signal": round(ms, 8),
         "macd_hist": round(mh, 8),
+        "adx_14": round(float(bi.adx14), 4) if bi.adx14 is not None and math.isfinite(float(bi.adx14)) else None,
+        "volume_ratio": round(float(bi.volume_ratio), 4)
+        if bi.volume_ratio is not None and math.isfinite(float(bi.volume_ratio))
+        else None,
+        "breakout20": breakout20,
+        "pullback_ema20": pullback_ema20,
         "trend": trend,
         "momentum": momentum,
         "risk": risk,
         "score": score_i,
+        "score_breakdown": bd,
+        "score_components": bd,
         "signal": sig,
         "strategy_mode": STRATEGY_MODE_TREND_SWING,
         "setup_type": None,
@@ -333,7 +503,7 @@ def _analyze_trend_swing(closes: list[float], volumes: list[float], timeframe: s
     }
 
 
-def _analyze_daily_intraday(closes: list[float], volumes: list[float], timeframe: str) -> dict[str, Any]:
+def _analyze_daily_intraday(closes: list[float], volumes: list[float], timeframe: str, candles: list[list[Any]]) -> dict[str, Any]:
     price = closes[-1]
     ema_fast_p, ema_slow_p = _ema_periods_for_timeframe(timeframe, daily_mode=True)
     ema_fast = ema(closes, ema_fast_p)
@@ -351,6 +521,14 @@ def _analyze_daily_intraday(closes: list[float], volumes: list[float], timeframe
     assert ema_fast is not None and ema_slow is not None and rsi_14 is not None
     assert m is not None and ms is not None and mh is not None
 
+    mat = _ohlcv_matrix_for_indicators(candles)
+    _reg, bi = _last_bar_pack(mat)
+    mh_prev_bar = getattr(bi, "macd_hist_prev", None)
+    if mh_prev_bar is None:
+        mh_prev_bar = mh_prev
+    breakout20 = bool(getattr(bi, "breakout20", False))
+    pullback_ema20 = bool(getattr(bi, "pullback_valid", False))
+
     short_trend = _short_trend_label(price, ema_fast, ema_slow)
     vol_ctx = _volume_context_label(volumes)
     rsi_ctx = _rsi_context_label(rsi_14, closes)
@@ -365,31 +543,26 @@ def _analyze_daily_intraday(closes: list[float], volumes: list[float], timeframe
         ema_fast=ema_fast,
     )
 
-    score = 48
-    if short_trend == "alcista":
-        score += 14
-    elif short_trend == "bajista":
-        score -= 6
-    if rsi_ctx in ("oversold_recovering", "low_recovering", "low_support"):
-        score += 12
-    elif rsi_ctx == "overbought":
-        score -= 8
-    if macd_ctx in ("improving_positive", "recovering"):
-        score += 12
-    elif macd_ctx == "weakening":
-        score -= 6
-    if vol_ctx == "rising":
-        score += 8
-    elif vol_ctx == "weak":
-        score -= 4
-    if setup_type:
-        score += 6
-
-    score_i = int(max(0, min(100, round(score))))
-    sig: Signal = "compra_potencial" if score_i >= 70 and rsi_14 <= 72 else "neutral"
-    entry_eligible = sig == "compra_potencial" or (
-        setup_type in DAILY_SETUP_TYPES and score_i >= 55
+    risk = _risk_label(rsi_14)
+    ema_bull = short_trend == "alcista"
+    ema_bear = short_trend == "bajista"
+    scored = _weighted_entry_score_parts(
+        bi=bi,
+        rsi_v=float(rsi_14),
+        mh=float(mh),
+        mh_prev=float(mh_prev_bar) if mh_prev_bar is not None and math.isfinite(float(mh_prev_bar)) else None,
+        ema_bull_layout=ema_bull,
+        ema_bear_layout=ema_bear,
+        risk=risk,
+        breakout20=breakout20,
+        pullback_ema20=pullback_ema20,
     )
+    score_i = int(scored["score"])
+    bd = scored["score_breakdown"]
+
+    # Sin tope RSI para compra_potencial (no bloquear RSI>60/70 por regla fija).
+    sig: Signal = "compra_potencial" if score_i >= 70 else "neutral"
+    entry_eligible = sig == "compra_potencial" or (setup_type in DAILY_SETUP_TYPES and score_i >= 55)
 
     return {
         "price": round(price, 8),
@@ -400,10 +573,18 @@ def _analyze_daily_intraday(closes: list[float], volumes: list[float], timeframe
         "macd": round(m, 8),
         "macd_signal": round(ms, 8),
         "macd_hist": round(mh, 8),
+        "adx_14": round(float(bi.adx14), 4) if bi.adx14 is not None and math.isfinite(float(bi.adx14)) else None,
+        "volume_ratio": round(float(bi.volume_ratio), 4)
+        if bi.volume_ratio is not None and math.isfinite(float(bi.volume_ratio))
+        else None,
+        "breakout20": breakout20,
+        "pullback_ema20": pullback_ema20,
         "trend": short_trend,
         "momentum": "positivo" if mh > 0 else "negativo" if mh < 0 else "neutro",
-        "risk": "medio",
+        "risk": risk,
         "score": score_i,
+        "score_breakdown": bd,
+        "score_components": bd,
         "signal": sig,
         "strategy_mode": STRATEGY_MODE_DAILY_INTRADAY,
         "setup_type": setup_type,
@@ -422,6 +603,7 @@ def analyze_ohlcv(
     *,
     timeframe: str = "1h",
     strategy_mode: str | None = None,
+    symbol: str | None = None,
 ) -> dict[str, Any]:
     """
     Devuelve dict serializable con indicadores y clasificación.
@@ -431,9 +613,17 @@ def analyze_ohlcv(
     mode = normalize_strategy_mode(strategy_mode)
     closes, volumes = _parse_candles(candles)
     if mode == STRATEGY_MODE_DAILY_INTRADAY:
-        out = _analyze_daily_intraday(closes, volumes, tf)
+        out = _analyze_daily_intraday(closes, volumes, tf, candles)
     else:
-        out = _analyze_trend_swing(closes, volumes, tf)
+        out = _analyze_trend_swing(closes, volumes, tf, candles)
+    sym = (symbol or "?").strip() or "?"
+    bd = out.get("score_breakdown") or {}
+    _score_log(
+        f"symbol={sym} total={out.get('score')} "
+        f"adx={bd.get('adx_score')} volume={bd.get('volume_score')} trigger={bd.get('trigger_score')} "
+        f"rsi={bd.get('rsi_score')} macd={bd.get('macd_score')} ema={bd.get('ema_score')} "
+        f"btc={bd.get('btc_trend_score')} risk={bd.get('risk_penalty')}"
+    )
     _log(
         f"analyze_ohlcv mode={out.get('strategy_mode')} tf={tf} trend={out.get('trend')} "
         f"score={out.get('score')} signal={out.get('signal')} setup={out.get('setup_type')} "

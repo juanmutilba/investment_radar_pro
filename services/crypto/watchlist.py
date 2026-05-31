@@ -85,7 +85,7 @@ def _scan_one(symbol: str, timeframe: str, limit: int, strategy_mode: str | None
         return _error_row(sym, tf, msg)
 
     try:
-        analysis = analyze_ohlcv(candles, timeframe=tf, strategy_mode=strategy_mode)
+        analysis = analyze_ohlcv(candles, timeframe=tf, strategy_mode=strategy_mode, symbol=sym)
     except ValueError as e:
         _log(f"{sym}: analyze_ohlcv {e}")
         return _error_row(sym, tf, str(e))
@@ -116,6 +116,12 @@ def _scan_one(symbol: str, timeframe: str, limit: int, strategy_mode: str | None
         "macd_context": analysis.get("macd_context"),
         "volume_context": analysis.get("volume_context"),
         "btc_context": analysis.get("btc_context"),
+        "adx_14": analysis.get("adx_14"),
+        "volume_ratio": analysis.get("volume_ratio"),
+        "breakout20": analysis.get("breakout20"),
+        "pullback_ema20": analysis.get("pullback_ema20"),
+        "score_breakdown": analysis.get("score_breakdown"),
+        "score_components": analysis.get("score_components"),
         "error": None,
     }
 

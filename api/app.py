@@ -684,7 +684,7 @@ class CryptoTestnetAutoStartBody(BaseModel):
     strategy_mode: str = Field(default="daily_intraday", min_length=1, max_length=32)
     timeframe: str = Field(default="30m", min_length=1, max_length=24)
     limit: int = Field(default=200, ge=50, le=1000)
-    min_entry_score: float = Field(default=65, ge=0, le=100)
+    min_entry_score: float = Field(default=70, ge=0, le=100)
     require_btc_trend_up: bool = False
     cooldown_minutes: int = Field(default=60, ge=0)
     max_open_positions: int = Field(default=3, ge=1, le=50)
@@ -698,13 +698,13 @@ class CryptoTestnetAutoStartBody(BaseModel):
     break_even_plus_pct: float = Field(default=0.0, ge=0)
     min_exit_value_usdt: float = Field(default=5, ge=0)
     max_trades_per_day: int = Field(
-        default=5,
+        default=10,
         ge=1,
         le=100,
         validation_alias=AliasChoices("max_trades_per_day", "max_entries_per_day"),
     )
     max_daily_loss_usdt: float = Field(default=10, gt=0)
-    max_total_exposure_usdt: float = Field(default=50, gt=0)
+    max_total_exposure_usdt: float = Field(default=100, gt=0)
     max_quote_per_order_usdt: float = Field(default=100, gt=0)
 
 
@@ -1071,7 +1071,7 @@ def crypto_analysis(
         )
 
     try:
-        analysis = analyze_ohlcv(candles)
+        analysis = analyze_ohlcv(candles, timeframe=tf, symbol=sym)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

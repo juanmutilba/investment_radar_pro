@@ -1439,6 +1439,20 @@ export type CryptoAnalysisMomentum = "positivo" | "negativo" | "neutro";
 export type CryptoAnalysisRisk = "alto" | "medio" | "bajo";
 export type CryptoAnalysisSignalKind = "compra_potencial" | "neutral" | "cuidado";
 
+export type CryptoScoreBreakdown = {
+  base?: number;
+  adx_score?: number;
+  volume_score?: number;
+  trigger_score?: number;
+  rsi_score?: number;
+  macd_score?: number;
+  ema_score?: number;
+  btc_trend_score?: number;
+  risk_penalty?: number;
+  total_before_clamp?: number;
+  macd_cross_up?: boolean;
+};
+
 export type CryptoAnalysisResult = {
   price: number;
   sma_20: number;
@@ -1453,6 +1467,12 @@ export type CryptoAnalysisResult = {
   risk: CryptoAnalysisRisk;
   score: number;
   signal: CryptoAnalysisSignalKind;
+  score_breakdown?: CryptoScoreBreakdown;
+  score_components?: CryptoScoreBreakdown;
+  adx_14?: number | null;
+  volume_ratio?: number | null;
+  breakout20?: boolean;
+  pullback_ema20?: boolean;
 };
 
 export type CryptoAnalysisPayload = {
@@ -1539,6 +1559,12 @@ export type CryptoScanRow = {
   rsi_14: number | null;
   macd_hist: number | null;
   error: string | null;
+  score_breakdown?: CryptoScoreBreakdown | null;
+  score_components?: CryptoScoreBreakdown | null;
+  adx_14?: number | null;
+  volume_ratio?: number | null;
+  breakout20?: boolean | null;
+  pullback_ema20?: boolean | null;
 };
 
 export type CryptoScanPayload = {
