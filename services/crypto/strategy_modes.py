@@ -9,6 +9,12 @@ StrategyMode = Literal["trend_swing", "daily_intraday"]
 STRATEGY_MODE_TREND_SWING: StrategyMode = "trend_swing"
 STRATEGY_MODE_DAILY_INTRADAY: StrategyMode = "daily_intraday"
 
+# Solo etiqueta `signal` en `daily_intraday` (analyze_ohlcv). Las entradas filtran por `min_entry_score` desde la app.
+DAILY_INTRADAY_SIGNAL_COMPRA_POTENCIAL_MIN_SCORE = 65
+
+# Coherente con `_signal_label` en `signals.py` para `trend_swing`.
+TREND_SWING_SIGNAL_COMPRA_POTENCIAL_MIN_SCORE = 70
+
 DAILY_SETUP_TYPES: tuple[str, ...] = (
     "pullback",
     "rebound",
@@ -26,6 +32,13 @@ def normalize_strategy_mode(mode: str | None) -> StrategyMode:
 
 def is_daily_intraday_mode(strategy_mode: str | None) -> bool:
     return normalize_strategy_mode(strategy_mode) == STRATEGY_MODE_DAILY_INTRADAY
+
+
+def signal_compra_potencial_min_score(strategy_mode: str | None) -> int:
+    """Umbral de score para `row['signal'] == 'compra_potencial'` (diagnóstico/UI), no para ejecutar órdenes."""
+    if is_daily_intraday_mode(strategy_mode):
+        return int(DAILY_INTRADAY_SIGNAL_COMPRA_POTENCIAL_MIN_SCORE)
+    return int(TREND_SWING_SIGNAL_COMPRA_POTENCIAL_MIN_SCORE)
 
 
 def message_no_candidates(strategy_mode: str | None = None) -> str:

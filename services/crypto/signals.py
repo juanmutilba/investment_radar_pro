@@ -8,6 +8,7 @@ import math
 from typing import Any, Literal
 
 from services.crypto.strategy_modes import (
+    DAILY_INTRADAY_SIGNAL_COMPRA_POTENCIAL_MIN_SCORE,
     DAILY_SETUP_TYPES,
     STRATEGY_MODE_DAILY_INTRADAY,
     STRATEGY_MODE_TREND_SWING,
@@ -220,6 +221,35 @@ def _last_bar_pack(candles_matrix: list[list[float]]) -> tuple[Any, Any]:
     return regimes[-1], indicators[-1]
 
 
+def _volume_entry_score(volume_ratio: float | None, *, intraday_soft_penalty: bool) -> float:
+    """
+    Contribución de volumen al score de entrada.
+
+    `intraday_soft_penalty=True` (solo `daily_intraday`): entre 0.7 y 0.9 penaliza -5
+    en lugar de -10, para no equiparar volumen ligeramente bajo con ausencia casi total.
+    """
+    if volume_ratio is None or not math.isfinite(float(volume_ratio)):
+        return 0.0
+    r = float(volume_ratio)
+    if intraday_soft_penalty:
+        if r >= 1.2:
+            return 8.0
+        if r >= 1.1:
+            return 4.0
+        if r >= 0.9:
+            return 0.0
+        if r >= 0.7:
+            return -5.0
+        return -10.0
+    if r >= 1.2:
+        return 8.0
+    if r >= 1.1:
+        return 4.0
+    if r < 0.9:
+        return -10.0
+    return 0.0
+
+
 def _weighted_entry_score_parts(
     *,
     bi: Any,
@@ -231,6 +261,7 @@ def _weighted_entry_score_parts(
     risk: Risk,
     breakout20: bool,
     pullback_ema20: bool,
+    intraday_soft_volume_penalty: bool = False,
 ) -> dict[str, Any]:
     """Ponderación de entrada. `btc_trend_score` fijo 0 (filtro BTC trend bull sin cambios)."""
     adx = getattr(bi, "adx14", None)
@@ -246,15 +277,10 @@ def _weighted_entry_score_parts(
         else:
             adx_score = -4.0
 
-    volume_score = 0.0
-    if vr is not None and math.isfinite(float(vr)):
-        r = float(vr)
-        if r >= 1.2:
-            volume_score = 8.0
-        elif r >= 1.1:
-            volume_score = 4.0
-        elif r < 0.9:
-            volume_score = -10.0
+    volume_score = _volume_entry_score(
+        float(vr) if vr is not None and math.isfinite(float(vr)) else None,
+        intraday_soft_penalty=intraday_soft_volume_penalty,
+    )
 
     trigger_score = 0.0
     if breakout20 or pullback_ema20:
@@ -556,12 +582,15 @@ def _analyze_daily_intraday(closes: list[float], volumes: list[float], timeframe
         risk=risk,
         breakout20=breakout20,
         pullback_ema20=pullback_ema20,
+        intraday_soft_volume_penalty=True,
     )
     score_i = int(scored["score"])
     bd = scored["score_breakdown"]
 
-    # Sin tope RSI para compra_potencial (no bloquear RSI>60/70 por regla fija).
-    sig: Signal = "compra_potencial" if score_i >= 70 else "neutral"
+    # `signal` es etiqueta (UI / scan); la ejecución filtra por `min_entry_score` desde la app.
+    sig: Signal = (
+        "compra_potencial" if score_i >= DAILY_INTRADAY_SIGNAL_COMPRA_POTENCIAL_MIN_SCORE else "neutral"
+    )
     entry_eligible = sig == "compra_potencial" or (setup_type in DAILY_SETUP_TYPES and score_i >= 55)
 
     return {

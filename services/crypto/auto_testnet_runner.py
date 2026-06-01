@@ -34,7 +34,7 @@ _DEFAULT_PARAMS: dict[str, Any] = {
     "strategy_mode": "daily_intraday",
     "timeframe": "30m",
     "limit": 200,
-    "min_entry_score": 65.0,
+    "min_entry_score": 70.0,
     "require_btc_trend_up": False,
     "cooldown_minutes": 60,
     "max_open_positions": 3,
@@ -47,9 +47,9 @@ _DEFAULT_PARAMS: dict[str, Any] = {
     "break_even_trigger_pct": 0.0,
     "break_even_plus_pct": 0.0,
     "min_exit_value_usdt": 5.0,
-    "max_trades_per_day": 5,
+    "max_trades_per_day": 10,
     "max_daily_loss_usdt": 10.0,
-    "max_total_exposure_usdt": 50.0,
+    "max_total_exposure_usdt": 100.0,
     "max_quote_per_order_usdt": 100.0,
 }
 
@@ -276,9 +276,9 @@ def _clamp_params(p: dict[str, Any]) -> dict[str, Any]:
     out["max_open_positions"] = max(1, min(int(out.get("max_open_positions") or 3), 50))
     out["cooldown_minutes"] = max(0, int(out.get("cooldown_minutes") or 0))
     out["limit"] = max(50, min(int(out.get("limit") or 200), 1000))
-    out["max_trades_per_day"] = max(1, min(int(out.get("max_trades_per_day") or 5), 100))
+    out["max_trades_per_day"] = max(1, min(int(out.get("max_trades_per_day") or 10), 100))
     out["max_daily_loss_usdt"] = max(0.1, float(out.get("max_daily_loss_usdt") or 10))
-    out["max_total_exposure_usdt"] = max(1.0, float(out.get("max_total_exposure_usdt") or 50))
+    out["max_total_exposure_usdt"] = max(1.0, float(out.get("max_total_exposure_usdt") or 100))
     out["cycle_interval_minutes"] = max(1.0, min(float(out.get("cycle_interval_minutes") or 5), 1440.0))
     out["min_exit_value_usdt"] = max(0.0, float(out.get("min_exit_value_usdt") or 5))
     return out
@@ -325,6 +325,7 @@ def _run_cycle() -> None:
 
     actions: list[dict[str, Any]] = []
     errs: list[str] = []
+    entry: dict[str, Any] | None = None
 
     exit_scan_count = 0
     exit_proposals_count = 0
@@ -623,6 +624,17 @@ def _run_cycle() -> None:
     finished = _utc_now_iso()
     duration_ms = int((time.monotonic() - t0) * 1000)
 
+    entry_pipeline_audit: dict[str, Any] | None = None
+    try:
+        from services.crypto.pipeline_audit import build_auto_cycle_entry_pipeline_audit
+
+        if isinstance(entry, dict):
+            entry_pipeline_audit = build_auto_cycle_entry_pipeline_audit(entry)
+            if isinstance(entry_pipeline_audit, dict):
+                entry_pipeline_audit["min_entry_score_param"] = float(params.get("min_entry_score") or 0)
+    except Exception:
+        entry_pipeline_audit = None
+
     record = {
         "timestamp": finished,
         "cycle_started_at": cycle_started,
@@ -642,6 +654,7 @@ def _run_cycle() -> None:
         "exit_execution_error_count": exit_execution_error_count,
         "last_exit_block_reason": last_exit_block_reason,
         "exit_position_evaluations": exit_position_evaluations,
+        "entry_pipeline_audit": entry_pipeline_audit,
     }
     status = "error" if errs and not actions else "ok"
     if any(a.get("type") == "kill" for a in actions):

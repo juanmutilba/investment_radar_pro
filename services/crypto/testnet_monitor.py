@@ -128,6 +128,11 @@ def _slim_scan_debug_for_cycle_history(scan_debug: Any) -> dict[str, Any] | None
         "first_symbols_sample",
         "updated_at",
         "strategy_mode",
+        "rows_signal_compra_potencial",
+        "rows_signal_other",
+        "rows_high_score_not_compra",
+        "rows_missing_signal",
+        "unique_signals_detected",
     )
     out: dict[str, Any] = {}
     for k in keys:
@@ -139,6 +144,12 @@ def _slim_scan_debug_for_cycle_history(scan_debug: Any) -> dict[str, Any] | None
     err = out.get("scan_error")
     if isinstance(err, str) and len(err) > 240:
         out["scan_error"] = err[:240] + "…"
+    sc = out.get("signal_counts")
+    if isinstance(sc, dict) and len(json.dumps(sc, ensure_ascii=False)) > 1200:
+        # evitar líneas JSONL enormes
+        keys = sorted(sc.keys())[:40]
+        out["signal_counts"] = {k: sc[k] for k in keys}
+        out["signal_counts_truncated"] = True
     return out or None
 
 
@@ -269,6 +280,13 @@ def _build_monitor_cycle_history_record(
         "entry_proposal": _summarize_entry_proposal_for_cycle(entry_prop_raw),
         "exit_proposals": _summarize_exit_proposals_for_cycle(exit_props_raw),
     }
+    if isinstance(entry, dict):
+        from services.crypto.cycle_diagnostics import build_cycle_summary_from_evaluated
+
+        ev_raw = entry.get("evaluated") or []
+        ev_list = [e for e in ev_raw if isinstance(e, dict)]
+        if ev_list:
+            record["evaluated_summary"] = build_cycle_summary_from_evaluated(ev_list)
     if errs:
         record["errors"] = errs[:5]
     return record

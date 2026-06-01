@@ -13,6 +13,7 @@ from services.crypto.strategy_modes import (
     STRATEGY_MODE_TREND_SWING,
     normalize_strategy_mode,
     is_entry_candidate_row,
+    signal_compra_potencial_min_score,
 )
 
 _LOG_PREFIX = "[CRYPTO_BOT]"
@@ -58,7 +59,7 @@ def log_scan_debug_snapshot(
         scan_error=scan_error,
     )
     sample = watchlist_sample[:5] if watchlist_sample else _first_symbols_sample(scan_results, 5)
-    breakdown_preview = _build_scan_signal_breakdown(scan_results)
+    breakdown_preview = _build_scan_signal_breakdown(scan_results, strategy_mode=strategy_mode)
     scenario_preview = _derive_scan_scenario(
         watchlist_count=watchlist_count,
         scan_count=scanned_count,
@@ -100,6 +101,51 @@ def log_scan_debug_snapshot(
 
 def _norm_symbol(symbol: str) -> str:
     return (symbol or "").strip().upper()
+
+
+def _compact_score_breakdown(bd: Any) -> dict[str, Any] | None:
+    if not isinstance(bd, dict):
+        return None
+    keys = (
+        "base",
+        "adx_score",
+        "volume_score",
+        "trigger_score",
+        "rsi_score",
+        "macd_score",
+        "ema_score",
+        "btc_trend_score",
+        "risk_penalty",
+        "macd_cross_up",
+    )
+    return {k: bd[k] for k in keys if k in bd}
+
+
+def _scan_rows_digest_for_audit(scan_results: list[dict[str, Any]], *, cap: int = 64) -> list[dict[str, Any]]:
+    """Una fila por activo OK del scan (sin errores), para auditorías offline (JSONL)."""
+    out: list[dict[str, Any]] = []
+    for r in scan_results:
+        if not isinstance(r, dict) or r.get("error"):
+            continue
+        if len(out) >= cap:
+            break
+        out.append(
+            {
+                "symbol": r.get("symbol"),
+                "signal": r.get("signal"),
+                "score": r.get("score"),
+                "setup_type": r.get("setup_type"),
+                "entry_eligible": r.get("entry_eligible"),
+                "rsi_14": r.get("rsi_14"),
+                "risk": r.get("risk"),
+                "trend": r.get("trend"),
+                "volume_context": r.get("volume_context"),
+                "macd_context": r.get("macd_context"),
+                "rsi_context": r.get("rsi_context"),
+                "score_breakdown": _compact_score_breakdown(r.get("score_breakdown")),
+            }
+        )
+    return out
 
 
 def _is_btc_symbol(symbol: str) -> bool:
@@ -320,8 +366,12 @@ def _signal_str(val: Any) -> str | None:
     return s or None
 
 
-def _build_scan_signal_breakdown(scan_results: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_scan_signal_breakdown(
+    scan_results: list[dict[str, Any]],
+    strategy_mode: str | None = None,
+) -> dict[str, Any]:
     """Conteos por fila de scan (diagnóstico; no altera evaluate_entry_candidates)."""
+    label_thr = float(signal_compra_potencial_min_score(strategy_mode))
     total_scan_rows = 0
     rows_with_error = 0
     rows_with_signal = 0
@@ -393,7 +443,7 @@ def _build_scan_signal_breakdown(scan_results: list[dict[str, Any]]) -> dict[str
 
         if (
             score_f is not None
-            and score_f >= 70
+            and score_f >= label_thr
             and sig != ENTRY_CANDIDATE_SIGNAL_VALUE
         ):
             rows_high_score_not_compra += 1
@@ -423,6 +473,7 @@ def _build_scan_signal_breakdown(scan_results: list[dict[str, Any]]) -> dict[str
         "rows_signal_other": rows_signal_other,
         "rows_missing_signal": rows_missing_signal,
         "rows_high_score_not_compra": rows_high_score_not_compra,
+        "signal_label_score_threshold": int(label_thr),
         "rows_action_compra_potencial": rows_action_compra_potencial,
         "rows_recommendation_compra_potencial": rows_recommendation_compra_potencial,
         "unique_signals_detected": sorted(unique_signals),
@@ -521,11 +572,12 @@ def _derive_scan_scenario(
 
     unique = breakdown.get("unique_signals_detected") or []
     high = int(breakdown.get("rows_high_score_not_compra") or 0)
+    thr = int(breakdown.get("signal_label_score_threshold") or 70)
     return {
         "scan_scenario": "A",
         "scan_scenario_label": scan_scenario_no_candidate_label(mode),
         "scan_scenario_detail": (
-            f"señales detectadas: {unique}; filas score>=70 sin compra_potencial: {high}"
+            f"señales detectadas: {unique}; filas score>={thr} sin compra_potencial: {high}"
         ),
     }
 
@@ -569,7 +621,7 @@ def _build_scan_debug(
         candidates_count=candidates_count,
         scan_error=scan_error,
     )
-    breakdown = _build_scan_signal_breakdown(scan_results)
+    breakdown = _build_scan_signal_breakdown(scan_results, strategy_mode=strategy_mode)
     daily_setups: dict[str, int] = {}
     for row in scan_results:
         if not isinstance(row, dict) or row.get("error"):
@@ -1204,6 +1256,7 @@ def propose_testnet_entry_from_strategy(
         "scan_debug": scan_debug,
         "strategy_mode": mode,
     }
+    base_evaluated_meta["scan_rows_digest"] = _scan_rows_digest_for_audit(scan_results)
 
     if not candidates:
         return {
