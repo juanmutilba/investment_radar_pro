@@ -1,27 +1,31 @@
 import { Link } from "react-router-dom";
+import {
+  type AlertMarketHint,
+  mercadoBucketFromAlert,
+  mercadoLabelForRadarLink,
+  type MercadoBucket,
+} from "@/components/navigation/alertMarketUtils";
 
-/** Agrupa mercado de alertas/radar para rutas USA vs Argentina. */
-export function mercadoBucket(
-  m: string | null | undefined,
-): "usa" | "argentina" | "otro" {
-  const s = (m ?? "").trim().toUpperCase();
-  if (!s) return "otro";
-  if (s === "USA" || s === "US" || s === "UNITED STATES") return "usa";
-  if (s === "ARGENTINA" || s === "AR" || s === "ARG") return "argentina";
-  if (s.includes("ARGENTINA")) return "argentina";
-  if (s.includes("USA")) return "usa";
-  return "otro";
-}
+export type { AlertMarketHint, MercadoBucket };
+export {
+  collectAlertMarketTokens,
+  isArgentinaAlert,
+  isUsaAlert,
+  mercadoBucket,
+  mercadoBucketFromAlert,
+  mercadoLabelForRadarLink,
+} from "@/components/navigation/alertMarketUtils";
 
 /** Ruta al radar con filtro inicial; null si mercado no es USA/Argentina o no hay ticker. */
 export function radarHrefForTicker(
   ticker: string | null | undefined,
   mercado: string | null | undefined,
+  extra?: Omit<AlertMarketHint, "ticker" | "mercado">,
 ): string | null {
+  const hint: AlertMarketHint = { ticker, mercado, ...extra };
+  const b = mercadoBucketFromAlert(hint);
   const t = ticker?.trim();
   if (!t) return null;
-  const b = mercadoBucket(mercado);
-  /** exact=1: filtro por ticker exacto (evita coincidencias parciales t.includes(q)). */
   const q = new URLSearchParams({ ticker: t, exact: "1" }).toString();
   if (b === "usa") return `/acciones-usa?${q}`;
   if (b === "argentina") return `/acciones-argentina?${q}`;
@@ -31,25 +35,50 @@ export function radarHrefForTicker(
 export function TickerRadarLink({
   ticker,
   mercado,
-}: {
-  ticker: string | null;
-  mercado: string | null;
-}) {
-  const href = radarHrefForTicker(ticker, mercado);
-  if (!ticker?.trim()) {
+  panel,
+  universo,
+  country,
+  region,
+  source,
+  exchange,
+  asset_type,
+}: AlertMarketHint) {
+  const hint: AlertMarketHint = {
+    ticker,
+    mercado,
+    panel,
+    universo,
+    country,
+    region,
+    source,
+    exchange,
+    asset_type,
+  };
+  const label = (ticker ?? "").trim();
+  if (!label) {
     return <>—</>;
   }
+  const href = radarHrefForTicker(ticker, mercado, {
+    panel,
+    universo,
+    country,
+    region,
+    source,
+    exchange,
+    asset_type,
+  });
   if (!href) {
-    return <span className="table-cell--nowrap">{ticker}</span>;
+    return <span className="table-cell--nowrap">{label}</span>;
   }
+  const mercadoUi = mercadoLabelForRadarLink(hint) ?? mercado ?? "";
   return (
     <Link
       replace
       to={href}
-      className="table-cell--nowrap"
-      title={`Abrir ${ticker} en el radar (${mercado ?? "mercado"})`}
+      className="table-cell--nowrap radar-ticker-link"
+      title={`Ver detalle de ${label}${mercadoUi ? ` (${mercadoUi})` : ""}`}
     >
-      {ticker}
+      {label}
     </Link>
   );
 }

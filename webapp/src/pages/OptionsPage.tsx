@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { OptionsSendToPortfolioModal } from "@/components/options/OptionsSendToPortfolioModal";
 import {
+  createPortfolioTrade,
   fetchIolStatus,
   fetchIvSmile,
   fetchLatestRadarArgentina,
@@ -13,8 +15,11 @@ import {
   type IvSmilePoint,
   type OptionContractRow,
   type OptionsChainResponse,
+  type PortfolioTradeCreatePayload,
+  type PortfolioTradeLeg,
   type RadarRow,
 } from "@/services/api";
+import { todayIsoDate } from "@/components/cartera/carteraFormUtils";
 import { formatTrend, getRaw } from "@/components/radar/radarTableCore";
 import {
   impliedVolatilityAnnualPercent,
@@ -958,6 +963,55 @@ type PanelHeaderSort =
 /** Orden visual de la tabla Collar (no altera `collarOpportunities`). */
 type CollarSortMode = "score" | "credito" | "rb" | "perdida" | "ganancia" | "tnaNeto";
 
+function stripIsoDateForTicker(yyyyMmDd: string): string {
+  return yyyyMmDd.replace(/-/g, "").slice(0, 8);
+}
+
+function findFlatRowForStrike(
+  rows: FlatRow[],
+  expiryKey: string,
+  strike: number,
+  tipo: "CALL" | "PUT",
+): FlatRow | undefined {
+  return rows.find(
+    (r) => r.tipo === tipo && expiryKeyFromRaw(r.raw) === expiryKey && Math.abs(r.strike - strike) < 1e-9,
+  );
+}
+
+function portfolioOptionLeg(
+  leg_type: "call" | "put",
+  action: "buy" | "sell",
+  symbol: string,
+  strike: number,
+  expiration: string,
+  premium: number | null,
+  quantity: number,
+): PortfolioTradeLeg {
+  return {
+    leg_type,
+    action,
+    symbol: symbol.trim().toUpperCase(),
+    strike,
+    expiration: expiration.slice(0, 10),
+    premium,
+    quantity: Math.max(quantity, 1e-6),
+    multiplier: 100,
+  };
+}
+
+function portfolioStockLeg(symbol: string, shareQty: number): PortfolioTradeLeg {
+  return {
+    leg_type: "stock",
+    action: "buy",
+    symbol: symbol.trim().toUpperCase(),
+    strike: null,
+    expiration: null,
+    premium: null,
+    quantity: Math.max(shareQty, 1e-6),
+    multiplier: 1,
+  };
+}
+
 export function OptionsPage() {
   const [selectedUnderlying, setSelectedUnderlying] = useState<string>("");
   const [selectedExpiry, setSelectedExpiry] = useState<string>("");
@@ -982,6 +1036,16 @@ export function OptionsPage() {
   const [mergedChain, setMergedChain] = useState<OptionsChainResponse | null>(null);
   const [loadingChain, setLoadingChain] = useState(false);
   const [errorChain, setErrorChain] = useState<string | null>(null);
+  /** TC MEP compra (ARS por USD) al registrar en Cartera Real (Argentina). */
+  const [carteraTcMep, setCarteraTcMep] = useState("");
+  const [sendModal, setSendModal] = useState<{
+    rowKey: string;
+    strategyLabel: string;
+    expiryLabel: string;
+    draft: PortfolioTradeCreatePayload;
+  } | null>(null);
+  const [sendModalBusy, setSendModalBusy] = useState(false);
+  const [carteraSendMessage, setCarteraSendMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [hasRequestedChain, setHasRequestedChain] = useState(false);
   /** Invalida respuestas viejas (cambio de activo, desmontaje, StrictMode). */
   const optionsChainReqRef = useRef(0);
@@ -1028,6 +1092,10 @@ export function OptionsPage() {
     () => equityUnderlyingDisplayLabel(mergedChain?.underlying, selectedUnderlying),
     [mergedChain?.underlying, selectedUnderlying],
   );
+
+  useEffect(() => {
+    setCarteraSendMessage(null);
+  }, [selectedUnderlying, mergedChain]);
 
   const onPanelSortHeaderExpiryClick = useCallback(() => {
     setPanelHeaderSort((prev) => {
@@ -2212,6 +2280,288 @@ export function OptionsPage() {
     }
     return copy;
   }, [collarOpportunities, collarSortMode, effectivePanelSpot]);
+
+  const parseCarteraTcMepCompra = useCallback((): number | null => {
+    const t = carteraTcMep.trim().replace(",", ".");
+    if (!t) return null;
+    const n = Number(t);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [carteraTcMep]);
+
+  const handleSendModalConfirm = useCallback(async (payload: PortfolioTradeCreatePayload) => {
+    setSendModalBusy(true);
+    setCarteraSendMessage(null);
+    try {
+      await createPortfolioTrade(payload);
+      setCarteraSendMessage({ type: "ok", text: "Estrategia enviada a Cartera Real" });
+      setSendModal(null);
+    } catch (e) {
+      setCarteraSendMessage({ type: "err", text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSendModalBusy(false);
+    }
+  }, []);
+
+  const buildBullCallDraft = useCallback(
+    (x: (typeof bullCallSpreads)[number]): PortfolioTradeCreatePayload => {
+      const und = equityUnderlyingDisplayTicker.trim().toUpperCase();
+      if (!und) throw new Error("Elegí un subyacente para enviar a cartera.");
+      const buyRow = findFlatRowForStrike(calls, x.expiryKey, x.buyStrike, "CALL");
+      const sellRow = findFlatRowForStrike(calls, x.expiryKey, x.sellStrike, "CALL");
+      if (!buyRow || !sellRow) throw new Error("No hay símbolos en la cadena para esta combinación.");
+      const symB = (typeof buyRow.raw.simbolo === "string" ? buyRow.raw.simbolo : "").trim();
+      const symS = (typeof sellRow.raw.simbolo === "string" ? sellRow.raw.simbolo : "").trim();
+      if (!symB || !symS) throw new Error("Símbolo de opción incompleto en la cadena.");
+      const qty = 1;
+      const lot = OPTIONS_STRATEGY_LOT_SIZE;
+      const netCashArs = -x.debit * lot * qty;
+      const spot = effectivePanelSpot;
+      return {
+        instrument_type: "option_strategy",
+        ticker: `${und}-bull_call_spread-${stripIsoDateForTicker(x.expiryKey)}`,
+        asset_type: "Argentina",
+        portfolio_type: "real",
+        quantity: qty,
+        buy_date: todayIsoDate(),
+        buy_price_ars: 0,
+        buy_price_usd: null,
+        tc_mep_compra: parseCarteraTcMepCompra(),
+        underlying_symbol: und,
+        strategy_type: "bull_call_spread",
+        option_expiration: x.expiryKey,
+        committed_capital: x.maxLoss * lot * qty,
+        max_risk: x.maxLoss * lot * qty,
+        max_profit: x.maxGain * lot * qty,
+        opening_underlying_price: spot !== null && Number.isFinite(spot) ? spot : null,
+        legs: [
+          portfolioOptionLeg("call", "buy", symB, x.buyStrike, x.expiryKey, x.buyAsk, qty),
+          portfolioOptionLeg("call", "sell", symS, x.sellStrike, x.expiryKey, x.sellBid, qty),
+        ],
+        management_events: [
+          {
+            date: todayIsoDate(),
+            event_type: "open",
+            description: "Apertura enviada desde módulo Opciones",
+            debit_credit: netCashArs,
+            underlying_price: spot !== null && Number.isFinite(spot) ? spot : null,
+            iv: null,
+            notes: `OptionsPage · Bull Call Spread · Rava ${selectedUnderlyingMeta.ravaUnderlying} · débito/acción ${x.debit}`,
+          },
+        ],
+        allow_empty_legs: false,
+      };
+    },
+    [
+      calls,
+      equityUnderlyingDisplayTicker,
+      effectivePanelSpot,
+      parseCarteraTcMepCompra,
+      selectedUnderlyingMeta.ravaUnderlying,
+    ],
+  );
+
+  const openBullCallPortfolio = useCallback(
+    (x: (typeof bullCallSpreads)[number], idx: number) => {
+      try {
+        const draft = buildBullCallDraft(x);
+        setSendModal({
+          rowKey: `bcc-${x.expiryKey}-${x.buyStrike}-${x.sellStrike}-${idx}`,
+          strategyLabel: "Bull Call Spread",
+          expiryLabel: formatExpiryMonthLabel(x.expiryKey),
+          draft,
+        });
+      } catch (e) {
+        setCarteraSendMessage({ type: "err", text: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [buildBullCallDraft],
+  );
+
+  const buildCoveredCallDraft = useCallback(
+    (x: (typeof coveredCalls)[number]): PortfolioTradeCreatePayload => {
+      const und = equityUnderlyingDisplayTicker.trim().toUpperCase();
+      if (!und) throw new Error("Elegí un subyacente para enviar a cartera.");
+      const callRow = findFlatRowForStrike(calls, x.expiryKey, x.strike, "CALL");
+      if (!callRow) throw new Error("No hay fila de call en la cadena para este strike.");
+      const symC = (typeof callRow.raw.simbolo === "string" ? callRow.raw.simbolo : "").trim();
+      if (!symC) throw new Error("Símbolo de call incompleto.");
+      const qty = 1;
+      const lot = OPTIONS_STRATEGY_LOT_SIZE;
+      const creditArs = x.bid * lot * qty;
+      const spot = effectivePanelSpot;
+      return {
+        instrument_type: "option_strategy",
+        ticker: `${und}-covered_call-${stripIsoDateForTicker(x.expiryKey)}-${Math.round(x.strike * 100)}`,
+        asset_type: "Argentina",
+        portfolio_type: "real",
+        quantity: qty,
+        buy_date: todayIsoDate(),
+        buy_price_ars: 0,
+        buy_price_usd: null,
+        tc_mep_compra: parseCarteraTcMepCompra(),
+        underlying_symbol: und,
+        strategy_type: "covered_call",
+        option_expiration: x.expiryKey,
+        opening_underlying_price: spot !== null && Number.isFinite(spot) ? spot : null,
+        legs: [
+          portfolioStockLeg(und, lot * qty),
+          portfolioOptionLeg("call", "sell", symC, x.strike, x.expiryKey, x.bid, qty),
+        ],
+        management_events: [
+          {
+            date: todayIsoDate(),
+            event_type: "open",
+            description: "Apertura enviada desde módulo Opciones",
+            debit_credit: creditArs,
+            underlying_price: spot !== null && Number.isFinite(spot) ? spot : null,
+            iv: x.ivPct !== null && Number.isFinite(x.ivPct) ? x.ivPct : null,
+            notes: `OptionsPage · Covered Call · prima corta bid/acción ${x.bid}`,
+          },
+        ],
+        allow_empty_legs: false,
+      };
+    },
+    [calls, equityUnderlyingDisplayTicker, effectivePanelSpot, parseCarteraTcMepCompra],
+  );
+
+  const openCoveredCallPortfolio = useCallback(
+    (x: (typeof coveredCalls)[number], idx: number) => {
+      try {
+        const draft = buildCoveredCallDraft(x);
+        setSendModal({
+          rowKey: `cc-${x.expiryKey}-${x.strike}-${idx}`,
+          strategyLabel: "Covered Call",
+          expiryLabel: formatExpiryMonthLabel(x.expiryKey),
+          draft,
+        });
+      } catch (e) {
+        setCarteraSendMessage({ type: "err", text: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [buildCoveredCallDraft],
+  );
+
+  const buildCspDraft = useCallback(
+    (x: (typeof cashSecuredPuts)[number]): PortfolioTradeCreatePayload => {
+      const und = equityUnderlyingDisplayTicker.trim().toUpperCase();
+      if (!und) throw new Error("Elegí un subyacente para enviar a cartera.");
+      const sym = (x.contract.symbol ?? "").trim();
+      if (!sym) throw new Error("Símbolo de put incompleto.");
+      const qty = 1;
+      const lot = OPTIONS_STRATEGY_LOT_SIZE;
+      const creditArs = x.prima * lot * qty;
+      const spot = effectivePanelSpot;
+      return {
+        instrument_type: "option_strategy",
+        ticker: `${und}-csp-${stripIsoDateForTicker(x.expiryKey)}-${Math.round(x.strike * 100)}`,
+        asset_type: "Argentina",
+        portfolio_type: "real",
+        quantity: qty,
+        buy_date: todayIsoDate(),
+        buy_price_ars: 0,
+        buy_price_usd: null,
+        tc_mep_compra: parseCarteraTcMepCompra(),
+        underlying_symbol: und,
+        strategy_type: "csp",
+        option_expiration: x.expiryKey,
+        committed_capital: x.capital * qty,
+        max_risk: x.capital * qty,
+        opening_underlying_price: spot !== null && Number.isFinite(spot) ? spot : null,
+        legs: [portfolioOptionLeg("put", "sell", sym, x.strike, x.expiryKey, x.prima, qty)],
+        management_events: [
+          {
+            date: todayIsoDate(),
+            event_type: "open",
+            description: "Apertura enviada desde módulo Opciones",
+            debit_credit: creditArs,
+            underlying_price: spot !== null && Number.isFinite(spot) ? spot : null,
+            iv: x.ivPct !== null && Number.isFinite(x.ivPct) ? x.ivPct : null,
+            notes: `OptionsPage · Cash Secured Put · ${sym}`,
+          },
+        ],
+        allow_empty_legs: false,
+      };
+    },
+    [equityUnderlyingDisplayTicker, effectivePanelSpot, parseCarteraTcMepCompra],
+  );
+
+  const openCspPortfolio = useCallback(
+    (x: (typeof cashSecuredPuts)[number], idx: number) => {
+      try {
+        const draft = buildCspDraft(x);
+        setSendModal({
+          rowKey: `csp-${(x.contract.symbol ?? "").trim()}-${x.expiryKey}-${x.strike}-${idx}`,
+          strategyLabel: "Cash Secured Put",
+          expiryLabel: formatExpiryMonthLabel(x.expiryKey),
+          draft,
+        });
+      } catch (e) {
+        setCarteraSendMessage({ type: "err", text: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [buildCspDraft],
+  );
+
+  const buildCollarDraft = useCallback(
+    (x: (typeof collarOpportunities)[number]): PortfolioTradeCreatePayload => {
+      const und = equityUnderlyingDisplayTicker.trim().toUpperCase();
+      if (!und) throw new Error("Elegí un subyacente para enviar a cartera.");
+      const qty = 1;
+      const lot = OPTIONS_STRATEGY_LOT_SIZE;
+      const netCashArs = x.neto * lot * qty;
+      const spot = effectivePanelSpot;
+      return {
+        instrument_type: "option_strategy",
+        ticker: `${und}-collar-${stripIsoDateForTicker(x.expiryKey)}`,
+        asset_type: "Argentina",
+        portfolio_type: "real",
+        quantity: qty,
+        buy_date: todayIsoDate(),
+        buy_price_ars: 0,
+        buy_price_usd: null,
+        tc_mep_compra: parseCarteraTcMepCompra(),
+        underlying_symbol: und,
+        strategy_type: "collar",
+        option_expiration: x.expiryKey,
+        opening_underlying_price: spot !== null && Number.isFinite(spot) ? spot : null,
+        legs: [
+          portfolioStockLeg(und, lot * qty),
+          portfolioOptionLeg("put", "buy", x.putSymbol, x.putStrike, x.expiryKey, x.primaPut, qty),
+          portfolioOptionLeg("call", "sell", x.callSymbol, x.callStrike, x.expiryKey, x.primaCall, qty),
+        ],
+        management_events: [
+          {
+            date: todayIsoDate(),
+            event_type: "open",
+            description: "Apertura enviada desde módulo Opciones",
+            debit_credit: netCashArs,
+            underlying_price: spot !== null && Number.isFinite(spot) ? spot : null,
+            iv: null,
+            notes: `OptionsPage · Collar · neto/acción ${x.neto} (${x.comentario})`,
+          },
+        ],
+        allow_empty_legs: false,
+      };
+    },
+    [equityUnderlyingDisplayTicker, effectivePanelSpot, parseCarteraTcMepCompra],
+  );
+
+  const openCollarPortfolio = useCallback(
+    (x: (typeof collarOpportunities)[number], idx: number) => {
+      try {
+        const draft = buildCollarDraft(x);
+        setSendModal({
+          rowKey: `collar-${x.expiryKey}-${x.putSymbol}-${x.callSymbol}-${idx}`,
+          strategyLabel: "Collar",
+          expiryLabel: formatExpiryMonthLabel(x.expiryKey),
+          draft,
+        });
+      } catch (e) {
+        setCarteraSendMessage({ type: "err", text: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [buildCollarDraft],
+  );
 
   const operationalOpportunityAlerts = useMemo(() => {
     type Sev = "danger" | "warning" | "info";
@@ -3453,6 +3803,31 @@ export function OptionsPage() {
                 </label>
               </div>
 
+              {carteraSendMessage ? (
+                <div
+                  role="status"
+                  className={
+                    carteraSendMessage.type === "ok"
+                      ? "options-cartera-send-banner options-cartera-send-banner--ok"
+                      : "options-cartera-send-banner options-cartera-send-banner--err"
+                  }
+                >
+                  {carteraSendMessage.text}
+                </div>
+              ) : null}
+
+              <label className="radar-toolbar__field" style={{ marginTop: "0.45rem", maxWidth: "14rem" }}>
+                <span className="radar-toolbar__label">TC MEP compra (ARS/USD)</span>
+                <input
+                  value={carteraTcMep}
+                  onChange={(e) => setCarteraTcMep(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="opcional"
+                  aria-label="TC MEP compra para registrar trades en cartera Argentina"
+                  style={{ width: "100%" }}
+                />
+              </label>
+
               {strategiesFilter === "" || strategiesFilter === "Bull Call Spread" ? (
                 <div style={{ marginTop: "0.75rem" }}>
                   <button
@@ -3492,6 +3867,7 @@ export function OptionsPage() {
                                 <th style={{ textAlign: "right" }}>Ganancia máx.</th>
                                 <th style={{ textAlign: "right" }}>Break even</th>
                                 <th>Moneyness</th>
+                                <th>Cartera</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -3522,6 +3898,24 @@ export function OptionsPage() {
                                     <span className={strategyMoneynessBadgeClass(mSell)} title="Strike venta (call)">
                                       V {mergedMoneynessBadgeText(mSell)}
                                     </span>
+                                  </td>
+                                  <td>
+                                    <button
+                                      type="button"
+                                      className="options-send-cartera-btn"
+                                      title="Registrar en Cartera Real (SQLite)"
+                                      disabled={
+                                        !equityUnderlyingDisplayTicker.trim() ||
+                                        (sendModalBusy &&
+                                          sendModal?.rowKey === `bcc-${x.expiryKey}-${x.buyStrike}-${x.sellStrike}-${idx}`)
+                                      }
+                                      onClick={() => openBullCallPortfolio(x, idx)}
+                                    >
+                                      {sendModalBusy &&
+                                      sendModal?.rowKey === `bcc-${x.expiryKey}-${x.buyStrike}-${x.sellStrike}-${idx}`
+                                        ? "…"
+                                        : "Enviar a Cartera Real"}
+                                    </button>
                                   </td>
                                 </tr>
                               );
@@ -3582,6 +3976,7 @@ export function OptionsPage() {
                                 </th>
                                 <th style={{ textAlign: "right" }}>Break even</th>
                                 <th>Moneyness</th>
+                                <th>Cartera</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -3630,6 +4025,23 @@ export function OptionsPage() {
                                   </td>
                                   <td>
                                     <span className={strategyMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
+                                  </td>
+                                  <td>
+                                    <button
+                                      type="button"
+                                      className="options-send-cartera-btn"
+                                      title="Registrar en Cartera Real (SQLite)"
+                                      disabled={
+                                        !equityUnderlyingDisplayTicker.trim() ||
+                                        (sendModalBusy &&
+                                          sendModal?.rowKey === `cc-${x.expiryKey}-${x.strike}-${idx}`)
+                                      }
+                                      onClick={() => openCoveredCallPortfolio(x, idx)}
+                                    >
+                                      {sendModalBusy && sendModal?.rowKey === `cc-${x.expiryKey}-${x.strike}-${idx}`
+                                        ? "…"
+                                        : "Enviar a Cartera Real"}
+                                    </button>
                                   </td>
                                 </tr>
                               );
@@ -3710,6 +4122,7 @@ export function OptionsPage() {
                                 <th style={{ textAlign: "right" }}>Días</th>
                                 <th style={{ textAlign: "right" }}>Volumen</th>
                                 <th title="Moneyness">Mny</th>
+                                <th>Cartera</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -3754,6 +4167,26 @@ export function OptionsPage() {
                                     <td style={{ textAlign: "right" }}>{formatInteger(x.vol)}</td>
                                     <td>
                                       <span className={strategyMoneynessBadgeClass(m)}>{mergedMoneynessBadgeText(m)}</span>
+                                    </td>
+                                    <td>
+                                      <button
+                                        type="button"
+                                        className="options-send-cartera-btn"
+                                        title="Registrar en Cartera Real (SQLite)"
+                                        disabled={
+                                          !equityUnderlyingDisplayTicker.trim() ||
+                                          (sendModalBusy &&
+                                            sendModal?.rowKey ===
+                                              `csp-${(x.contract.symbol ?? "").trim()}-${x.expiryKey}-${x.strike}-${idx}`)
+                                        }
+                                        onClick={() => openCspPortfolio(x, idx)}
+                                      >
+                                        {sendModalBusy &&
+                                        sendModal?.rowKey ===
+                                          `csp-${(x.contract.symbol ?? "").trim()}-${x.expiryKey}-${x.strike}-${idx}`
+                                          ? "…"
+                                          : "Enviar a Cartera Real"}
+                                      </button>
                                     </td>
                                   </tr>
                                 );
@@ -3853,6 +4286,7 @@ export function OptionsPage() {
                                   Pérd. máx. desde spot / Gcia. máx.
                                 </th>
                                 <th>Comentario</th>
+                                <th>Cartera</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -3986,6 +4420,25 @@ export function OptionsPage() {
                                       </span>
                                     </div>
                                   </td>
+                                  <td>
+                                    <button
+                                      type="button"
+                                      className="options-send-cartera-btn"
+                                      title="Registrar en Cartera Real (SQLite)"
+                                      disabled={
+                                        !equityUnderlyingDisplayTicker.trim() ||
+                                        (sendModalBusy &&
+                                          sendModal?.rowKey ===
+                                            `collar-${x.expiryKey}-${x.putSymbol}-${x.callSymbol}-${idx}`)
+                                      }
+                                      onClick={() => openCollarPortfolio(x, idx)}
+                                    >
+                                      {sendModalBusy &&
+                                      sendModal?.rowKey === `collar-${x.expiryKey}-${x.putSymbol}-${x.callSymbol}-${idx}`
+                                        ? "…"
+                                        : "Enviar a Cartera Real"}
+                                    </button>
+                                  </td>
                                 </tr>
                                 );
                               })}
@@ -4004,6 +4457,20 @@ export function OptionsPage() {
             </section>
         </section>
       ) : null}
+
+      <OptionsSendToPortfolioModal
+        open={sendModal !== null}
+        onClose={() => {
+          if (!sendModalBusy) setSendModal(null);
+        }}
+        onConfirm={handleSendModalConfirm}
+        busy={sendModalBusy}
+        strategyLabel={sendModal?.strategyLabel ?? ""}
+        underlyingLabel={equityUnderlyingDisplayTicker}
+        expiryLabel={sendModal?.expiryLabel ?? ""}
+        initialPayload={sendModal?.draft ?? null}
+        optionLotSize={OPTIONS_STRATEGY_LOT_SIZE}
+      />
     </div>
   );
 }

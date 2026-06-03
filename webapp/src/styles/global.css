@@ -1389,6 +1389,43 @@ tr.moneyness-row-none td:first-child {
   margin-top: 0.25rem;
 }
 
+.options-send-cartera-btn {
+  font-size: 0.72rem;
+  padding: 0.22rem 0.45rem;
+  white-space: nowrap;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent-dim);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.options-send-cartera-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.options-send-cartera-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.options-cartera-send-banner {
+  margin-top: 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+}
+
+.options-cartera-send-banner--ok {
+  border: 1px solid rgba(22, 163, 74, 0.45);
+  background: color-mix(in srgb, rgba(22, 163, 74, 0.12) 100%, transparent);
+}
+
+.options-cartera-send-banner--err {
+  border: 1px solid rgba(220, 38, 38, 0.45);
+  background: color-mix(in srgb, rgba(220, 38, 38, 0.1) 100%, transparent);
+}
+
 .payoff-placeholder {
   border: 1px dashed var(--border);
   border-radius: var(--radius);
@@ -1784,6 +1821,17 @@ table.radar-table tr.radar-table__row--selected .radar-table__sticky-col {
 .table-cell--empty {
   color: var(--text-muted);
   opacity: 0.28;
+}
+
+a.radar-ticker-link {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+a.radar-ticker-link:hover {
+  text-decoration: underline;
+  color: var(--color-link, #2563eb);
 }
 
 .table-cell--nowrap {
@@ -2385,6 +2433,26 @@ table.radar-table tr.radar-table__row--selected .radar-table__sticky-col {
   color: var(--text-muted);
 }
 
+.cartera-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85em;
+}
+
+.cartera-json-block {
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  background: var(--panel-elevated, rgba(0, 0, 0, 0.2));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.cartera-expand-row td {
+  background: var(--table-row-alt, rgba(127, 127, 127, 0.06));
+  border-bottom: 1px solid var(--border);
+}
+
 .cartera-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -2409,6 +2477,93 @@ table.radar-table tr.radar-table__row--selected .radar-table__sticky-col {
   justify-content: flex-end;
   gap: 0.5rem;
   margin-top: 1rem;
+}
+
+.cartera-input-readonly {
+  opacity: 0.88;
+  cursor: default;
+}
+
+.cartera-strategy-detail-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.25rem;
+  margin-bottom: 0.65rem;
+  font-size: 0.92rem;
+}
+
+.cartera-strategy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.cartera-ev-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  padding: 0.14rem 0.5rem;
+  border-radius: 999px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.cartera-ev-badge--open {
+  background: rgba(34, 197, 94, 0.22);
+  color: #15803d;
+}
+
+.cartera-ev-badge--adj {
+  background: rgba(59, 130, 246, 0.2);
+  color: #1d4ed8;
+}
+
+.cartera-ev-badge--roll {
+  background: rgba(168, 85, 247, 0.2);
+  color: #6b21a8;
+}
+
+.cartera-ev-badge--partial {
+  background: rgba(245, 158, 11, 0.22);
+  color: #b45309;
+}
+
+.cartera-ev-badge--full {
+  background: rgba(239, 68, 68, 0.2);
+  color: #b91c1c;
+}
+
+.cartera-ev-badge--note {
+  background: rgba(100, 116, 139, 0.22);
+  color: #475569;
+}
+
+.cartera-ev-table-wrap {
+  margin-top: 0.35rem;
+}
+
+.cartera-strategy-hist-dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, auto) 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.cartera-strategy-hist-dl dt {
+  margin: 0;
+  color: var(--text-muted, #64748b);
+  font-weight: 600;
+}
+
+.cartera-strategy-hist-dl dd {
+  margin: 0;
+}
+
+.cartera-ev-group-sep td {
+  padding-bottom: 0.15rem;
+  vertical-align: bottom;
 }
 
 /* --- Crypto Testnet (Binance sandbox) dashboard --- */

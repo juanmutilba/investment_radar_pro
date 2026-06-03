@@ -51,6 +51,7 @@ _DEFAULT_PARAMS: dict[str, Any] = {
     "max_daily_loss_usdt": 10.0,
     "max_total_exposure_usdt": 100.0,
     "max_quote_per_order_usdt": 100.0,
+    "macro_regime_filter": False,
 }
 
 _STATE: dict[str, Any] = {
@@ -564,6 +565,7 @@ def _run_cycle() -> None:
                                     require_btc_trend_up=bool(params.get("require_btc_trend_up")),
                                     min_entry_score=float(params.get("min_entry_score") or 0),
                                     strategy_mode=str(params.get("strategy_mode") or "daily_intraday"),
+                                    macro_regime_filter=bool(params.get("macro_regime_filter")),
                                 )
                                 prop = entry.get("proposal") if isinstance(entry.get("proposal"), dict) else None
                                 if prop and prop.get("symbol"):

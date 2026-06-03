@@ -84,11 +84,18 @@ export function CarteraSellModal({
     return null;
   }
 
+  const isOptionLike =
+    position.instrument_type === "option" || position.instrument_type === "option_strategy";
+
   return (
     <div className="cartera-modal-backdrop" role="presentation" onMouseDown={() => !busy && onClose()}>
       <div className="cartera-modal card" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
         <h2 className="cartera-form__title">
-          Vender {position.ticker} ({position.asset_type})
+          {isOptionLike ? "Cerrar operación" : "Vender"} {position.ticker} ({position.asset_type}
+          {position.instrument_type && position.instrument_type !== "stock"
+            ? ` · ${position.instrument_type}`
+            : ""}
+          )
         </h2>
         <form className="cartera-form" onSubmit={onSubmitSell}>
           <div className="cartera-grid">
@@ -153,7 +160,7 @@ export function CarteraSellModal({
               Cancelar
             </button>
             <button type="submit" className="cartera-btn cartera-btn--primary" disabled={busy || !sellValidation.valid}>
-              {busy ? "Guardando…" : "Confirmar venta"}
+              {busy ? "Guardando…" : isOptionLike ? "Confirmar cierre" : "Confirmar venta"}
             </button>
           </div>
         </form>

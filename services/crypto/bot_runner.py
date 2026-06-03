@@ -211,6 +211,42 @@ def _btc_trend_favorable(scan_by_sym: dict[str, dict[str, Any]]) -> bool:
     return str(row.get("trend") or "").strip().lower() == "alcista"
 
 
+def _macro_regime_load_for_filter(enabled: bool) -> dict[str, Any] | None:
+    if not enabled:
+        return None
+    from services.crypto.macro_market_regime import get_macro_market_regime_payload
+
+    p = get_macro_market_regime_payload()
+    _log(
+        f"macro_regime_filter regime={p.get('regime')} allow_longs={p.get('allow_longs')} "
+        f"score_adj={p.get('score_adjustment')}"
+    )
+    return p
+
+
+def _macro_regime_bear_or_unknown_reason(macro_payload: dict[str, Any]) -> str | None:
+    reg = str(macro_payload.get("regime") or "unknown")
+    if reg == "unknown":
+        return "macro_regime_unknown_blocks_long"
+    if not bool(macro_payload.get("allow_longs")):
+        return "macro_regime_bear_blocks_long"
+    return None
+
+
+def _macro_neutral_penalty_rejects(
+    macro_payload: dict[str, Any] | None,
+    sc_val: float,
+    min_score: float,
+    adj: float,
+) -> bool:
+    if macro_payload is None or str(macro_payload.get("regime")) != "neutral" or adj == 0.0:
+        return False
+    if min_score <= 0:
+        return False
+    eff = sc_val + adj
+    return sc_val >= min_score and eff < min_score
+
+
 def _evaluated_row(
     row: dict[str, Any],
     *,
@@ -773,6 +809,7 @@ def execute_paper_strategy(
     require_btc_trend_up: bool = False,
     min_entry_score: float = 0.0,
     strategy_mode: str | None = None,
+    macro_regime_filter: bool = False,
 ) -> dict[str, Any]:
     """
     Revisa salidas, escanea watchlist y abre como máximo 1 posición nueva por ejecución.
@@ -819,7 +856,7 @@ def execute_paper_strategy(
     _log(
         f"execute_paper_strategy: inicio mode={mode} timeframe={tf} limit={lim} max_open={max_pos} "
         f"cooldown={cooldown_m} btc_filter={require_btc_trend_up} min_score={min_score} "
-        f"watchlist_count={watchlist_count}"
+        f"macro_regime_filter={macro_regime_filter} watchlist_count={watchlist_count}"
     )
 
     actions: list[dict[str, Any]] = list(review_paper_positions_for_exit())
@@ -867,6 +904,8 @@ def execute_paper_strategy(
     scan_debug["timeframe"] = tf
     scan_debug["limit"] = lim
 
+    macro_payload: dict[str, Any] | None = _macro_regime_load_for_filter(macro_regime_filter)
+
     pf = load_portfolio()
     trades = pf.get("trades") or []
     open_count = _count_open_positions(pf)
@@ -913,6 +952,8 @@ def execute_paper_strategy(
             actions=actions,
         )
         out_empty["position_limits"] = paper_position_limits_snapshot(max_pos, pf, evaluated=[])
+        if macro_payload is not None:
+            out_empty["macro_regime"] = macro_payload
         return out_empty
 
     btc_ok = _btc_trend_favorable(scan_by_sym) if require_btc_trend_up else True
@@ -967,19 +1008,50 @@ def execute_paper_strategy(
             )
             continue
 
-        if min_score > 0:
-            try:
-                sc_val = float(score) if score is not None else None
-            except (TypeError, ValueError):
-                sc_val = None
-            if sc_val is None or sc_val < min_score:
-                _append("rejected", "score_below_min")
+        if macro_regime_filter and macro_payload is not None:
+            mr = _macro_regime_bear_or_unknown_reason(macro_payload)
+            if mr:
+                _append("rejected", mr)
+                _log(f"execute: {sym} bloqueado por régimen macro ({mr})")
                 actions.append(
                     {
                         "action": "entry",
                         "symbol": sym,
                         "status": "skipped",
-                        "reason": "score_below_min",
+                        "reason": mr,
+                        "score": score,
+                    }
+                )
+                continue
+
+        adj = 0.0
+        if macro_regime_filter and macro_payload is not None and str(macro_payload.get("regime")) == "neutral":
+            try:
+                adj = float(macro_payload.get("score_adjustment") or 0.0)
+            except (TypeError, ValueError):
+                adj = 0.0
+
+        if min_score > 0:
+            try:
+                sc_val = float(score) if score is not None else None
+            except (TypeError, ValueError):
+                sc_val = None
+            eff = None if sc_val is None else sc_val + adj
+            if eff is None or eff < min_score:
+                if sc_val is not None and _macro_neutral_penalty_rejects(
+                    macro_payload, float(sc_val), min_score, adj
+                ):
+                    rsn = "macro_regime_neutral_score_penalty"
+                    _log(f"execute: {sym} {rsn} score={sc_val} min={min_score} adj={adj} eff={eff}")
+                else:
+                    rsn = "score_below_min"
+                _append("rejected", rsn)
+                actions.append(
+                    {
+                        "action": "entry",
+                        "symbol": sym,
+                        "status": "skipped",
+                        "reason": rsn,
                         "score": score,
                     }
                 )
@@ -1141,6 +1213,8 @@ def execute_paper_strategy(
         actions=actions,
     )
     out["position_limits"] = limits
+    if macro_payload is not None:
+        out["macro_regime"] = macro_payload
     return out
 
 
@@ -1158,6 +1232,7 @@ def propose_testnet_entry_from_strategy(
     require_btc_trend_up: bool = False,
     min_entry_score: float = 0.0,
     strategy_mode: str | None = None,
+    macro_regime_filter: bool = False,
 ) -> dict[str, Any]:
     """
     Ejecuta el mismo escaneo y filtros de entrada que execute_paper_strategy, pero sin abrir posición paper
@@ -1191,7 +1266,7 @@ def propose_testnet_entry_from_strategy(
     _log(
         f"propose_testnet_entry: mode={mode} timeframe={tf} limit={lim} quote={q_use} max_open={max_pos} "
         f"cooldown={cooldown_m} btc_filter={require_btc_trend_up} min_score={min_score} "
-        f"watchlist_count={watchlist_count}"
+        f"macro_regime_filter={macro_regime_filter} watchlist_count={watchlist_count}"
     )
 
     scan_error: str | None = None
@@ -1237,6 +1312,8 @@ def propose_testnet_entry_from_strategy(
     scan_debug["timeframe"] = tf
     scan_debug["limit"] = lim
 
+    macro_payload: dict[str, Any] | None = _macro_regime_load_for_filter(macro_regime_filter)
+
     risk_block: dict[str, float] = {
         "stop_loss_pct": float(stop_loss_pct),
         "take_profit_pct": float(take_profit_pct),
@@ -1259,7 +1336,7 @@ def propose_testnet_entry_from_strategy(
     base_evaluated_meta["scan_rows_digest"] = _scan_rows_digest_for_audit(scan_results)
 
     if not candidates:
-        return {
+        out_nc: dict[str, Any] = {
             "ok": True,
             "proposal": None,
             "primary_reason": "no_opportunity",
@@ -1268,6 +1345,9 @@ def propose_testnet_entry_from_strategy(
             "position_limits": _testnet_position_limits_meta(max_pos),
             **base_evaluated_meta,
         }
+        if macro_payload is not None:
+            out_nc["macro_regime"] = macro_payload
+        return out_nc
 
     bal = get_testnet_balances()
     bal_ok = bool(bal.get("ok"))
@@ -1281,7 +1361,7 @@ def propose_testnet_entry_from_strategy(
             if not sym:
                 continue
             evaluated_offline.append(_evaluated_row(c, status="rejected", reason="testnet_balances_unavailable"))
-        return {
+        out_bal: dict[str, Any] = {
             "ok": True,
             "proposal": None,
             "primary_reason": "testnet_balances_unavailable",
@@ -1290,6 +1370,9 @@ def propose_testnet_entry_from_strategy(
             "position_limits": _testnet_position_limits_meta(max_pos),
             **base_evaluated_meta,
         }
+        if macro_payload is not None:
+            out_bal["macro_regime"] = macro_payload
+        return out_bal
 
     btc_ok = _btc_trend_favorable(scan_by_sym) if require_btc_trend_up else True
     btc_ctx_label = (
@@ -1355,13 +1438,35 @@ def propose_testnet_entry_from_strategy(
             _append("skipped", "max_open_positions")
             continue
 
+        if macro_regime_filter and macro_payload is not None:
+            mr = _macro_regime_bear_or_unknown_reason(macro_payload)
+            if mr:
+                _append("rejected", mr)
+                _log(f"propose_testnet_entry: {sym} bloqueado por régimen macro ({mr})")
+                continue
+
+        adj = 0.0
+        if macro_regime_filter and macro_payload is not None and str(macro_payload.get("regime")) == "neutral":
+            try:
+                adj = float(macro_payload.get("score_adjustment") or 0.0)
+            except (TypeError, ValueError):
+                adj = 0.0
+
         if min_score > 0:
             try:
                 sc_val = float(score) if score is not None else None
             except (TypeError, ValueError):
                 sc_val = None
-            if sc_val is None or sc_val < min_score:
-                _append("rejected", "score_below_min")
+            eff = None if sc_val is None else sc_val + adj
+            if eff is None or eff < min_score:
+                if sc_val is not None and _macro_neutral_penalty_rejects(
+                    macro_payload, float(sc_val), min_score, adj
+                ):
+                    rsn = "macro_regime_neutral_score_penalty"
+                    _log(f"propose_testnet_entry: {sym} {rsn} score={sc_val} min={min_score} adj={adj} eff={eff}")
+                else:
+                    rsn = "score_below_min"
+                _append("rejected", rsn)
                 continue
 
         if sym_u in app_open_set:
@@ -1435,6 +1540,8 @@ def propose_testnet_entry_from_strategy(
         "position_limits": limits,
         **base_evaluated_meta,
     }
+    if macro_payload is not None:
+        out["macro_regime"] = macro_payload
     return out
 
 

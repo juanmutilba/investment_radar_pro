@@ -22,12 +22,17 @@ import { CryptoTimeframeField } from "@/components/crypto/CryptoTimeframeField";
 import { normalizeTimeframeString } from "@/components/crypto/cryptoTimeframe";
 import { PaperSimEquityCurvePanel } from "@/components/crypto/PaperSimEquityCurvePanel";
 import { CryptoTestnetPanel } from "@/components/crypto/CryptoTestnetPanel";
+import {
+  loadCryptoMacroRegimeFilterPref,
+  persistCryptoMacroRegimeFilterPref,
+} from "@/components/crypto/cryptoMacroRegimeFilterPref";
 import type { CSSProperties } from "react";
 import {
   closeCryptoPaperPosition,
   getCryptoAnalysis,
   executeCryptoPaperStrategy,
   getCryptoCompareStrategies,
+  getCryptoMarketRegime,
   getCryptoPaperBotAutoStatus,
   reviewCryptoPaperExits,
   startCryptoPaperBotAuto,
@@ -44,6 +49,7 @@ import {
   resetCryptoPaperPortfolio,
   type CryptoAnalysisPayload,
   type CryptoAnalysisSignalKind,
+  type CryptoMacroMarketRegimePayload,
   type CryptoPaperBotAutoStatus,
   type CryptoPaperCycleResponse,
   type CryptoPaperEquityCurve,
@@ -114,6 +120,14 @@ function strategyModeLabelEs(mode: string | null | undefined): string {
   if (mode === "daily_intraday") return "Daily / Intradía";
   if (mode === "trend_swing") return "Trend / Swing";
   return mode?.trim() ? mode : "—";
+}
+
+function macroRegimeLabelEn(regime: string | null | undefined): string {
+  const r = (regime || "").trim().toLowerCase();
+  if (r === "bull") return "Bull";
+  if (r === "bear") return "Bear";
+  if (r === "neutral") return "Neutral";
+  return "Unknown";
 }
 
 function formatSignalCounts(counts: Record<string, number> | undefined): string {
@@ -738,6 +752,9 @@ export function CryptoPage() {
   const [autoStrategyIntervalMin, setAutoStrategyIntervalMin] = useState(
     String(AUTO_DEFAULT_STRATEGY_INTERVAL_MIN),
   );
+  const [marketRegime, setMarketRegime] = useState<CryptoMacroMarketRegimePayload | null>(null);
+  const [marketRegimeLoading, setMarketRegimeLoading] = useState(false);
+  const [macroFilterEnabled, setMacroFilterEnabled] = useState(() => loadCryptoMacroRegimeFilterPref());
 
   const loadPaper = useCallback(async (isRefresh = false) => {
     if (isRefresh) {
@@ -760,6 +777,27 @@ export function CryptoPage() {
     } finally {
       setPaperInitialLoading(false);
       setPaperRefreshing(false);
+    }
+  }, []);
+
+  const loadMarketRegime = useCallback(async () => {
+    setMarketRegimeLoading(true);
+    try {
+      const r = await getCryptoMarketRegime();
+      setMarketRegime(r);
+    } catch (e: unknown) {
+      setMarketRegime({
+        symbol: "BTCUSDT",
+        timeframe: "4h",
+        close: null,
+        ema200: null,
+        regime: "unknown",
+        allow_longs: false,
+        score_adjustment: 0,
+        reason: e instanceof Error ? e.message : "No se pudo cargar el régimen macro",
+      });
+    } finally {
+      setMarketRegimeLoading(false);
     }
   }, []);
 
@@ -889,11 +927,16 @@ export function CryptoPage() {
   const handleRefreshAll = useCallback(() => {
     void load(true);
     void loadPaper(true);
-  }, [load, loadPaper]);
+    void loadMarketRegime();
+  }, [load, loadMarketRegime, loadPaper]);
 
   useEffect(() => {
     void load(false);
   }, [load]);
+
+  useEffect(() => {
+    void loadMarketRegime();
+  }, [loadMarketRegime]);
 
   useEffect(() => {
     saveFavoriteSymbols(favoriteSymbols);
@@ -1091,6 +1134,7 @@ export function CryptoPage() {
         strategyMode,
         exitsIntervalMinutes: exitsMin,
         strategyIntervalMinutes: strategyMin,
+        macroRegimeFilter: macroFilterEnabled,
       });
       setAutoStatus(status);
       await loadPaper(true);
@@ -1105,6 +1149,7 @@ export function CryptoPage() {
     autoStopping,
     autoStrategyIntervalMin,
     loadPaper,
+    macroFilterEnabled,
     parseStrategyRiskParams,
     strategyMode,
     strategyTf,
@@ -1166,6 +1211,7 @@ export function CryptoPage() {
         requireBtcTrendUp: risk.requireBtcTrendUp,
         minEntryScore: risk.minEntryScore,
         strategyMode,
+        macroRegimeFilter: macroFilterEnabled,
       });
       setStrategyLastMode("execute");
       setStrategyCycle(data);
@@ -1177,6 +1223,7 @@ export function CryptoPage() {
     }
   }, [
     loadPaper,
+    macroFilterEnabled,
     parseStrategyRiskParams,
     strategyExecuting,
     strategyMode,
@@ -1679,6 +1726,93 @@ export function CryptoPage() {
 
       {activeCryptoTab === "bot" && (
         <>
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.5rem",
+            marginBottom: "0.5rem",
+          }}
+        >
+          <h3 className="dashboard-section-title" style={{ margin: 0 }}>
+            Régimen macro (BTCUSDT · 4h · EMA200)
+          </h3>
+          <button type="button" className="radar-refresh-btn" onClick={() => void loadMarketRegime()}>
+            Actualizar
+          </button>
+        </div>
+        {marketRegimeLoading ? (
+          <p className="msg-muted" style={{ marginTop: 0 }}>
+            Cargando…
+          </p>
+        ) : (
+          <dl
+            className="msg-muted"
+            style={{
+              margin: 0,
+              display: "grid",
+              gridTemplateColumns: "auto 1fr",
+              gap: "0.35rem 1rem",
+              fontSize: "0.85rem",
+              maxWidth: "44rem",
+            }}
+          >
+            <dt style={{ fontWeight: 600, color: "var(--text-muted)" }}>Régimen</dt>
+            <dd style={{ margin: 0 }}>{macroRegimeLabelEn(marketRegime?.regime)}</dd>
+            <dt style={{ fontWeight: 600, color: "var(--text-muted)" }}>BTC close</dt>
+            <dd style={{ margin: 0 }}>
+              {marketRegime &&
+              typeof marketRegime.close === "number" &&
+              Number.isFinite(marketRegime.close)
+                ? fmtPrice(marketRegime.close)
+                : "—"}
+            </dd>
+            <dt style={{ fontWeight: 600, color: "var(--text-muted)" }}>EMA200</dt>
+            <dd style={{ margin: 0 }}>
+              {marketRegime &&
+              typeof marketRegime.ema200 === "number" &&
+              Number.isFinite(marketRegime.ema200)
+                ? fmtPrice(marketRegime.ema200)
+                : "—"}
+            </dd>
+            <dt style={{ fontWeight: 600, color: "var(--text-muted)" }}>allow_longs</dt>
+            <dd style={{ margin: 0 }}>{marketRegime ? String(marketRegime.allow_longs) : "—"}</dd>
+            <dt style={{ fontWeight: 600, color: "var(--text-muted)" }}>score_adjustment</dt>
+            <dd style={{ margin: 0 }}>
+              {marketRegime != null && typeof marketRegime.score_adjustment === "number"
+                ? String(marketRegime.score_adjustment)
+                : "—"}
+            </dd>
+            <dt style={{ fontWeight: 600, color: "var(--text-muted)" }}>reason</dt>
+            <dd style={{ margin: 0, wordBreak: "break-word" }}>
+              {marketRegime?.reason?.trim() ? marketRegime.reason : "—"}
+            </dd>
+          </dl>
+        )}
+        <div style={{ marginTop: "0.85rem", paddingTop: "0.75rem", borderTop: "1px solid var(--border)" }}>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", cursor: "pointer", maxWidth: "44rem" }}>
+            <input
+              type="checkbox"
+              checked={macroFilterEnabled}
+              onChange={(ev) => {
+                const v = ev.target.checked;
+                setMacroFilterEnabled(v);
+                persistCryptoMacroRegimeFilterPref(v);
+              }}
+              style={{ marginTop: "0.2rem" }}
+            />
+            <span>
+              <span style={{ display: "block", fontSize: "0.9rem" }}>Usar filtro macro BTC 4h EMA200</span>
+              <span className="msg-muted" style={{ display: "block", fontSize: "0.78rem", marginTop: "0.35rem" }}>
+                Si está activo, bloquea compras spot en mercado bajista/unknown y endurece entradas en neutral.
+              </span>
+            </span>
+          </label>
+        </div>
+      </div>
       <div className="card" style={{ marginBottom: "1rem" }}>
         <h2 className="dashboard-section-title" style={{ marginTop: 0, marginBottom: "0.65rem" }}>
           Estrategia paper

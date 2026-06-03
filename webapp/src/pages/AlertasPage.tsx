@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import { mercadoBucket, TickerRadarLink } from "@/components/navigation/radarLinks";
+import {
+  mercadoBucketFromAlert,
+  mercadoLabelForRadarLink,
+  TickerRadarLink,
+  type AlertMarketHint,
+} from "@/components/navigation/radarLinks";
 import {
   ALERT_HISTORY_DEFAULT_LIMIT,
   fetchAlertHistory,
@@ -13,7 +18,7 @@ import {
 
 type AlertasTab = "actuales" | "historial";
 
-/** Filtro global por mercado (normalizado con mercadoBucket). "" = todas. */
+/** Filtro global por mercado (normalizado con mercadoBucketFromAlert). "" = todas. */
 type MercadoFiltroVista = "" | "usa" | "argentina";
 
 const HISTORY_FETCH_LIMIT = ALERT_HISTORY_DEFAULT_LIMIT;
@@ -257,10 +262,20 @@ function fmtHaceSegundos(sec: number | null | undefined): string {
 }
 
 function segmentLabel(h: AlertHistoryEvent): string {
-  if (h.mercado === "Argentina") {
+  if (mercadoBucketFromAlert(h) === "argentina") {
     return String(h.panel ?? "—");
   }
   return String(h.universo ?? "—");
+}
+
+function recordTickerMercado(map: Map<string, string>, hint: AlertMarketHint): void {
+  const t = (hint.ticker ?? "").trim().toUpperCase();
+  if (!t) return;
+  const label = mercadoLabelForRadarLink(hint);
+  if (!label) return;
+  if (!map.has(t)) {
+    map.set(t, label);
+  }
 }
 
 export function AlertasPage() {
@@ -353,7 +368,7 @@ export function AlertasPage() {
   const historyForView = useMemo(() => {
     if (!history) return null;
     if (!mercadoFiltro) return history;
-    return history.filter((h) => mercadoBucket(h.mercado) === mercadoFiltro);
+    return history.filter((h) => mercadoBucketFromAlert(h) === mercadoFiltro);
   }, [history, mercadoFiltro]);
 
   const activeTickers = useMemo(() => {
@@ -368,18 +383,15 @@ export function AlertasPage() {
   const tickerMercadoByTicker = useMemo(() => {
     const m = new Map<string, string>();
     for (const a of alerts ?? []) {
-      const t = (a.ticker ?? "").trim().toUpperCase();
-      const mk = (a.mercado ?? "").trim();
-      if (t && mk && !m.has(t)) {
-        m.set(t, mk);
-      }
+      recordTickerMercado(m, { ticker: a.ticker, mercado: a.mercado });
     }
     for (const h of history ?? []) {
-      const t = (h.ticker ?? "").trim().toUpperCase();
-      const mk = (h.mercado ?? "").trim();
-      if (t && mk && !m.has(t)) {
-        m.set(t, mk);
-      }
+      recordTickerMercado(m, {
+        ticker: h.ticker,
+        mercado: h.mercado,
+        panel: h.panel,
+        universo: h.universo,
+      });
     }
     return m;
   }, [alerts, history]);
@@ -400,7 +412,13 @@ export function AlertasPage() {
 
   const analysisJoined = useMemo(() => {
     if (!mercadoFiltro) return analysisJoinedAll;
-    return analysisJoinedAll.filter((r) => mercadoBucket(r.mercado) === mercadoFiltro);
+    return analysisJoinedAll.filter(
+      (r) =>
+        mercadoBucketFromAlert({
+          ticker: r.ticker,
+          mercado: r.mercado,
+        }) === mercadoFiltro,
+    );
   }, [analysisJoinedAll, mercadoFiltro]);
 
   const analysisRankingRows = useMemo(() => {
@@ -451,7 +469,7 @@ export function AlertasPage() {
   const alertsFiltradasMercado = useMemo(() => {
     if (!alerts) return null;
     if (!mercadoFiltro) return alerts;
-    return alerts.filter((a) => mercadoBucket(a.mercado) === mercadoFiltro);
+    return alerts.filter((a) => mercadoBucketFromAlert(a) === mercadoFiltro);
   }, [alerts, mercadoFiltro]);
 
   const filteredHistory = useMemo(() => {
@@ -534,13 +552,13 @@ export function AlertasPage() {
   const resumenActualesUsa = useMemo(() => {
     if (loading) return null;
     if (error || alerts === null) return null;
-    return alerts.filter((a) => mercadoBucket(a.mercado) === "usa").length;
+    return alerts.filter((a) => mercadoBucketFromAlert(a) === "usa").length;
   }, [loading, error, alerts]);
 
   const resumenActualesArg = useMemo(() => {
     if (loading) return null;
     if (error || alerts === null) return null;
-    return alerts.filter((a) => mercadoBucket(a.mercado) === "argentina").length;
+    return alerts.filter((a) => mercadoBucketFromAlert(a) === "argentina").length;
   }, [loading, error, alerts]);
 
   const resumenUltimoScanAt = useMemo(() => {
@@ -583,7 +601,7 @@ export function AlertasPage() {
     const scanCount = new Map<string, { count: number; bestAtMs: number; bestAtIso: string }>();
 
     for (const h of rows) {
-      const b = mercadoBucket(h.mercado);
+      const b = mercadoBucketFromAlert(h);
       if (b === "usa") out.usa += 1;
       else if (b === "argentina") out.argentina += 1;
 
@@ -1012,7 +1030,7 @@ export function AlertasPage() {
                 {analiticaHistorial?.topTicker ? (
                   <TickerRadarLink
                     ticker={analiticaHistorial.topTicker.ticker}
-                    mercado={mercadoTopTickerFrecuente ?? "USA"}
+                    mercado={mercadoTopTickerFrecuente}
                   />
                 ) : (
                   "—"
@@ -1058,7 +1076,7 @@ export function AlertasPage() {
                       )}
                     </div>
                     <div className="stat__value" style={{ fontSize: "1.25rem" }}>
-                      <TickerRadarLink ticker={r.ticker} mercado={r.mercado ?? "USA"} />
+                      <TickerRadarLink ticker={r.ticker} mercado={r.mercado} />
                     </div>
                     <div className="msg-muted dashboard-stat__hint" style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
                       <span className={classForTipoAlerta(r.tipo_actual, r.tipo_actual)} title={tooltipForAlertType(r.tipo_actual, r.tipo_actual)}>
@@ -1509,7 +1527,12 @@ export function AlertasPage() {
                           {formatScanAt(h.scan_at)}
                         </td>
                         <td>
-                          <TickerRadarLink ticker={h.ticker} mercado={h.mercado} />
+                          <TickerRadarLink
+                            ticker={h.ticker}
+                            mercado={h.mercado}
+                            panel={h.panel}
+                            universo={h.universo}
+                          />
                         </td>
                         <td>{h.mercado ?? "—"}</td>
                         <td>{segmentLabel(h)}</td>

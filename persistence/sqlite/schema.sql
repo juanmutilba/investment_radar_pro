@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS positions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ticker TEXT NOT NULL,
   asset_type TEXT NOT NULL CHECK (asset_type IN ('USA', 'Argentina', 'CEDEAR')),
+  portfolio_type TEXT NOT NULL DEFAULT 'radar' CHECK (portfolio_type IN ('radar', 'real')),
   quantity REAL NOT NULL,
   buy_date TEXT NOT NULL,
   buy_price_ars REAL,
@@ -47,12 +48,26 @@ CREATE TABLE IF NOT EXISTS positions (
   currency TEXT,
   opened_at TEXT,
   closed_at TEXT,
+  instrument_type TEXT DEFAULT 'stock',
+  underlying_symbol TEXT,
+  strategy_type TEXT,
+  option_expiration TEXT,
+  initial_debit_credit REAL,
+  committed_capital REAL,
+  max_risk REAL,
+  max_profit REAL,
+  opening_underlying_price REAL,
+  opening_iv REAL,
+  legs_json TEXT,
+  management_events_json TEXT,
   meta_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS ix_positions_ticker ON positions (ticker);
 CREATE INDEX IF NOT EXISTS ix_positions_buy_date ON positions (buy_date);
 CREATE INDEX IF NOT EXISTS ix_positions_status ON positions (status);
+CREATE INDEX IF NOT EXISTS ix_positions_instrument_type ON positions (instrument_type);
+CREATE INDEX IF NOT EXISTS ix_positions_portfolio_type ON positions (portfolio_type);
 
 -- Una fila por ejecución de scan (CLI, API, etc.).
 CREATE TABLE IF NOT EXISTS scan_runs (

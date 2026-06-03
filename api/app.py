@@ -529,6 +529,26 @@ def crypto_testnet_open_orders(
     return tn.get_testnet_open_orders(raw if raw else None)
 
 
+@app.get("/crypto/market-regime")
+def crypto_market_regime():
+    """Régimen macro BTC/USDT 4h vs EMA200 (solo lectura). Respuesta segura si fallan datos."""
+    try:
+        from services.crypto.macro_market_regime import get_macro_market_regime_payload
+
+        return get_macro_market_regime_payload()
+    except Exception as e:
+        return {
+            "symbol": "BTCUSDT",
+            "timeframe": "4h",
+            "close": None,
+            "ema200": None,
+            "regime": "unknown",
+            "allow_longs": False,
+            "score_adjustment": 0.0,
+            "reason": f"Error al calcular régimen macro: {type(e).__name__}: {e}",
+        }
+
+
 @app.post("/crypto/testnet/strategy/propose-entry")
 def crypto_testnet_strategy_propose_entry(
     timeframe: str = Query("1h"),
@@ -544,6 +564,7 @@ def crypto_testnet_strategy_propose_entry(
     require_btc_trend_up: bool = Query(False),
     min_entry_score: float = Query(0, ge=0, le=100),
     strategy_mode: str = Query("trend_swing"),
+    macro_regime_filter: bool = Query(False),
 ):
     """
     Escaneo + filtros alineados a execute-paper-strategy; sólo propone BUY testnet (sin paper ni orden automática).
@@ -565,6 +586,7 @@ def crypto_testnet_strategy_propose_entry(
             require_btc_trend_up=require_btc_trend_up,
             min_entry_score=min_entry_score,
             strategy_mode=strategy_mode,
+            macro_regime_filter=macro_regime_filter,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -706,6 +728,7 @@ class CryptoTestnetAutoStartBody(BaseModel):
     max_daily_loss_usdt: float = Field(default=10, gt=0)
     max_total_exposure_usdt: float = Field(default=100, gt=0)
     max_quote_per_order_usdt: float = Field(default=100, gt=0)
+    macro_regime_filter: bool = False
 
 
 class CryptoTestnetAutoUpdateParamsBody(BaseModel):
@@ -736,6 +759,7 @@ class CryptoTestnetAutoUpdateParamsBody(BaseModel):
     max_daily_loss_usdt: float | None = Field(default=None, gt=0)
     max_total_exposure_usdt: float | None = Field(default=None, gt=0)
     max_quote_per_order_usdt: float | None = Field(default=None, gt=0)
+    macro_regime_filter: bool | None = None
 
 
 @app.get("/crypto/testnet/strategy-analysis")
@@ -1158,6 +1182,7 @@ class CryptoPaperBotAutoStartBody(BaseModel):
     require_btc_trend_up: bool = False
     min_entry_score: float = Field(default=0, ge=0, le=100)
     strategy_mode: str = Field(default="trend_swing")
+    macro_regime_filter: bool = False
 
 
 @app.get("/crypto/paper/portfolio")
@@ -1318,6 +1343,7 @@ def crypto_bot_execute_paper_strategy(
     require_btc_trend_up: bool = Query(False),
     min_entry_score: float = Query(0, ge=0, le=100),
     strategy_mode: str = Query("trend_swing"),
+    macro_regime_filter: bool = Query(False),
 ):
     """Ejecuta estrategia paper con gestión de riesgo (simulación; sin órdenes reales)."""
     from services.crypto.bot_runner import execute_paper_strategy
@@ -1337,6 +1363,7 @@ def crypto_bot_execute_paper_strategy(
             require_btc_trend_up=require_btc_trend_up,
             min_entry_score=min_entry_score,
             strategy_mode=strategy_mode,
+            macro_regime_filter=macro_regime_filter,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1373,6 +1400,7 @@ def crypto_bot_auto_start(body: CryptoPaperBotAutoStartBody):
         "require_btc_trend_up": body.require_btc_trend_up,
         "min_entry_score": body.min_entry_score,
         "strategy_mode": body.strategy_mode,
+        "macro_regime_filter": body.macro_regime_filter,
     }
     try:
         return start_paper_bot_scheduler(

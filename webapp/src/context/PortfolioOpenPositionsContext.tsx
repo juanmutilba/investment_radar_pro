@@ -39,7 +39,7 @@ export function PortfolioOpenPositionsProvider({ children }: { children: ReactNo
       setError(null);
     }
     try {
-      const data = await fetchPortfolioOpen();
+      const data = await fetchPortfolioOpen({ portfolio_type: "radar" });
       setRows(data);
       if (!silent) {
         setError(null);

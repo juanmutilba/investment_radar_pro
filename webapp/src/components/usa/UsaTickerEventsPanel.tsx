@@ -40,7 +40,14 @@ function fmtEarningsDelta(d: number | null | undefined): string {
   return `${d} (fecha en cache ya pasó)`;
 }
 
-export function UsaTickerEventsPanel({ ticker }: { ticker: string }) {
+export function UsaTickerEventsPanel({
+  ticker,
+  variant = "standalone",
+}: {
+  ticker: string;
+  variant?: "standalone" | "embedded";
+}) {
+  const embedded = variant === "embedded";
   const [data, setData] = useState<UsaEventsForTickerPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -69,31 +76,52 @@ export function UsaTickerEventsPanel({ ticker }: { ticker: string }) {
     <section
       className="usa-ticker-events"
       style={{
-        margin: "0 0 1rem",
-        padding: "0.85rem 1rem",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius)",
-        background: "var(--bg-panel, rgba(15, 23, 42, 0.2))",
+        margin: embedded ? 0 : "0 0 1rem",
+        padding: embedded ? "0.25rem 0 0" : "0.85rem 1rem",
+        border: embedded ? "none" : "1px solid var(--border)",
+        borderRadius: embedded ? 0 : "var(--radius)",
+        background: embedded ? "transparent" : "var(--bg-panel, rgba(15, 23, 42, 0.2))",
       }}
       aria-label={`Eventos relevantes ${ticker}`}
     >
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
-        <h3 className="dashboard-section-title" style={{ margin: 0, fontSize: "0.95rem" }}>
-          Eventos relevantes
-        </h3>
-        <span className="msg-muted" style={{ fontSize: "0.78rem" }}>
-          {ticker}
-        </span>
-        {data?.evento_sensible ? (
-          <span className="radar-badge radar-badge--conv-media" title="Ventana sensible según fechas del cache local">
-            Evento sensible
+      {!embedded ? (
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
+          <h3 className="dashboard-section-title" style={{ margin: 0, fontSize: "0.95rem" }}>
+            Eventos relevantes
+          </h3>
+          <span className="msg-muted" style={{ fontSize: "0.78rem" }}>
+            {ticker}
           </span>
-        ) : null}
-      </div>
-      <p className="msg-muted" style={{ margin: "0 0 0.65rem", fontSize: "0.78rem", lineHeight: 1.4 }}>
-        Datos desde <code style={{ fontSize: "0.72rem" }}>events_cache_usa.json</code> (sin Yahoo en vivo). El cache no
-        guarda explícitamente la fecha de un earnings ya reportado; si la fecha de calendario quedó en el pasado, mostramos
-        días transcurridos como referencia.
+          {data?.evento_sensible ? (
+            <span className="radar-badge radar-badge--conv-media" title="Ventana sensible según fechas del cache local">
+              Evento sensible
+            </span>
+          ) : null}
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem", marginBottom: "0.35rem" }}>
+          <span className="msg-muted" style={{ fontSize: "0.74rem" }}>
+            {ticker}
+          </span>
+          {data?.evento_sensible ? (
+            <span className="radar-badge radar-badge--conv-media" title="Ventana sensible según fechas del cache local">
+              Evento sensible
+            </span>
+          ) : null}
+        </div>
+      )}
+      <p className="msg-muted" style={{ margin: "0 0 0.65rem", fontSize: embedded ? "0.72rem" : "0.78rem", lineHeight: 1.4 }}>
+        {embedded ? (
+          <>
+            Cache local <code style={{ fontSize: "0.68rem" }}>events_cache_usa.json</code> (sin Yahoo en vivo).
+          </>
+        ) : (
+          <>
+            Datos desde <code style={{ fontSize: "0.72rem" }}>events_cache_usa.json</code> (sin Yahoo en vivo). El cache no
+            guarda explícitamente la fecha de un earnings ya reportado; si la fecha de calendario quedó en el pasado, mostramos
+            días transcurridos como referencia.
+          </>
+        )}
       </p>
 
       {loading ? <p className="msg-muted" style={{ margin: 0 }}>Cargando eventos del cache…</p> : null}

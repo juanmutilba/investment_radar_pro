@@ -509,6 +509,53 @@ export async function getCryptoTestnetOpenOrders(symbol?: string | null): Promis
   return data;
 }
 
+/** GET /crypto/market-regime — BTCUSDT 4h vs EMA200 (solo lectura). */
+export type CryptoMacroMarketRegime = "bull" | "bear" | "neutral" | "unknown";
+
+export type CryptoMacroMarketRegimePayload = {
+  symbol: string;
+  timeframe: string;
+  close: number | null;
+  ema200: number | null;
+  regime: CryptoMacroMarketRegime | string;
+  allow_longs: boolean;
+  score_adjustment: number;
+  reason: string;
+};
+
+function isCryptoMacroMarketRegimePayload(data: unknown): data is CryptoMacroMarketRegimePayload {
+  if (data === null || typeof data !== "object") return false;
+  const o = data as Record<string, unknown>;
+  return (
+    typeof o.symbol === "string" &&
+    typeof o.timeframe === "string" &&
+    typeof o.regime === "string" &&
+    typeof o.allow_longs === "boolean" &&
+    typeof o.reason === "string" &&
+    (typeof o.score_adjustment === "number" || typeof o.score_adjustment === "string")
+  );
+}
+
+export async function getCryptoMarketRegime(): Promise<CryptoMacroMarketRegimePayload> {
+  const res = await fetch(`${BASE}/crypto/market-regime`, { headers: { Accept: "application/json" } });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!isCryptoMacroMarketRegimePayload(data)) {
+    throw new Error("Respuesta inesperada: /crypto/market-regime");
+  }
+  return {
+    ...data,
+    score_adjustment:
+      typeof data.score_adjustment === "number"
+        ? data.score_adjustment
+        : Number.parseFloat(String(data.score_adjustment)) || 0,
+    close: typeof data.close === "number" ? data.close : data.close === null ? null : Number(data.close),
+    ema200: typeof data.ema200 === "number" ? data.ema200 : data.ema200 === null ? null : Number(data.ema200),
+  };
+}
+
 /** POST /crypto/testnet/strategy/propose-entry — propuesta BUY (sin ejecutar paper ni Binance). */
 export type CryptoTestnetProposalRisk = {
   stop_loss_pct: number;
@@ -564,6 +611,7 @@ export type CryptoTestnetProposeEntryPayload = {
   strategy_mode?: string;
   scan_debug?: CryptoScanDebug | null;
   position_limits?: CryptoPositionLimitsSnapshot;
+  macro_regime?: CryptoMacroMarketRegimePayload;
 };
 
 export type CryptoTestnetProposeEntryParams = {
@@ -580,6 +628,7 @@ export type CryptoTestnetProposeEntryParams = {
   require_btc_trend_up?: boolean;
   min_entry_score?: number;
   strategyMode?: CryptoStrategyMode;
+  macroRegimeFilter?: boolean;
 };
 
 function isCryptoTestnetProposeEntryPayload(data: unknown): data is CryptoTestnetProposeEntryPayload {
@@ -608,6 +657,7 @@ export async function postCryptoTestnetProposeEntry(
   if (params.require_btc_trend_up != null) q.set("require_btc_trend_up", params.require_btc_trend_up ? "true" : "false");
   if (params.min_entry_score != null) q.set("min_entry_score", String(params.min_entry_score));
   if (params.strategyMode != null) q.set("strategy_mode", params.strategyMode);
+  if (params.macroRegimeFilter != null) q.set("macro_regime_filter", params.macroRegimeFilter ? "true" : "false");
   const res = await fetch(`${BASE}/crypto/testnet/strategy/propose-entry?${q.toString()}`, {
     method: "POST",
     headers: { Accept: "application/json" },
@@ -968,6 +1018,7 @@ export type CryptoTestnetAutoStartBody = {
   max_daily_loss_usdt?: number;
   max_total_exposure_usdt?: number;
   max_quote_per_order_usdt?: number;
+  macro_regime_filter?: boolean;
 };
 
 /** POST /crypto/testnet/auto/update-params — mismo shape que start, campos opcionales. */
@@ -2055,6 +2106,8 @@ export type CryptoPaperStrategyParams = {
   requireBtcTrendUp?: boolean;
   minEntryScore?: number;
   strategyMode?: CryptoStrategyMode;
+  /** Si true, aplica filtro BTC 4h EMA200 antes de nuevas compras paper. */
+  macroRegimeFilter?: boolean;
 };
 
 export type CryptoPaperReviewExitsResponse = {
@@ -2095,6 +2148,7 @@ export type CryptoPaperCycleResponse = {
   positions_review: CryptoPaperCyclePositionReview[];
   actions: CryptoPaperCycleAction[];
   position_limits?: CryptoPaperPositionLimits;
+  macro_regime?: CryptoMacroMarketRegimePayload;
 };
 
 function isCryptoPaperCycleResponse(data: unknown): data is CryptoPaperCycleResponse {
@@ -2208,6 +2262,9 @@ export async function executeCryptoPaperStrategy(
     min_entry_score: String(params.minEntryScore ?? 0),
     strategy_mode: params.strategyMode ?? "trend_swing",
   });
+  if (params.macroRegimeFilter === true) {
+    q.set("macro_regime_filter", "true");
+  }
   const res = await fetch(`${BASE}/crypto/bot/execute-paper-strategy?${q.toString()}`, {
     method: "POST",
   });
@@ -2410,6 +2467,7 @@ export async function startCryptoPaperBotAuto(
     require_btc_trend_up: params.requireBtcTrendUp ?? false,
     min_entry_score: params.minEntryScore ?? 0,
     strategy_mode: params.strategyMode ?? "trend_swing",
+    macro_regime_filter: params.macroRegimeFilter ?? false,
   };
   const res = await fetch(`${BASE}/crypto/bot/auto-start`, {
     method: "POST",
@@ -3051,12 +3109,41 @@ export async function getUsaEventsForTicker(ticker: string): Promise<UsaEventsFo
 
 // --- Cartera (SQLite) ---
 
+export type PortfolioKind = "radar" | "real";
+/** Filtro en query `portfolio_type` para listados y métricas. */
+export type PortfolioTypeQuery = "radar" | "real" | "all";
+
 export type PortfolioAssetType = "USA" | "Argentina" | "CEDEAR";
+
+export type PortfolioInstrumentType = "stock" | "option" | "option_strategy";
+
+export type PortfolioTradeLeg = {
+  leg_type: "call" | "put" | "stock" | "cash";
+  action: "buy" | "sell";
+  symbol: string;
+  strike?: number | null;
+  expiration?: string | null;
+  premium?: number | null;
+  quantity: number;
+  multiplier: number;
+};
+
+export type PortfolioManagementEvent = {
+  id?: string | null;
+  date: string;
+  event_type: "open" | "adjustment" | "roll" | "partial_close" | "full_close" | "note";
+  description?: string;
+  debit_credit?: number | null;
+  underlying_price?: number | null;
+  iv?: number | null;
+  notes?: string | null;
+};
 
 export type PortfolioOpenRow = {
   id: number;
   ticker: string;
   asset_type: PortfolioAssetType;
+  portfolio_type?: PortfolioKind;
   quantity: number;
   buy_date: string;
   buy_price_ars: number | null;
@@ -3080,12 +3167,35 @@ export type PortfolioOpenRow = {
   return_pct: number | null;
   days_in_position: number | null;
   buy_alert_label?: string | null;
+  /** stock | option | option_strategy (default stock si el backend no envía). */
+  instrument_type?: PortfolioInstrumentType;
+  underlying_symbol?: string | null;
+  strategy_type?: string | null;
+  option_expiration?: string | null;
+  initial_debit_credit?: number | null;
+  committed_capital?: number | null;
+  max_risk?: number | null;
+  max_profit?: number | null;
+  opening_underlying_price?: number | null;
+  opening_iv?: number | null;
+  legs?: PortfolioTradeLeg[];
+  management_events?: PortfolioManagementEvent[];
+  /** Enriquecido en API para `option_strategy`: suma de debit_credit en eventos. */
+  strategy_cashflow_total?: number | null;
+  /** True si status cerrado o existe evento full_close. */
+  strategy_is_closed?: boolean;
+  /** PnL realizado si la estrategia está cerrada (cashflow o legacy). */
+  strategy_realized_pnl?: number | null;
+  /** Solo si está cerrada: contabilidad usada para PnL. */
+  strategy_pnl_accounting?: "cashflow" | "legacy" | null;
 };
 
 export type PortfolioHistoryRow = {
   id: number;
   ticker: string;
   asset_type: PortfolioAssetType;
+  portfolio_type?: PortfolioKind;
+  instrument_type?: PortfolioInstrumentType;
   buy_date: string | null;
   sell_date: string | null;
   buy_price_ars: number | null;
@@ -3102,11 +3212,22 @@ export type PortfolioHistoryRow = {
   realized_return_usd_pct?: number | null;
   holding_days: number | null;
   sell_alert_label?: string | null;
+  underlying_symbol?: string | null;
+  strategy_type?: string | null;
+  legs?: PortfolioTradeLeg[];
+  management_events?: PortfolioManagementEvent[];
+  strategy_cashflow_total?: number | null;
+  strategy_is_closed?: boolean;
+  strategy_realized_pnl?: number | null;
+  strategy_pnl_accounting?: "cashflow" | "legacy" | null;
+  notes?: string | null;
+  sell_notes?: string | null;
 };
 
 export type PortfolioCreatePayload = {
   ticker: string;
   asset_type: PortfolioAssetType;
+  portfolio_type?: PortfolioKind;
   quantity: number;
   buy_date: string;
   buy_price_ars?: number | null;
@@ -3126,8 +3247,13 @@ export type PortfolioClosePayload = {
   sell_gap?: number | null;
 };
 
-export async function fetchPortfolioOpen(): Promise<PortfolioOpenRow[]> {
-  const res = await fetch(`${BASE}/portfolio/positions/open`);
+export async function fetchPortfolioOpen(opts?: {
+  portfolio_type?: PortfolioTypeQuery;
+  signal?: AbortSignal;
+}): Promise<PortfolioOpenRow[]> {
+  const qs = new URLSearchParams();
+  qs.set("portfolio_type", opts?.portfolio_type ?? "all");
+  const res = await fetch(`${BASE}/portfolio/positions/open?${qs.toString()}`, { signal: opts?.signal });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
   }
@@ -3138,8 +3264,13 @@ export async function fetchPortfolioOpen(): Promise<PortfolioOpenRow[]> {
   return data as PortfolioOpenRow[];
 }
 
-export async function fetchPortfolioHistory(): Promise<PortfolioHistoryRow[]> {
-  const res = await fetch(`${BASE}/portfolio/positions/history`);
+export async function fetchPortfolioHistory(opts?: {
+  portfolio_type?: PortfolioTypeQuery;
+  signal?: AbortSignal;
+}): Promise<PortfolioHistoryRow[]> {
+  const qs = new URLSearchParams();
+  qs.set("portfolio_type", opts?.portfolio_type ?? "all");
+  const res = await fetch(`${BASE}/portfolio/positions/history?${qs.toString()}`, { signal: opts?.signal });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
   }
@@ -3168,6 +3299,191 @@ export async function createPortfolioPosition(payload: PortfolioCreatePayload): 
 
 export async function closePortfolioPosition(positionId: number, payload: PortfolioClosePayload): Promise<void> {
   const res = await fetch(`${BASE}/portfolio/positions/${positionId}/close`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readHttpErrorMessage(res));
+  }
+}
+
+export type PortfolioTradesListParams = {
+  status?: "open" | "closed";
+  instrument_type?: "all" | "stock" | "option" | "option_strategy";
+  portfolio_type?: PortfolioTypeQuery;
+};
+
+export type PortfolioTradeCreatePayload = {
+  instrument_type: "option" | "option_strategy";
+  ticker: string;
+  asset_type: PortfolioAssetType;
+  quantity: number;
+  buy_date: string;
+  buy_price_ars?: number | null;
+  buy_price_usd?: number | null;
+  notes?: string | null;
+  tc_mep_compra?: number | null;
+  /** Obligatorio si `instrument_type` === `option_strategy`. */
+  underlying_symbol?: string | null;
+  strategy_type:
+    | "covered_call"
+    | "csp"
+    | "bull_call_spread"
+    | "bear_put_spread"
+    | "collar"
+    | "long_call"
+    | "long_put"
+    | "custom";
+  option_expiration?: string | null;
+  initial_debit_credit?: number | null;
+  committed_capital?: number | null;
+  max_risk?: number | null;
+  max_profit?: number | null;
+  opening_underlying_price?: number | null;
+  opening_iv?: number | null;
+  legs?: PortfolioTradeLeg[];
+  management_events?: PortfolioManagementEvent[];
+  portfolio_type?: PortfolioKind;
+  /** Permite `legs` vacío con `strategy_type` distinta de `custom`. */
+  allow_empty_legs?: boolean;
+};
+
+export type PortfolioTradePatchPayload = {
+  ticker?: string;
+  notes?: string | null;
+  quantity?: number;
+  underlying_symbol?: string;
+  strategy_type?: PortfolioTradeCreatePayload["strategy_type"];
+  option_expiration?: string | null;
+  initial_debit_credit?: number | null;
+  committed_capital?: number | null;
+  max_risk?: number | null;
+  max_profit?: number | null;
+  opening_underlying_price?: number | null;
+  opening_iv?: number | null;
+  instrument_type?: PortfolioInstrumentType;
+  legs?: PortfolioTradeLeg[];
+  management_events?: PortfolioManagementEvent[];
+  portfolio_type?: PortfolioKind;
+  allow_empty_legs?: boolean | null;
+};
+
+export type PortfolioTradesMetrics = {
+  portfolio_type_filter?: string;
+  total_realized_pnl_cashflow?: number;
+  realized_pnl_by_strategy?: Record<string, number>;
+  realized_pnl_by_underlying?: Record<string, number>;
+  open_committed_capital?: number;
+  open_max_risk?: number;
+  open_option_strategies_count: number;
+  open_options_count: number;
+  closed_option_strategies_count?: number;
+  win_rate_closed_strategies?: number | null;
+  avg_pnl_closed_strategy?: number | null;
+  best_strategy_by_pnl?: { strategy_type: string; pnl: number } | null;
+  worst_strategy_by_pnl?: { strategy_type: string; pnl: number } | null;
+  committed_capital_total_non_stock_open: number;
+  max_risk_total_non_stock_open: number;
+  realized_pnl_usd_approx_closed_non_stock: number;
+  realized_pnl_by_underlying_usd_approx: Record<string, number>;
+  realized_pnl_by_strategy_type_usd_approx: Record<string, number>;
+  closed_option_strategies_wins?: number;
+  closed_option_strategies_losses?: number;
+  closed_option_strategies_total?: number;
+  closed_option_strategies_win_rate?: number | null;
+};
+
+export async function fetchPortfolioTrades(
+  params: PortfolioTradesListParams = {},
+): Promise<Record<string, unknown>[]> {
+  const qs = new URLSearchParams();
+  qs.set("status", params.status ?? "open");
+  qs.set("instrument_type", params.instrument_type ?? "all");
+  qs.set("portfolio_type", params.portfolio_type ?? "all");
+  const res = await fetch(`${BASE}/portfolio/trades?${qs.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!Array.isArray(data)) {
+    throw new Error("Respuesta inesperada: portfolio trades");
+  }
+  return data as Record<string, unknown>[];
+}
+
+export async function fetchPortfolioTradesMetrics(opts?: {
+  portfolio_type?: PortfolioTypeQuery;
+}): Promise<PortfolioTradesMetrics> {
+  const qs = new URLSearchParams();
+  qs.set("portfolio_type", opts?.portfolio_type ?? "all");
+  const res = await fetch(`${BASE}/portfolio/trades/metrics?${qs.toString()}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object") {
+    throw new Error("Respuesta inesperada: portfolio trades metrics");
+  }
+  return data as PortfolioTradesMetrics;
+}
+
+export async function createPortfolioTrade(payload: PortfolioTradeCreatePayload): Promise<{ id: number }> {
+  const res = await fetch(`${BASE}/portfolio/trades`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readHttpErrorMessage(res));
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object" || typeof (data as { id?: unknown }).id !== "number") {
+    throw new Error("Respuesta inesperada: crear trade");
+  }
+  return { id: (data as { id: number }).id };
+}
+
+export async function patchPortfolioTrade(
+  positionId: number,
+  payload: PortfolioTradePatchPayload,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`${BASE}/portfolio/trades/${positionId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readHttpErrorMessage(res));
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object") {
+    throw new Error("Respuesta inesperada: patch trade");
+  }
+  return data as Record<string, unknown>;
+}
+
+export async function appendPortfolioTradeEvent(
+  positionId: number,
+  payload: PortfolioManagementEvent,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`${BASE}/portfolio/trades/${positionId}/events`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readHttpErrorMessage(res));
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object") {
+    throw new Error("Respuesta inesperada: append trade event");
+  }
+  return data as Record<string, unknown>;
+}
+
+export async function closePortfolioTrade(positionId: number, payload: PortfolioClosePayload): Promise<void> {
+  const res = await fetch(`${BASE}/portfolio/trades/${positionId}/close`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

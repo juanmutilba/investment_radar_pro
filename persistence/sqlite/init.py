@@ -6,7 +6,7 @@ from pathlib import Path
 from persistence.sqlite.paths import default_db_path
 
 # Incrementar al aplicar migraciones DDL (ver bloque _apply_schema_if_needed).
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 6
 
 
 def _schema_sql() -> str:
@@ -120,6 +120,70 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    """
+    Cartera: instrument_type (stock/option/option_strategy) y campos opcionales para opciones.
+    No altera asset_type (USA/Argentina/CEDEAR) ni filas existentes.
+    """
+    cols = _positions_column_names(conn)
+    additions: list[tuple[str, str]] = [
+        ("instrument_type", "TEXT DEFAULT 'stock'"),
+        ("underlying_symbol", "TEXT"),
+        ("strategy_type", "TEXT"),
+        ("option_expiration", "TEXT"),
+        ("initial_debit_credit", "REAL"),
+        ("committed_capital", "REAL"),
+        ("max_risk", "REAL"),
+        ("max_profit", "REAL"),
+        ("opening_underlying_price", "REAL"),
+        ("opening_iv", "REAL"),
+        ("legs_json", "TEXT"),
+        ("management_events_json", "TEXT"),
+    ]
+    for name, sql_type in additions:
+        if name not in cols:
+            conn.execute(f"ALTER TABLE positions ADD COLUMN {name} {sql_type}")
+    conn.execute(
+        """
+        UPDATE positions
+        SET instrument_type = 'stock'
+        WHERE instrument_type IS NULL OR trim(instrument_type) = ''
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_positions_instrument_type ON positions (instrument_type)"
+    )
+
+
+def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
+    """
+    Cartera: portfolio_type radar (seguimiento alertas) vs real (operaciones reales).
+    Filas existentes → radar. No toca asset_type ni instrument_type.
+    """
+    cols = _positions_column_names(conn)
+    if "portfolio_type" not in cols:
+        conn.execute(
+            "ALTER TABLE positions ADD COLUMN portfolio_type TEXT NOT NULL DEFAULT 'radar'"
+        )
+    conn.execute(
+        """
+        UPDATE positions
+        SET portfolio_type = 'radar'
+        WHERE portfolio_type IS NULL OR trim(portfolio_type) = ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE positions
+        SET portfolio_type = 'radar'
+        WHERE lower(portfolio_type) NOT IN ('radar', 'real')
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_positions_portfolio_type ON positions (portfolio_type)"
+    )
+
+
 def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
     """TC MEP por operación (compra/venta) y retorno realizado en USD (Argentina vía MEP)."""
     cols = _positions_column_names(conn)
@@ -153,6 +217,12 @@ def _apply_schema_if_needed(conn: sqlite3.Connection) -> None:
         elif version < 4:
             _migrate_v3_to_v4(conn)
             version = 4
+        elif version < 5:
+            _migrate_v4_to_v5(conn)
+            version = 5
+        elif version < 6:
+            _migrate_v5_to_v6(conn)
+            version = 6
         else:
             break
     conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
