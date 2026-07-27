@@ -4372,8 +4372,31 @@ export type FamilyCashflowEntry = {
   amount: number;
   description?: string | null;
   fixed_expense_id?: number | null;
+  is_fixed_expense?: boolean;
   asset_id?: number | null;
   liability_id?: number | null;
+  notes?: string | null;
+  allocated_amount?: number;
+  available_amount?: number;
+};
+
+export type FoCashflowAllocationDestination =
+  | "fixed_expense"
+  | "variable_expense"
+  | "debt"
+  | "investment"
+  | "saving"
+  | "house_project"
+  | "other";
+
+export type FamilyCashflowAllocation = {
+  id: number;
+  month: string;
+  currency: FoAssetCurrency;
+  source_cashflow_entry_id: number;
+  destination_type: FoCashflowAllocationDestination;
+  destination_id: number;
+  allocated_amount: number;
   notes?: string | null;
 };
 
@@ -4469,6 +4492,8 @@ export type FoMonthlySummary = {
   free_cashflow: number;
   amount_allocated: number;
   unallocated_cash: number;
+  cashflow_allocated?: number;
+  income_unallocated?: number;
   closure_status: FoClosureStatus | string;
   closure: FamilyMonthClosure | null;
   notes: string[];
@@ -4482,10 +4507,17 @@ export type FoCoverageItem = {
   priority: number;
   is_essential: boolean;
   expected_monthly_amount: number;
+  commitment?: number;
+  paid?: number;
+  covered?: number;
+  remaining_to_pay?: number;
+  remaining_to_cover?: number;
   assigned_cashflow: number;
   coverage_pct: number;
   fully_covered: boolean;
+  fully_paid?: boolean;
   sources: Array<Record<string, unknown>>;
+  payment_sources?: Array<Record<string, unknown>>;
 };
 
 export type FoCoverageResponse = {
@@ -4622,6 +4654,56 @@ export async function patchCashflowEntry(id: number, payload: Partial<FamilyCash
 
 export async function deleteCashflowEntry(id: number): Promise<void> {
   const res = await fetch(`${BASE}/family-office/cashflow-entries/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+}
+
+export async function fetchCashflowAllocations(params: {
+  month?: string;
+  currency?: FoAssetCurrency;
+  source_cashflow_entry_id?: number;
+  destination_type?: FoCashflowAllocationDestination;
+  destination_id?: number;
+}): Promise<FamilyCashflowAllocation[]> {
+  const qs = new URLSearchParams();
+  if (params.month) qs.set("month", params.month);
+  if (params.currency) qs.set("currency", params.currency);
+  if (params.source_cashflow_entry_id != null) {
+    qs.set("source_cashflow_entry_id", String(params.source_cashflow_entry_id));
+  }
+  if (params.destination_type) qs.set("destination_type", params.destination_type);
+  if (params.destination_id != null) qs.set("destination_id", String(params.destination_id));
+  const res = await fetch(`${BASE}/family-office/cashflow-allocations?${qs}`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyCashflowAllocation[];
+}
+
+export async function createCashflowAllocation(
+  payload: Omit<FamilyCashflowAllocation, "id">
+): Promise<FamilyCashflowAllocation> {
+  const res = await fetch(`${BASE}/family-office/cashflow-allocations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyCashflowAllocation;
+}
+
+export async function patchCashflowAllocation(
+  id: number,
+  payload: Partial<FamilyCashflowAllocation>
+): Promise<FamilyCashflowAllocation> {
+  const res = await fetch(`${BASE}/family-office/cashflow-allocations/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyCashflowAllocation;
+}
+
+export async function deleteCashflowAllocation(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/family-office/cashflow-allocations/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(await readHttpErrorMessage(res));
 }
 

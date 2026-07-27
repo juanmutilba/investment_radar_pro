@@ -282,6 +282,8 @@ def build_monthly_summary(*, month: str, currency: str) -> dict[str, Any]:
     free_cashflow = total_income - total_expenses
     amount_allocated = flow.sum_active_allocated(month=m, currency=cur)
     unallocated = free_cashflow - amount_allocated
+    cashflow_allocated = flow.sum_cashflow_allocations(month=m, currency=cur)
+    income_unallocated = total_income - cashflow_allocated
     closure = flow.get_month_closure(m, cur)
 
     return {
@@ -298,11 +300,15 @@ def build_monthly_summary(*, month: str, currency: str) -> dict[str, Any]:
         "free_cashflow": free_cashflow,
         "amount_allocated": amount_allocated,
         "unallocated_cash": unallocated,
+        "cashflow_allocated": cashflow_allocated,
+        "income_unallocated": income_unallocated,
         "closure_status": (closure or {}).get("status") or "draft",
         "closure": closure,
         "notes": [
             f"Resumen exclusivo en {cur}. No se mezclan otras monedas.",
             "Las proyecciones no se incluyen: solo entradas registradas.",
+            "cashflow_allocated / income_unallocated = asignaciones de ingresos del flujo.",
+            "amount_allocated / unallocated_cash = tablero de asignación de capital (planificación).",
         ],
     }
 
@@ -314,7 +320,8 @@ def build_fixed_expense_coverage(*, month: str, currency: str) -> dict[str, Any]
     cur = currency.upper()
     expenses = flow.list_fixed_expenses(active_only=True, currency=cur)
     entries = flow.list_cashflow_entries(month=m, currency=cur)
-    invs = flow.list_investment_cashflows(month=m, currency=cur)
+    allocations = flow.list_cashflow_allocations(month=m, currency=cur, destination_type="fixed_expense")
+    income_by_id = {int(e["id"]): e for e in entries if e.get("entry_type") == "income"}
 
     covered_rows: list[dict[str, Any]] = []
     total_essential = 0.0
@@ -323,46 +330,52 @@ def build_fixed_expense_coverage(*, month: str, currency: str) -> dict[str, Any]
 
     for fe in expenses:
         fid = int(fe["id"])
-        expected = float(fe.get("expected_monthly_amount") or 0)
-        sources: list[dict[str, Any]] = []
-        assigned = 0.0
+        commitment = float(fe.get("expected_monthly_amount") or 0)
+        paid = 0.0
+        payment_sources: list[dict[str, Any]] = []
+        covered = 0.0
+        coverage_sources: list[dict[str, Any]] = []
 
         for e in entries:
+            if e.get("entry_type") != "expense":
+                continue
             if e.get("fixed_expense_id") != fid:
                 continue
             amt = float(e.get("amount") or 0)
-            assigned += amt
-            sources.append(
+            paid += amt
+            payment_sources.append(
                 {
-                    "kind": "cashflow_entry",
+                    "kind": "expense_payment",
                     "id": e.get("id"),
-                    "entry_type": e.get("entry_type"),
                     "source_unit": e.get("source_unit"),
                     "amount": amt,
                     "description": e.get("description"),
                 }
             )
-        for inv in invs:
-            if inv.get("fixed_expense_id") != fid:
+
+        for a in allocations:
+            if int(a.get("destination_id") or 0) != fid:
                 continue
-            if str(inv.get("cash_status") or "") != "applied":
-                continue
-            amt = float(inv.get("net_cashflow") or 0)
-            if amt <= 0:
-                continue
-            assigned += amt
-            sources.append(
+            amt = float(a.get("allocated_amount") or 0)
+            covered += amt
+            src = income_by_id.get(int(a["source_cashflow_entry_id"]))
+            coverage_sources.append(
                 {
-                    "kind": "investment_cashflow",
-                    "id": inv.get("id"),
-                    "strategy_type": inv.get("strategy_type"),
-                    "account_name": inv.get("account_name"),
-                    "cash_status": inv.get("cash_status"),
+                    "kind": "income_allocation",
+                    "allocation_id": a.get("id"),
+                    "source_cashflow_entry_id": a.get("source_cashflow_entry_id"),
+                    "source_unit": (src or {}).get("source_unit"),
+                    "source_description": (src or {}).get("description"),
                     "amount": amt,
+                    "notes": a.get("notes"),
                 }
             )
 
-        pct = (assigned / expected * 100.0) if expected > 0 else (100.0 if assigned > 0 else 0.0)
+        remaining_to_pay = max(0.0, commitment - paid)
+        remaining_to_cover = max(0.0, commitment - covered)
+        pct = (covered / commitment * 100.0) if commitment > 0 else (100.0 if covered > 0 else 0.0)
+        fully_covered = covered + 1e-9 >= commitment
+        fully_paid = paid + 1e-9 >= commitment
         row = {
             "fixed_expense_id": fid,
             "name": fe.get("name"),
@@ -370,17 +383,24 @@ def build_fixed_expense_coverage(*, month: str, currency: str) -> dict[str, Any]
             "coverage_order": fe.get("coverage_order"),
             "priority": fe.get("priority"),
             "is_essential": bool(fe.get("is_essential")),
-            "expected_monthly_amount": expected,
-            "assigned_cashflow": assigned,
+            "expected_monthly_amount": commitment,
+            "commitment": commitment,
+            "paid": paid,
+            "covered": covered,
+            "remaining_to_pay": remaining_to_pay,
+            "remaining_to_cover": remaining_to_cover,
+            "assigned_cashflow": paid,
             "coverage_pct": min(pct, 999.0),
-            "fully_covered": assigned + 1e-9 >= expected,
-            "sources": sources,
+            "fully_covered": fully_covered,
+            "fully_paid": fully_paid,
+            "sources": coverage_sources,
+            "payment_sources": payment_sources,
         }
         covered_rows.append(row)
         if fe.get("is_essential"):
-            total_essential += expected
-            total_covered_essential += min(assigned, expected)
-        if first_uncovered is None and not row["fully_covered"]:
+            total_essential += commitment
+            total_covered_essential += min(covered, commitment)
+        if first_uncovered is None and not fully_covered:
             first_uncovered = row
 
     coverage_index = (
@@ -396,11 +416,189 @@ def build_fixed_expense_coverage(*, month: str, currency: str) -> dict[str, Any]
         "coverage_index": coverage_index,
         "first_uncovered_expense": first_uncovered,
         "notes": [
-            "Cobertura basada en vínculos manuales (fixed_expense_id).",
-            "No se mezclan proyecciones con resultados realizados.",
+            "Compromiso = plantilla family_fixed_expenses (no suma al flujo).",
+            "Pagado = egresos con fixed_expense_id.",
+            "Cubierto = asignaciones family_cashflow_allocations desde ingresos.",
+            "No se infiere cobertura desde el pago ni desde investment_cashflow applied.",
             f"Solo moneda {cur}.",
         ],
     }
+
+
+def require_month_writable(*, month: str, currency: str) -> None:
+    from persistence.sqlite import family_office_flow_repo as flow
+
+    closure = flow.get_month_closure(month.strip()[:7], currency.upper())
+    if closure and str(closure.get("status") or "") == "closed":
+        raise ValueError("Mes cerrado: solo lectura")
+
+
+def income_available_amount(entry_id: int, *, exclude_allocation_id: int | None = None) -> float:
+    from persistence.sqlite import family_office_flow_repo as flow
+
+    entry = flow.get_cashflow_entry(entry_id)
+    if entry is None:
+        raise ValueError("Movimiento fuente no encontrado")
+    if entry.get("entry_type") != "income":
+        raise ValueError("Solo un ingreso puede ser fuente de asignación")
+    allocated = flow.sum_cashflow_allocated_from_source(
+        entry_id, exclude_id=exclude_allocation_id
+    )
+    return max(0.0, float(entry.get("amount") or 0) - allocated)
+
+
+def create_cashflow_allocation(
+    *,
+    month: str,
+    currency: str,
+    source_cashflow_entry_id: int,
+    destination_type: str,
+    destination_id: int,
+    allocated_amount: float,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    from persistence.sqlite import family_office_flow_repo as flow
+
+    m = month.strip()[:7]
+    cur = currency.upper()
+    require_month_writable(month=m, currency=cur)
+
+    if destination_type != "fixed_expense":
+        raise ValueError(
+            "En F1 solo se admite destination_type=fixed_expense "
+            f"(recibido: {destination_type})"
+        )
+    if allocated_amount <= 0:
+        raise ValueError("allocated_amount debe ser > 0")
+
+    src = flow.get_cashflow_entry(source_cashflow_entry_id)
+    if src is None:
+        raise ValueError("source_cashflow_entry_id no existe")
+    if src.get("entry_type") != "income":
+        raise ValueError("No usar egresos como fuente de asignación")
+    if str(src.get("month") or "") != m:
+        raise ValueError("Fuente y destino deben compartir el mismo período")
+    if str(src.get("currency") or "").upper() != cur:
+        raise ValueError("Fuente y destino deben compartir la misma moneda")
+
+    dest = flow.get_fixed_expense(destination_id)
+    if dest is None or not dest.get("is_active"):
+        raise ValueError("destination_id (gasto fijo) no existe o está inactivo")
+    if str(dest.get("currency") or "").upper() != cur:
+        raise ValueError("La plantilla de gasto fijo debe estar en la misma moneda")
+
+    available = income_available_amount(source_cashflow_entry_id)
+    if allocated_amount > available + 1e-9:
+        raise ValueError(
+            f"Asignación {allocated_amount} supera disponible {available} del ingreso"
+        )
+
+    aid = flow.insert_cashflow_allocation(
+        month=m,
+        currency=cur,
+        source_cashflow_entry_id=source_cashflow_entry_id,
+        destination_type=destination_type,
+        destination_id=destination_id,
+        allocated_amount=allocated_amount,
+        notes=notes,
+    )
+    row = flow.get_cashflow_allocation(aid)
+    if row is None:
+        raise RuntimeError("No se pudo crear la asignación")
+    return row
+
+
+def update_cashflow_allocation(allocation_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+    from persistence.sqlite import family_office_flow_repo as flow
+
+    existing = flow.get_cashflow_allocation(allocation_id)
+    if existing is None:
+        raise ValueError("Asignación no encontrada")
+    require_month_writable(month=str(existing["month"]), currency=str(existing["currency"]))
+
+    month = str(fields.get("month", existing["month"])).strip()[:7]
+    currency = str(fields.get("currency", existing["currency"])).upper()
+    source_id = int(fields.get("source_cashflow_entry_id", existing["source_cashflow_entry_id"]))
+    destination_type = str(fields.get("destination_type", existing["destination_type"]))
+    destination_id = int(fields.get("destination_id", existing["destination_id"]))
+    allocated_amount = float(fields.get("allocated_amount", existing["allocated_amount"]))
+    notes = fields["notes"] if "notes" in fields else existing.get("notes")
+
+    if destination_type != "fixed_expense":
+        raise ValueError(
+            "En F1 solo se admite destination_type=fixed_expense "
+            f"(recibido: {destination_type})"
+        )
+    if allocated_amount <= 0:
+        raise ValueError("allocated_amount debe ser > 0")
+
+    require_month_writable(month=month, currency=currency)
+
+    src = flow.get_cashflow_entry(source_id)
+    if src is None:
+        raise ValueError("source_cashflow_entry_id no existe")
+    if src.get("entry_type") != "income":
+        raise ValueError("No usar egresos como fuente de asignación")
+    if str(src.get("month") or "") != month:
+        raise ValueError("Fuente y destino deben compartir el mismo período")
+    if str(src.get("currency") or "").upper() != currency:
+        raise ValueError("Fuente y destino deben compartir la misma moneda")
+
+    dest = flow.get_fixed_expense(destination_id)
+    if dest is None or not dest.get("is_active"):
+        raise ValueError("destination_id (gasto fijo) no existe o está inactivo")
+    if str(dest.get("currency") or "").upper() != currency:
+        raise ValueError("La plantilla de gasto fijo debe estar en la misma moneda")
+
+    available = income_available_amount(source_id, exclude_allocation_id=allocation_id)
+    if allocated_amount > available + 1e-9:
+        raise ValueError(
+            f"Asignación {allocated_amount} supera disponible {available} del ingreso"
+        )
+
+    patch: dict[str, Any] = {
+        "month": month,
+        "currency": currency,
+        "source_cashflow_entry_id": source_id,
+        "destination_type": destination_type,
+        "destination_id": destination_id,
+        "allocated_amount": allocated_amount,
+        "notes": notes,
+    }
+    if not flow.update_cashflow_allocation(allocation_id, patch):
+        raise ValueError("Sin cambios")
+    row = flow.get_cashflow_allocation(allocation_id)
+    if row is None:
+        raise RuntimeError("Asignación no encontrada tras actualizar")
+    return row
+
+
+def delete_cashflow_allocation(allocation_id: int) -> None:
+    from persistence.sqlite import family_office_flow_repo as flow
+
+    existing = flow.get_cashflow_allocation(allocation_id)
+    if existing is None:
+        raise ValueError("Asignación no encontrada")
+    require_month_writable(month=str(existing["month"]), currency=str(existing["currency"]))
+    flow.delete_cashflow_allocation(allocation_id)
+
+
+def enrich_cashflow_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from persistence.sqlite import family_office_flow_repo as flow
+
+    out: list[dict[str, Any]] = []
+    for e in entries:
+        row = dict(e)
+        if row.get("entry_type") == "income":
+            allocated = flow.sum_cashflow_allocated_from_source(int(row["id"]))
+            amt = float(row.get("amount") or 0)
+            row["allocated_amount"] = allocated
+            row["available_amount"] = max(0.0, amt - allocated)
+        else:
+            row["allocated_amount"] = 0.0
+            row["available_amount"] = 0.0
+        out.append(row)
+    return out
 
 
 def build_leverage_performance(*, month: str) -> dict[str, Any]:

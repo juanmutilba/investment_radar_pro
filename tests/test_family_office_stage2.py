@@ -192,6 +192,25 @@ def test_fixed_expense_partial_and_full_coverage(fo_db):
         coverage_order=2,
         is_essential=True,
     )
+    income1 = flow.insert_cashflow_entry(
+        date="2026-07-05",
+        month="2026-07",
+        entry_type="income",
+        category="salary",
+        source_unit="employment",
+        currency="ARS",
+        amount=60_000,
+    )
+    from services.family_office import create_cashflow_allocation
+
+    create_cashflow_allocation(
+        month="2026-07",
+        currency="ARS",
+        source_cashflow_entry_id=income1,
+        destination_type="fixed_expense",
+        destination_id=fe,
+        allocated_amount=60_000,
+    )
     flow.insert_cashflow_entry(
         date="2026-07-05",
         month="2026-07",
@@ -201,24 +220,50 @@ def test_fixed_expense_partial_and_full_coverage(fo_db):
         currency="ARS",
         amount=20_000,
         fixed_expense_id=fe,
+        is_fixed_expense=True,
     )
     cov = build_fixed_expense_coverage(month="2026-07", currency="ARS")
     assert cov["items"][0]["fixed_expense_id"] == fe
-    assert cov["items"][0]["assigned_cashflow"] == 20_000
+    assert cov["items"][0]["covered"] == 60_000
+    assert cov["items"][0]["paid"] == 20_000
     assert cov["items"][0]["fully_covered"] is False
     assert cov["first_uncovered_expense"]["fixed_expense_id"] == fe
     assert cov["coverage_index"] is not None
     assert cov["coverage_index"] < 1.0
 
-    flow.insert_cashflow_entry(
+    income2 = flow.insert_cashflow_entry(
         date="2026-07-06",
         month="2026-07",
-        entry_type="expense",
-        category="education",
-        source_unit="family",
+        entry_type="income",
+        category="interest",
+        source_unit="investments",
         currency="ARS",
-        amount=80_000,
-        fixed_expense_id=fe,
+        amount=40_000,
+    )
+    create_cashflow_allocation(
+        month="2026-07",
+        currency="ARS",
+        source_cashflow_entry_id=income2,
+        destination_type="fixed_expense",
+        destination_id=fe,
+        allocated_amount=40_000,
+    )
+    income3 = flow.insert_cashflow_entry(
+        date="2026-07-07",
+        month="2026-07",
+        entry_type="income",
+        category="dividend",
+        source_unit="investments",
+        currency="ARS",
+        amount=50_000,
+    )
+    create_cashflow_allocation(
+        month="2026-07",
+        currency="ARS",
+        source_cashflow_entry_id=income3,
+        destination_type="fixed_expense",
+        destination_id=fe2,
+        allocated_amount=50_000,
     )
     flow.insert_investment_cashflow(
         month="2026-07",

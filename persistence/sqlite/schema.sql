@@ -262,6 +262,7 @@ CREATE TABLE IF NOT EXISTS family_cashflow_entries (
   amount REAL NOT NULL CHECK (amount >= 0),
   description TEXT,
   fixed_expense_id INTEGER REFERENCES family_fixed_expenses (id) ON DELETE SET NULL,
+  is_fixed_expense INTEGER NOT NULL DEFAULT 0 CHECK (is_fixed_expense IN (0, 1)),
   asset_id INTEGER REFERENCES family_assets (id) ON DELETE SET NULL,
   liability_id INTEGER REFERENCES family_liabilities (id) ON DELETE SET NULL,
   notes TEXT,
@@ -273,6 +274,30 @@ CREATE INDEX IF NOT EXISTS ix_family_cashflow_month_currency
   ON family_cashflow_entries (month, currency);
 CREATE INDEX IF NOT EXISTS ix_family_cashflow_fixed_expense
   ON family_cashflow_entries (fixed_expense_id);
+
+CREATE TABLE IF NOT EXISTS family_cashflow_allocations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  month TEXT NOT NULL,
+  currency TEXT NOT NULL CHECK (currency IN ('ARS', 'USD')),
+  source_cashflow_entry_id INTEGER NOT NULL
+    REFERENCES family_cashflow_entries (id) ON DELETE CASCADE,
+  destination_type TEXT NOT NULL CHECK (destination_type IN (
+    'fixed_expense', 'variable_expense', 'debt', 'investment',
+    'saving', 'house_project', 'other'
+  )),
+  destination_id INTEGER NOT NULL,
+  allocated_amount REAL NOT NULL CHECK (allocated_amount > 0),
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS ix_family_cf_alloc_month_currency
+  ON family_cashflow_allocations (month, currency);
+CREATE INDEX IF NOT EXISTS ix_family_cf_alloc_source
+  ON family_cashflow_allocations (source_cashflow_entry_id);
+CREATE INDEX IF NOT EXISTS ix_family_cf_alloc_destination
+  ON family_cashflow_allocations (destination_type, destination_id);
 
 CREATE TABLE IF NOT EXISTS investment_cashflow_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

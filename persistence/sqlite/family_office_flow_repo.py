@@ -154,7 +154,7 @@ def list_cashflow_entries(
     sql += " ORDER BY date DESC, id DESC"
     with connection_scope() as conn:
         rows = conn.execute(sql, params).fetchall()
-    return [row_as_mapping(r) for r in rows]
+    return [_normalize_cashflow_row(row_as_mapping(r)) for r in rows]
 
 
 def get_cashflow_entry(entry_id: int) -> dict[str, Any] | None:
@@ -162,9 +162,14 @@ def get_cashflow_entry(entry_id: int) -> dict[str, Any] | None:
         r = conn.execute(
             "SELECT * FROM family_cashflow_entries WHERE id = ?", (entry_id,)
         ).fetchone()
-    return row_as_mapping(r) if r else None
+    return _normalize_cashflow_row(row_as_mapping(r)) if r else None
 
 
+def _normalize_cashflow_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    if "is_fixed_expense" in out and out["is_fixed_expense"] is not None:
+        out["is_fixed_expense"] = bool(int(out["is_fixed_expense"]))
+    return out
 
 
 def insert_cashflow_entry(**fields: Any) -> int:
@@ -176,9 +181,9 @@ def insert_cashflow_entry(**fields: Any) -> int:
             """
             INSERT INTO family_cashflow_entries (
               date, month, entry_type, category, source_unit, currency, amount,
-              description, fixed_expense_id, asset_id, liability_id, notes,
+              description, fixed_expense_id, is_fixed_expense, asset_id, liability_id, notes,
               created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 date_s,
@@ -190,6 +195,7 @@ def insert_cashflow_entry(**fields: Any) -> int:
                 float(fields["amount"]),
                 (fields.get("description") or "").strip() or None,
                 fields.get("fixed_expense_id"),
+                _as_bool_int(fields.get("is_fixed_expense"), 0),
                 fields.get("asset_id"),
                 fields.get("liability_id"),
                 (fields.get("notes") or "").strip() or None if fields.get("notes") is not None else None,
@@ -203,7 +209,7 @@ def insert_cashflow_entry(**fields: Any) -> int:
 def update_cashflow_entry(entry_id: int, fields: dict[str, Any]) -> bool:
     allowed = {
         "date", "month", "entry_type", "category", "source_unit", "currency",
-        "amount", "description", "fixed_expense_id",
+        "amount", "description", "fixed_expense_id", "is_fixed_expense",
         "asset_id", "liability_id", "notes",
     }
     cols: list[str] = []
@@ -223,6 +229,8 @@ def update_cashflow_entry(entry_id: int, fields: dict[str, Any]) -> bool:
         elif key in ("description", "notes"):
             cols.append(f"{key} = ?")
             params.append((str(value).strip() if value is not None else "") or None)
+        elif key == "is_fixed_expense" and value is not None:
+            cols.append("is_fixed_expense = ?"); params.append(_as_bool_int(value, 0))
         elif key in ("fixed_expense_id", "asset_id", "liability_id"):
             cols.append(f"{key} = ?"); params.append(value)
     if not cols:
@@ -239,6 +247,158 @@ def update_cashflow_entry(entry_id: int, fields: dict[str, Any]) -> bool:
 def delete_cashflow_entry(entry_id: int) -> bool:
     with connection_scope() as conn:
         cur = conn.execute("DELETE FROM family_cashflow_entries WHERE id = ?", (entry_id,))
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Cashflow allocations (income → destination)
+# ---------------------------------------------------------------------------
+
+CASHFLOW_ALLOCATION_DESTINATION_TYPES = (
+    "fixed_expense",
+    "variable_expense",
+    "debt",
+    "investment",
+    "saving",
+    "house_project",
+    "other",
+)
+
+
+def list_cashflow_allocations(
+    *,
+    month: str | None = None,
+    currency: str | None = None,
+    source_cashflow_entry_id: int | None = None,
+    destination_type: str | None = None,
+    destination_id: int | None = None,
+) -> list[dict[str, Any]]:
+    parts: list[str] = []
+    params: list[Any] = []
+    if month:
+        parts.append("month = ?"); params.append(month.strip()[:7])
+    if currency:
+        parts.append("upper(currency) = ?"); params.append(currency.upper())
+    if source_cashflow_entry_id is not None:
+        parts.append("source_cashflow_entry_id = ?"); params.append(int(source_cashflow_entry_id))
+    if destination_type:
+        parts.append("destination_type = ?"); params.append(destination_type)
+    if destination_id is not None:
+        parts.append("destination_id = ?"); params.append(int(destination_id))
+    sql = "SELECT * FROM family_cashflow_allocations"
+    if parts:
+        sql += " WHERE " + " AND ".join(parts)
+    sql += " ORDER BY id ASC"
+    with connection_scope() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [row_as_mapping(r) for r in rows]
+
+
+def get_cashflow_allocation(allocation_id: int) -> dict[str, Any] | None:
+    with connection_scope() as conn:
+        r = conn.execute(
+            "SELECT * FROM family_cashflow_allocations WHERE id = ?", (allocation_id,)
+        ).fetchone()
+    return row_as_mapping(r) if r else None
+
+
+def sum_cashflow_allocated_from_source(source_cashflow_entry_id: int, *, exclude_id: int | None = None) -> float:
+    sql = """
+        SELECT COALESCE(SUM(allocated_amount), 0) AS s
+        FROM family_cashflow_allocations
+        WHERE source_cashflow_entry_id = ?
+    """
+    params: list[Any] = [int(source_cashflow_entry_id)]
+    if exclude_id is not None:
+        sql += " AND id != ?"
+        params.append(int(exclude_id))
+    with connection_scope() as conn:
+        row = conn.execute(sql, params).fetchone()
+    return float(row["s"] if row else 0)
+
+
+def sum_cashflow_allocations(
+    *, month: str, currency: str, destination_type: str | None = None, destination_id: int | None = None
+) -> float:
+    parts = ["month = ?", "upper(currency) = ?"]
+    params: list[Any] = [month.strip()[:7], currency.upper()]
+    if destination_type:
+        parts.append("destination_type = ?"); params.append(destination_type)
+    if destination_id is not None:
+        parts.append("destination_id = ?"); params.append(int(destination_id))
+    sql = (
+        "SELECT COALESCE(SUM(allocated_amount), 0) AS s FROM family_cashflow_allocations WHERE "
+        + " AND ".join(parts)
+    )
+    with connection_scope() as conn:
+        row = conn.execute(sql, params).fetchone()
+    return float(row["s"] if row else 0)
+
+
+def insert_cashflow_allocation(**fields: Any) -> int:
+    ts = _now_iso()
+    with connection_scope() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO family_cashflow_allocations (
+              month, currency, source_cashflow_entry_id, destination_type, destination_id,
+              allocated_amount, notes, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(fields["month"]).strip()[:7],
+                str(fields["currency"]).upper(),
+                int(fields["source_cashflow_entry_id"]),
+                fields["destination_type"],
+                int(fields["destination_id"]),
+                float(fields["allocated_amount"]),
+                (fields.get("notes") or "").strip() or None if fields.get("notes") is not None else None,
+                ts,
+                ts,
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def update_cashflow_allocation(allocation_id: int, fields: dict[str, Any]) -> bool:
+    allowed = {
+        "month", "currency", "source_cashflow_entry_id", "destination_type",
+        "destination_id", "allocated_amount", "notes",
+    }
+    cols: list[str] = []
+    params: list[Any] = []
+    for key, value in fields.items():
+        if key not in allowed:
+            continue
+        if key == "month" and value is not None:
+            cols.append("month = ?"); params.append(str(value).strip()[:7])
+        elif key == "currency" and value is not None:
+            cols.append("currency = ?"); params.append(str(value).upper())
+        elif key == "destination_type" and value is not None:
+            cols.append("destination_type = ?"); params.append(value)
+        elif key in ("source_cashflow_entry_id", "destination_id") and value is not None:
+            cols.append(f"{key} = ?"); params.append(int(value))
+        elif key == "allocated_amount" and value is not None:
+            cols.append("allocated_amount = ?"); params.append(float(value))
+        elif key == "notes":
+            cols.append("notes = ?")
+            params.append((str(value).strip() if value is not None else "") or None)
+    if not cols:
+        return False
+    cols.append("updated_at = ?"); params.append(_now_iso()); params.append(allocation_id)
+    with connection_scope() as conn:
+        cur = conn.execute(
+            "UPDATE family_cashflow_allocations SET " + ", ".join(cols) + " WHERE id = ?",
+            params,
+        )
+        return cur.rowcount > 0
+
+
+def delete_cashflow_allocation(allocation_id: int) -> bool:
+    with connection_scope() as conn:
+        cur = conn.execute(
+            "DELETE FROM family_cashflow_allocations WHERE id = ?", (allocation_id,)
+        )
         return cur.rowcount > 0
 
 # ---------------------------------------------------------------------------

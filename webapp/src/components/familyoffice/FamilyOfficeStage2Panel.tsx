@@ -3,11 +3,13 @@ import {
   closeFoMonth,
   createCapitalAllocation,
   createCashflowEntry,
+  createCashflowAllocation,
   createFixedExpense,
   createInvestmentCashflow,
   createLeverageRecord,
   deleteCapitalAllocation,
   deleteCashflowEntry,
+  deleteCashflowAllocation,
   deleteFixedExpense,
   deleteInvestmentCashflow,
   deleteLeverageRecord,
@@ -93,11 +95,12 @@ type Props = {
 
 type CoverageSource = {
   kind?: string;
+  allocation_id?: number;
+  source_cashflow_entry_id?: number;
   source_unit?: string;
   source_description?: string;
-  account_name?: string;
-  strategy_type?: string;
   amount?: number;
+  notes?: string | null;
 };
 
 function MonthCurrencyBar({
@@ -141,11 +144,6 @@ function toFixedCategory(cat: string): FoFixedExpenseCategory {
 
 function formatSourceLine(src: CoverageSource): string {
   const amt = fmtMoney(Number(src.amount ?? 0));
-  if (src.kind === "investment_cashflow") {
-    const acct = src.account_name ? `${src.account_name}` : "inversión";
-    const strat = src.strategy_type ? ` · ${src.strategy_type}` : "";
-    return `${amt} ← ${acct}${strat} (applied)`;
-  }
   const unit = labelOrCode(SOURCE_UNIT_LABELS, src.source_unit);
   const desc = src.source_description ? ` · ${src.source_description}` : "";
   return `${amt} ← ${unit}${desc}`;
@@ -200,14 +198,23 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
     [fixed]
   );
 
+  const incomeWithAvailable = entries.filter(
+    (e) => e.entry_type === "income" && (e.available_amount ?? e.amount) > 0
+  );
+
   const [entryType, setEntryType] = useState<FoEntryType>("income");
   const [entryCat, setEntryCat] = useState<string>("salary");
   const [entryUnit, setEntryUnit] = useState<FoSourceUnit>("employment");
   const [entryAmt, setEntryAmt] = useState("");
   const [entryDesc, setEntryDesc] = useState("");
   const [entryFixedId, setEntryFixedId] = useState("");
+  const [entryIsFixedExpense, setEntryIsFixedExpense] = useState(false);
   const [linkFixedEntryId, setLinkFixedEntryId] = useState<number | null>(null);
   const [linkFixedSelectId, setLinkFixedSelectId] = useState("");
+
+  const [assignOpenFor, setAssignOpenFor] = useState<number | null>(null);
+  const [assignEntryId, setAssignEntryId] = useState("");
+  const [assignAmt, setAssignAmt] = useState("");
 
   const [feName, setFeName] = useState("");
   const [feCat, setFeCat] = useState<FoFixedExpenseCategory>("education");
@@ -235,6 +242,7 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
     setEntryType(next);
     setEntryCat(next === "income" ? "salary" : "housing");
     setEntryFixedId("");
+    setEntryIsFixedExpense(false);
   }
 
   async function submitEntry(ev: FormEvent) {
@@ -256,6 +264,7 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
         description: entryDesc.trim() || null,
         fixed_expense_id:
           entryType === "expense" && entryFixedId ? Number(entryFixedId) : null,
+        is_fixed_expense: entryType === "expense" ? entryIsFixedExpense : false,
         asset_id: null,
         liability_id: null,
         notes: null,
@@ -263,6 +272,7 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
       setEntryAmt("");
       setEntryDesc("");
       setEntryFixedId("");
+      setEntryIsFixedExpense(false);
       await refresh();
     } catch (e) {
       onError(e instanceof Error ? e.message : "Error al guardar entrada");
@@ -270,7 +280,7 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
   }
 
   async function onCloseMonth() {
-    if (!window.confirm(`¿Cerrar ${month} en ${currency}?`)) {
+    if (!window.confirm(`¿Cerrar ${month} en ${currency}? No se podrá sobreasignar después sin reabrir.`)) {
       return;
     }
     try {
@@ -322,7 +332,10 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
         is_essential: true,
         notes: null,
       });
-      await patchCashflowEntry(entry.id, { fixed_expense_id: created.id });
+      await patchCashflowEntry(entry.id, {
+        fixed_expense_id: created.id,
+        is_fixed_expense: true,
+      });
       await refresh();
     } catch (e) {
       onError(e instanceof Error ? e.message : "Error al crear plantilla");
@@ -353,6 +366,32 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
       await refresh();
     } catch (e) {
       onError(e instanceof Error ? e.message : "Error gasto fijo");
+    }
+  }
+
+  async function submitAssignIncome(fixedExpenseId: number) {
+    const allocated_amount = parseNonNeg(assignAmt);
+    const sourceId = Number(assignEntryId);
+    if (!sourceId || allocated_amount === null) {
+      onError("Elegí ingreso y monto válido.");
+      return;
+    }
+    try {
+      await createCashflowAllocation({
+        month,
+        currency,
+        source_cashflow_entry_id: sourceId,
+        destination_type: "fixed_expense",
+        destination_id: fixedExpenseId,
+        allocated_amount,
+        notes: null,
+      });
+      setAssignOpenFor(null);
+      setAssignEntryId("");
+      setAssignAmt("");
+      await refresh();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Error al asignar ingreso");
     }
   }
 
@@ -506,6 +545,16 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
                 <div className="cartera-mono">{fmtMoney(summary.free_cashflow)}</div>
               </div>
               <div>
+                <div className="cartera-hint">Total asignado</div>
+                <div className="cartera-mono">{fmtMoney(summary.cashflow_allocated ?? 0)}</div>
+              </div>
+              <div>
+                <div className="cartera-hint">Saldo sin asignar</div>
+                <div className="cartera-mono">
+                  {fmtMoney(summary.income_unallocated ?? summary.total_income)}
+                </div>
+              </div>
+              <div>
                 <div className="cartera-hint">Estado</div>
                 <div>{labelOrCode(CLOSURE_STATUS_LABELS, summary.closure_status)}</div>
               </div>
@@ -521,6 +570,9 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
                 Actualizar
               </button>
             </div>
+            <p className="cartera-hint" style={{ marginTop: "0.5rem" }}>
+              Pagado ≠ Cubierto. Asignaciones desde ingresos; pagos son egresos vinculados.
+            </p>
           </div>
         ) : null}
 
@@ -573,17 +625,27 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
                   <input value={entryAmt} onChange={(e) => setEntryAmt(e.target.value)} />
                 </label>
                 {entryType === "expense" ? (
-                  <label className="cartera-field">
-                    <span>Asociar a gasto fijo (fixed_expense_id)</span>
-                    <select value={entryFixedId} onChange={(e) => setEntryFixedId(e.target.value)}>
-                      <option value="">— Ninguno —</option>
-                      {fixed.map((f) => (
-                        <option key={f.id} value={String(f.id)}>
-                          {f.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <>
+                    <label className="cartera-field">
+                      <span>Asociar a gasto fijo</span>
+                      <select value={entryFixedId} onChange={(e) => setEntryFixedId(e.target.value)}>
+                        <option value="">— Ninguno —</option>
+                        {fixed.map((f) => (
+                          <option key={f.id} value={String(f.id)}>
+                            {f.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="cartera-field" style={{ display: "flex", alignItems: "end", gap: "0.5rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={entryIsFixedExpense}
+                        onChange={(e) => setEntryIsFixedExpense(e.target.checked)}
+                      />
+                      <span>Marcar como pago de gasto fijo</span>
+                    </label>
+                  </>
                 ) : null}
                 <label className="cartera-field cartera-field--full">
                   <span>Descripción</span>
@@ -608,6 +670,7 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
                     <th>Unidad</th>
                     <th>Categoría</th>
                     <th>Monto</th>
+                    <th>Disponible</th>
                     <th>Gasto fijo asociado</th>
                     <th></th>
                   </tr>
@@ -625,6 +688,11 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
                         )}
                       </td>
                       <td className="cartera-mono">{fmtMoney(e.amount)}</td>
+                      <td className="cartera-mono">
+                        {e.entry_type === "income"
+                          ? fmtMoney(e.available_amount ?? e.amount)
+                          : "—"}
+                      </td>
                       <td>{fixedName(e.fixed_expense_id)}</td>
                       <td>
                         <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
@@ -711,39 +779,6 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
             Gastos fijos y cobertura
           </h3>
 
-          {coverage ? (
-            <div style={{ marginTop: "0.75rem" }}>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-                  gap: "0.75rem",
-                }}
-              >
-                <div>
-                  <div className="cartera-hint">Esenciales comprometidos</div>
-                  <div className="cartera-mono">{fmtMoney(coverage.total_essential_fixed_expenses)}</div>
-                </div>
-                <div>
-                  <div className="cartera-hint">Esenciales cubiertos</div>
-                  <div className="cartera-mono">{fmtMoney(coverage.total_covered_essential)}</div>
-                </div>
-                <div>
-                  <div className="cartera-hint">Índice</div>
-                  <div className="cartera-mono">
-                    {coverage.coverage_index == null
-                      ? "—"
-                      : `${(coverage.coverage_index * 100).toFixed(1)}%`}
-                  </div>
-                </div>
-              </div>
-              <p className="cartera-hint" style={{ marginTop: "0.5rem" }}>
-                Vinculá movimientos con <code>fixed_expense_id</code> arriba, o aplicá un cashflow de
-                inversión (legacy) con el mismo id. No hay asignaciones de ingreso en esta etapa.
-              </p>
-            </div>
-          ) : null}
-
           <form className="cartera-form" style={{ marginTop: "0.75rem" }} onSubmit={submitFixed}>
             <h4 className="cartera-form__title" style={{ fontSize: "0.95rem" }}>
               Nueva plantilla de gasto fijo
@@ -786,55 +821,142 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
                   <tr>
                     <th>Gasto fijo</th>
                     <th>Compromiso</th>
-                    <th>Asignado (assigned_cashflow)</th>
-                    <th>Cobertura %</th>
+                    <th>Pagado</th>
                     <th>Cubierto</th>
+                    <th>Falta pagar</th>
+                    <th>Falta cubrir</th>
                     <th>Fuentes</th>
-                    <th></th>
+                    <th>Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(coverage?.items ?? []).map((it) => {
+                    const commitment = it.commitment ?? it.expected_monthly_amount;
+                    const paid = it.paid ?? it.assigned_cashflow;
+                    const covered = it.covered ?? 0;
+                    const remainingPay = it.remaining_to_pay ?? Math.max(0, commitment - paid);
+                    const remainingCover = it.remaining_to_cover ?? Math.max(0, commitment - covered);
                     const sources = (it.sources ?? []) as CoverageSource[];
 
                     return (
                       <tr key={it.fixed_expense_id}>
                         <td>{it.name}</td>
-                        <td className="cartera-mono">{fmtMoney(it.expected_monthly_amount)}</td>
-                        <td className="cartera-mono">{fmtMoney(it.assigned_cashflow)}</td>
-                        <td className="cartera-mono">{it.coverage_pct.toFixed(1)}%</td>
-                        <td>{it.fully_covered ? "Sí" : "No"}</td>
+                        <td className="cartera-mono">{fmtMoney(commitment)}</td>
+                        <td className="cartera-mono">{fmtMoney(paid)}</td>
+                        <td className="cartera-mono">{fmtMoney(covered)}</td>
+                        <td className="cartera-mono">{fmtMoney(remainingPay)}</td>
+                        <td className="cartera-mono">{fmtMoney(remainingCover)}</td>
                         <td>
                           {sources.length === 0 ? (
                             "—"
                           ) : (
                             <div style={{ display: "grid", gap: "0.25rem" }}>
                               {sources.map((src, idx) => (
-                                <span key={idx} className="cartera-hint">
-                                  {formatSourceLine(src)}
-                                </span>
+                                <div
+                                  key={src.allocation_id ?? idx}
+                                  style={{ display: "flex", gap: "0.25rem", alignItems: "center", flexWrap: "wrap" }}
+                                >
+                                  <span className="cartera-hint">{formatSourceLine(src)}</span>
+                                  {src.allocation_id ? (
+                                    <button
+                                      type="button"
+                                      className="cartera-btn cartera-btn--danger"
+                                      title="Quitar asignación"
+                                      onClick={() => {
+                                        if (!window.confirm("¿Eliminar esta asignación de ingreso?")) return;
+                                        void (async () => {
+                                          try {
+                                            await deleteCashflowAllocation(src.allocation_id!);
+                                            await refresh();
+                                          } catch (err) {
+                                            onError(err instanceof Error ? err.message : "Error");
+                                          }
+                                        })();
+                                      }}
+                                    >
+                                      ×
+                                    </button>
+                                  ) : null}
+                                </div>
                               ))}
                             </div>
                           )}
                         </td>
                         <td>
-                          <button
-                            type="button"
-                            className="cartera-btn cartera-btn--danger"
-                            onClick={() => {
-                              if (!window.confirm(`¿Desactivar "${it.name}"?`)) return;
-                              void (async () => {
-                                try {
-                                  await deleteFixedExpense(it.fixed_expense_id);
-                                  await refresh();
-                                } catch (err) {
-                                  onError(err instanceof Error ? err.message : "Error");
-                                }
-                              })();
-                            }}
-                          >
-                            Desactivar
-                          </button>
+                          <div style={{ display: "grid", gap: "0.35rem" }}>
+                            <button
+                              type="button"
+                              className="cartera-btn cartera-btn--danger"
+                              onClick={() => {
+                                if (!window.confirm(`¿Desactivar "${it.name}"?`)) return;
+                                void (async () => {
+                                  try {
+                                    await deleteFixedExpense(it.fixed_expense_id);
+                                    await refresh();
+                                  } catch (err) {
+                                    onError(err instanceof Error ? err.message : "Error");
+                                  }
+                                })();
+                              }}
+                            >
+                              Desactivar
+                            </button>
+                            {remainingCover > 0 ? (
+                              assignOpenFor === it.fixed_expense_id ? (
+                                <div style={{ display: "grid", gap: "0.25rem" }}>
+                                  <select
+                                    value={assignEntryId}
+                                    onChange={(e) => setAssignEntryId(e.target.value)}
+                                  >
+                                    <option value="">Ingreso con saldo…</option>
+                                    {incomeWithAvailable.map((inc) => (
+                                      <option key={inc.id} value={String(inc.id)}>
+                                        {inc.date} · {labelOrCode(SOURCE_UNIT_LABELS, inc.source_unit)} · disp.{" "}
+                                        {fmtMoney(inc.available_amount ?? inc.amount)}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <input
+                                    value={assignAmt}
+                                    onChange={(e) => setAssignAmt(e.target.value)}
+                                    placeholder="Monto a asignar"
+                                  />
+                                  <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
+                                    <button
+                                      type="button"
+                                      className="cartera-btn cartera-btn--primary"
+                                      onClick={() => void submitAssignIncome(it.fixed_expense_id)}
+                                    >
+                                      Asignar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="cartera-btn"
+                                      onClick={() => {
+                                        setAssignOpenFor(null);
+                                        setAssignEntryId("");
+                                        setAssignAmt("");
+                                      }}
+                                    >
+                                      Cancelar
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="cartera-btn"
+                                  onClick={() => {
+                                    setAssignOpenFor(it.fixed_expense_id);
+                                    setAssignEntryId("");
+                                    setAssignAmt(String(remainingCover));
+                                  }}
+                                >
+                                  Asignar ingreso
+                                </button>
+                              )
+                            ) : null}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -843,6 +965,16 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
               </table>
             </div>
           )}
+        </div>
+
+        <div className="card" style={{ padding: "1rem" }}>
+          <h3 className="cartera-form__title" style={{ fontSize: "1rem" }}>
+            Asignación del flujo (F1)
+          </h3>
+          <p className="cartera-hint" style={{ marginTop: "0.5rem" }}>
+            En F1 solo se asignan ingresos a gastos fijos. Destinos futuros: deuda, ahorro, inversión,
+            proyecto de casa.
+          </p>
         </div>
       </section>
     );
