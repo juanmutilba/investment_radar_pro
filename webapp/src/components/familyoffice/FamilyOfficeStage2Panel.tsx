@@ -87,7 +87,7 @@ const STRATEGIES: FoStrategyType[] = [
 ];
 
 type Props = {
-  tab: "flujo" | "cobertura" | "asignacion" | "apalancamiento";
+  tab: "flujo" | "asignacion" | "apalancamiento";
   onError: (m: string) => void;
 };
 
@@ -166,21 +166,16 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
     setBusy(true);
     try {
       if (tab === "flujo") {
-        const [s, e, f] = await Promise.all([
+        const [s, e, f, c] = await Promise.all([
           fetchFoMonthlySummary(month, currency),
           fetchCashflowEntries(month, currency),
           fetchFixedExpenses(true, currency),
+          fetchFoFixedExpenseCoverage(month, currency),
         ]);
         setSummary(s);
         setEntries(e);
         setFixed(f);
-      } else if (tab === "cobertura") {
-        const [c, f] = await Promise.all([
-          fetchFoFixedExpenseCoverage(month, currency),
-          fetchFixedExpenses(true, currency),
-        ]);
         setCoverage(c);
-        setFixed(f);
       } else if (tab === "asignacion") {
         setBoard(await fetchFoAllocationBoard(month, currency));
       } else if (tab === "apalancamiento") {
@@ -710,58 +705,44 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
             </div>
           )}
         </div>
-      </section>
-    );
-  }
-
-  if (tab === "cobertura") {
-    return (
-      <section style={{ marginTop: "1rem", display: "grid", gap: "1rem" }}>
-        <MonthCurrencyBar month={month} currency={currency} onMonth={setMonth} onCurrency={setCurrency} />
-        {busy ? <p className="cartera-hint">Cargando…</p> : null}
-
-        {coverage ? (
-          <div className="card" style={{ padding: "1rem" }}>
-            <h3 className="cartera-form__title" style={{ fontSize: "1rem" }}>
-              Índice de cobertura · {month} · {currency}
-            </h3>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-                gap: "0.75rem",
-                marginTop: "0.75rem",
-              }}
-            >
-              <div>
-                <div className="cartera-hint">Esenciales comprometidos</div>
-                <div className="cartera-mono">{fmtMoney(coverage.total_essential_fixed_expenses)}</div>
-              </div>
-              <div>
-                <div className="cartera-hint">Esenciales cubiertos</div>
-                <div className="cartera-mono">{fmtMoney(coverage.total_covered_essential)}</div>
-              </div>
-              <div>
-                <div className="cartera-hint">Índice</div>
-                <div className="cartera-mono">
-                  {coverage.coverage_index == null
-                    ? "—"
-                    : `${(coverage.coverage_index * 100).toFixed(1)}%`}
-                </div>
-              </div>
-            </div>
-            <p className="cartera-hint" style={{ marginTop: "0.5rem" }}>
-              Vinculá movimientos con <code>fixed_expense_id</code> en Flujo mensual, o aplicá un
-              cashflow de inversión (legacy) con el mismo id. No hay asignaciones de ingreso en esta
-              etapa.
-            </p>
-          </div>
-        ) : null}
 
         <div className="card" style={{ padding: "1rem" }}>
           <h3 className="cartera-form__title" style={{ fontSize: "1rem" }}>
-            Gastos fijos
+            Gastos fijos y cobertura
           </h3>
+
+          {coverage ? (
+            <div style={{ marginTop: "0.75rem" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                  gap: "0.75rem",
+                }}
+              >
+                <div>
+                  <div className="cartera-hint">Esenciales comprometidos</div>
+                  <div className="cartera-mono">{fmtMoney(coverage.total_essential_fixed_expenses)}</div>
+                </div>
+                <div>
+                  <div className="cartera-hint">Esenciales cubiertos</div>
+                  <div className="cartera-mono">{fmtMoney(coverage.total_covered_essential)}</div>
+                </div>
+                <div>
+                  <div className="cartera-hint">Índice</div>
+                  <div className="cartera-mono">
+                    {coverage.coverage_index == null
+                      ? "—"
+                      : `${(coverage.coverage_index * 100).toFixed(1)}%`}
+                  </div>
+                </div>
+              </div>
+              <p className="cartera-hint" style={{ marginTop: "0.5rem" }}>
+                Vinculá movimientos con <code>fixed_expense_id</code> arriba, o aplicá un cashflow de
+                inversión (legacy) con el mismo id. No hay asignaciones de ingreso en esta etapa.
+              </p>
+            </div>
+          ) : null}
 
           <form className="cartera-form" style={{ marginTop: "0.75rem" }} onSubmit={submitFixed}>
             <h4 className="cartera-form__title" style={{ fontSize: "0.95rem" }}>
@@ -1216,7 +1197,7 @@ export function FamilyOfficeStage2Panel({ tab, onError }: Props) {
                   <button
                     type="button"
                     className="cartera-btn"
-                    title="Legacy: vincula fixed_expense_id y suma a assigned_cashflow en Cobertura"
+                    title="Legacy: vincula fixed_expense_id y suma a assigned_cashflow en Flujo mensual"
                     onClick={() => {
                       const fe = r.fixed_expense_id;
                       if (!fe) {

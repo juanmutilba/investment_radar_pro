@@ -36,9 +36,17 @@ import {
   type FoScenarioCompare,
   type InvestmentCashflowRecord,
 } from "@/services/api";
-import { currentMonth, fmtMoney, parseNonNeg } from "./familyOfficeLabels";
+import {
+  CONFIDENCE_LABELS,
+  SCENARIO_DESTINATION_LABELS,
+  SCENARIO_DESTINATIONS_UI,
+  currentMonth,
+  fmtMoney,
+  labelOrCode,
+  parseNonNeg,
+} from "./familyOfficeLabels";
 
-type Stage3Tab = "integraciones" | "deudas-analisis" | "negocios" | "escenarios";
+type Stage3Tab = "fuentes" | "deudas-analisis" | "negocios" | "planificacion";
 
 type Props = {
   tab: Stage3Tab;
@@ -59,14 +67,14 @@ function warnList(items?: string[] | null) {
 }
 
 export function FamilyOfficeStage3Panel({ tab, onError }: Props) {
-  if (tab === "integraciones") return <IntegracionesTab onError={onError} />;
+  if (tab === "fuentes") return <FuentesTab onError={onError} />;
   if (tab === "deudas-analisis") return <DeudasAnalisisTab onError={onError} />;
   if (tab === "negocios") return <NegociosTab onError={onError} />;
-  if (tab === "escenarios") return <EscenariosTab onError={onError} />;
+  if (tab === "planificacion") return <PlanificacionTab onError={onError} />;
   return null;
 }
 
-function IntegracionesTab({ onError }: { onError: (m: string) => void }) {
+function FuentesTab({ onError }: { onError: (m: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [summary, setSummary] = useState<FoPortfolioSummary | null>(null);
   const [preview, setPreview] = useState<FoImportPreview | null>(null);
@@ -87,7 +95,7 @@ function IntegracionesTab({ onError }: { onError: (m: string) => void }) {
       setSummary(s);
       setInvRows(inv);
     } catch (e) {
-      onError(e instanceof Error ? e.message : "Error integraciones");
+      onError(e instanceof Error ? e.message : "Error fuentes de datos");
     } finally {
       setBusy(false);
     }
@@ -188,11 +196,12 @@ function IntegracionesTab({ onError }: { onError: (m: string) => void }) {
     <section style={{ marginTop: "1rem", display: "grid", gap: "1rem" }}>
       <div className="card" style={{ padding: "1rem" }}>
         <h3 className="cartera-form__title" style={{ fontSize: "1rem" }}>
-          Resumen Cartera (solo lectura)
+          Fuentes de datos · Cartera (solo lectura)
         </h3>
         <p className="cartera-hint">
-          Pantalla de sincronización y diagnóstico — no es el uso diario. Las primas y el PnL de
-          Cartera no son caja familiar hasta registrar el ingreso en Flujo (retiro/aplicación).
+          Pantalla de sincronización y diagnóstico — no es el uso diario. Las primas de Cartera y el
+          PnL realizado no son caja familiar hasta registrar el ingreso correspondiente en Flujo
+          mensual (retiro o aplicación).
         </p>
         <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem", flexWrap: "wrap" }}>
           <button type="button" className="cartera-btn" disabled={busy} onClick={() => void refresh()}>
@@ -976,7 +985,7 @@ function NegociosTab({ onError }: { onError: (m: string) => void }) {
   );
 }
 
-function EscenariosTab({ onError }: { onError: (m: string) => void }) {
+function PlanificacionTab({ onError }: { onError: (m: string) => void }) {
   const [month, setMonth] = useState(currentMonth());
   const [currency, setCurrency] = useState<FoAssetCurrency>("ARS");
   const [rows, setRows] = useState<FoAllocationScenario[]>([]);
@@ -996,7 +1005,7 @@ function EscenariosTab({ onError }: { onError: (m: string) => void }) {
     try {
       setRows(await fetchAllocationScenarios(month, currency));
     } catch (e) {
-      onError(e instanceof Error ? e.message : "Error escenarios");
+      onError(e instanceof Error ? e.message : "Error planificación");
     }
   }, [month, currency, onError]);
 
@@ -1104,13 +1113,11 @@ function EscenariosTab({ onError }: { onError: (m: string) => void }) {
           <label className="cartera-field">
             <span>Destino</span>
             <select value={dest} onChange={(e) => setDest(e.target.value)}>
-              <option value="debt">debt</option>
-              <option value="portfolio">portfolio</option>
-              <option value="salva">salva</option>
-              <option value="investment_radar">investment_radar</option>
-              <option value="house">house</option>
-              <option value="emergency_fund">emergency_fund</option>
-              <option value="cash">cash</option>
+              {SCENARIO_DESTINATIONS_UI.map((d) => (
+                <option key={d} value={d}>
+                  {labelOrCode(SCENARIO_DESTINATION_LABELS, d)}
+                </option>
+              ))}
             </select>
           </label>
           <label className="cartera-field">
@@ -1139,9 +1146,9 @@ function EscenariosTab({ onError }: { onError: (m: string) => void }) {
               value={confidence}
               onChange={(e) => setConfidence(e.target.value as typeof confidence)}
             >
-              <option value="low">low</option>
-              <option value="medium">medium</option>
-              <option value="high">high</option>
+              <option value="low">{labelOrCode(CONFIDENCE_LABELS, "low")}</option>
+              <option value="medium">{labelOrCode(CONFIDENCE_LABELS, "medium")}</option>
+              <option value="high">{labelOrCode(CONFIDENCE_LABELS, "high")}</option>
             </select>
           </label>
         </div>
@@ -1169,13 +1176,13 @@ function EscenariosTab({ onError }: { onError: (m: string) => void }) {
             {rows.map((r) => (
               <tr key={r.id}>
                 <td>{r.name}</td>
-                <td>{r.destination_type}</td>
+                <td>{labelOrCode(SCENARIO_DESTINATION_LABELS, r.destination_type)}</td>
                 <td className="cartera-mono">{fmtMoney(r.allocation_amount)}</td>
                 <td className="cartera-mono">{fmtMoney(Number(r.expected_monthly_cashflow ?? 0))}</td>
                 <td>{r.expected_annual_return ?? "—"}</td>
                 <td>{r.risk_score}</td>
                 <td>{r.liquidity_score}</td>
-                <td>{r.confidence}</td>
+                <td>{labelOrCode(CONFIDENCE_LABELS, r.confidence)}</td>
                 <td>
                   <button
                     type="button"
