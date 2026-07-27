@@ -43,7 +43,6 @@ import {
 type Tab =
   | "resumen"
   | "flujo"
-  | "cobertura"
   | "asignacion"
   | "apalancamiento"
   | "fuentes"
@@ -55,7 +54,7 @@ type Tab =
   | "casa"
   | "politicas";
 
-const STAGE2_TABS = new Set(["flujo", "cobertura", "asignacion", "apalancamiento"]);
+const STAGE2_TABS = new Set(["flujo", "asignacion", "apalancamiento"]);
 const STAGE3_TABS = new Set(["fuentes", "deudas-analisis", "negocios", "planificacion"]);
 
 function CurrencyGrid({
@@ -209,7 +208,6 @@ export function FamilyOfficePage() {
   const tabs: { id: Tab; label: string }[] = [
     { id: "resumen", label: "Resumen" },
     { id: "flujo", label: "Flujo mensual" },
-    { id: "cobertura", label: "Cobertura" },
     { id: "asignacion", label: "Asignación de capital" },
     { id: "apalancamiento", label: "Apalancamiento" },
     { id: "activos", label: "Activos" },
@@ -257,7 +255,7 @@ export function FamilyOfficePage() {
 
       {STAGE2_TABS.has(tab) ? (
         <FamilyOfficeStage2Panel
-          tab={tab as "flujo" | "cobertura" | "asignacion" | "apalancamiento"}
+          tab={tab as "flujo" | "asignacion" | "apalancamiento"}
           onError={(m) => setErr(m)}
         />
       ) : null}
