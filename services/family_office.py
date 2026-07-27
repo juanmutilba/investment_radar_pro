@@ -282,6 +282,8 @@ def build_monthly_summary(*, month: str, currency: str) -> dict[str, Any]:
     free_cashflow = total_income - total_expenses
     amount_allocated = flow.sum_active_allocated(month=m, currency=cur)
     unallocated = free_cashflow - amount_allocated
+    cashflow_allocated = flow.sum_cashflow_allocations(month=m, currency=cur)
+    income_unallocated = total_income - cashflow_allocated
     closure = flow.get_month_closure(m, cur)
 
     return {
@@ -298,11 +300,15 @@ def build_monthly_summary(*, month: str, currency: str) -> dict[str, Any]:
         "free_cashflow": free_cashflow,
         "amount_allocated": amount_allocated,
         "unallocated_cash": unallocated,
+        "cashflow_allocated": cashflow_allocated,
+        "income_unallocated": income_unallocated,
         "closure_status": (closure or {}).get("status") or "draft",
         "closure": closure,
         "notes": [
             f"Resumen exclusivo en {cur}. No se mezclan otras monedas.",
             "Las proyecciones no se incluyen: solo entradas registradas.",
+            "cashflow_allocated / income_unallocated = asignaciones de ingresos del flujo.",
+            "amount_allocated / unallocated_cash = tablero de asignación de capital (planificación).",
         ],
     }
 
@@ -314,7 +320,8 @@ def build_fixed_expense_coverage(*, month: str, currency: str) -> dict[str, Any]
     cur = currency.upper()
     expenses = flow.list_fixed_expenses(active_only=True, currency=cur)
     entries = flow.list_cashflow_entries(month=m, currency=cur)
-    invs = flow.list_investment_cashflows(month=m, currency=cur)
+    allocations = flow.list_cashflow_allocations(month=m, currency=cur, destination_type="fixed_expense")
+    income_by_id = {int(e["id"]): e for e in entries if e.get("entry_type") == "income"}
 
     covered_rows: list[dict[str, Any]] = []
     total_essential = 0.0
@@ -323,46 +330,52 @@ def build_fixed_expense_coverage(*, month: str, currency: str) -> dict[str, Any]
 
     for fe in expenses:
         fid = int(fe["id"])
-        expected = float(fe.get("expected_monthly_amount") or 0)
-        sources: list[dict[str, Any]] = []
-        assigned = 0.0
+        commitment = float(fe.get("expected_monthly_amount") or 0)
+        paid = 0.0
+        payment_sources: list[dict[str, Any]] = []
+        covered = 0.0
+        coverage_sources: list[dict[str, Any]] = []
 
         for e in entries:
+            if e.get("entry_type") != "expense":
+                continue
             if e.get("fixed_expense_id") != fid:
                 continue
             amt = float(e.get("amount") or 0)
-            assigned += amt
-            sources.append(
+            paid += amt
+            payment_sources.append(
                 {
-                    "kind": "cashflow_entry",
+                    "kind": "expense_payment",
                     "id": e.get("id"),
-                    "entry_type": e.get("entry_type"),
                     "source_unit": e.get("source_unit"),
                     "amount": amt,
                     "description": e.get("description"),
                 }
             )
-        for inv in invs:
-            if inv.get("fixed_expense_id") != fid:
+
+        for a in allocations:
+            if int(a.get("destination_id") or 0) != fid:
                 continue
-            if str(inv.get("cash_status") or "") != "applied":
-                continue
-            amt = float(inv.get("net_cashflow") or 0)
-            if amt <= 0:
-                continue
-            assigned += amt
-            sources.append(
+            amt = float(a.get("allocated_amount") or 0)
+            covered += amt
+            src = income_by_id.get(int(a["source_cashflow_entry_id"]))
+            coverage_sources.append(
                 {
-                    "kind": "investment_cashflow",
-                    "id": inv.get("id"),
-                    "strategy_type": inv.get("strategy_type"),
-                    "account_name": inv.get("account_name"),
-                    "cash_status": inv.get("cash_status"),
+                    "kind": "income_allocation",
+                    "allocation_id": a.get("id"),
+                    "source_cashflow_entry_id": a.get("source_cashflow_entry_id"),
+                    "source_unit": (src or {}).get("source_unit"),
+                    "source_description": (src or {}).get("description"),
                     "amount": amt,
+                    "notes": a.get("notes"),
                 }
             )
 
-        pct = (assigned / expected * 100.0) if expected > 0 else (100.0 if assigned > 0 else 0.0)
+        remaining_to_pay = max(0.0, commitment - paid)
+        remaining_to_cover = max(0.0, commitment - covered)
+        pct = (covered / commitment * 100.0) if commitment > 0 else (100.0 if covered > 0 else 0.0)
+        fully_covered = covered + 1e-9 >= commitment
+        fully_paid = paid + 1e-9 >= commitment
         row = {
             "fixed_expense_id": fid,
             "name": fe.get("name"),
@@ -370,17 +383,24 @@ def build_fixed_expense_coverage(*, month: str, currency: str) -> dict[str, Any]
             "coverage_order": fe.get("coverage_order"),
             "priority": fe.get("priority"),
             "is_essential": bool(fe.get("is_essential")),
-            "expected_monthly_amount": expected,
-            "assigned_cashflow": assigned,
+            "expected_monthly_amount": commitment,
+            "commitment": commitment,
+            "paid": paid,
+            "covered": covered,
+            "remaining_to_pay": remaining_to_pay,
+            "remaining_to_cover": remaining_to_cover,
+            "assigned_cashflow": paid,
             "coverage_pct": min(pct, 999.0),
-            "fully_covered": assigned + 1e-9 >= expected,
-            "sources": sources,
+            "fully_covered": fully_covered,
+            "fully_paid": fully_paid,
+            "sources": coverage_sources,
+            "payment_sources": payment_sources,
         }
         covered_rows.append(row)
         if fe.get("is_essential"):
-            total_essential += expected
-            total_covered_essential += min(assigned, expected)
-        if first_uncovered is None and not row["fully_covered"]:
+            total_essential += commitment
+            total_covered_essential += min(covered, commitment)
+        if first_uncovered is None and not fully_covered:
             first_uncovered = row
 
     coverage_index = (
@@ -396,8 +416,10 @@ def build_fixed_expense_coverage(*, month: str, currency: str) -> dict[str, Any]
         "coverage_index": coverage_index,
         "first_uncovered_expense": first_uncovered,
         "notes": [
-            "Cobertura basada en vínculos manuales (fixed_expense_id).",
-            "No se mezclan proyecciones con resultados realizados.",
+            "Compromiso = plantilla family_fixed_expenses (no suma al flujo).",
+            "Pagado = egresos con fixed_expense_id.",
+            "Cubierto = asignaciones family_cashflow_allocations desde ingresos.",
+            "No se infiere cobertura desde el pago ni desde investment_cashflow applied.",
             f"Solo moneda {cur}.",
         ],
     }
