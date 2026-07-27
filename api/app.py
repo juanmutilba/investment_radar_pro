@@ -16,6 +16,9 @@ if _ENV_FILE.is_file():
 from fastapi import Body, FastAPI, HTTPException, Query
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
+from api.family_office import router as family_office_router
+from api.family_office_flow import router as family_office_flow_router
+from api.family_office_stage3 import router as family_office_stage3_router
 from api.portfolio import router as portfolio_router
 from persistence.sqlite import init_database
 from persistence.sqlite.connection import connection_scope
@@ -79,6 +82,9 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Investment Radar API", version="0.1.0", lifespan=lifespan)
 
 app.include_router(portfolio_router)
+app.include_router(family_office_router)
+app.include_router(family_office_flow_router)
+app.include_router(family_office_stage3_router)
 
 
 # --- Eventos USA (cache updater) ---

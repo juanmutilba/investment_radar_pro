@@ -3888,3 +3888,1240 @@ export async function fetchIvSmile(underlying: string): Promise<IvSmileResponse>
   }
   return { items };
 }
+
+
+/* =========================================================================
+ * Family Office — registro patrimonial familiar (independiente de Cartera)
+ * ========================================================================= */
+
+export type FoAssetCategory =
+  | "real_estate"
+  | "vehicle"
+  | "financial"
+  | "business"
+  | "cash"
+  | "other";
+export type FoOwnershipStatus = "owned" | "mortgaged" | "purchase_agreement" | "other";
+export type FoAssetCurrency = "ARS" | "USD";
+export type FoLiquidity = "high" | "medium" | "low";
+export type FoLiabilityType =
+  | "mortgage_uva"
+  | "family_debt"
+  | "overdraft"
+  | "vehicle_loan"
+  | "personal_loan"
+  | "other";
+export type FoLiabilityCurrency = "ARS" | "USD" | "UVA";
+export type FoPolicyDestination =
+  | "debt"
+  | "investments"
+  | "salva"
+  | "investment_radar"
+  | "house"
+  | "emergency_fund"
+  | "other";
+export type FoHousePriority = "necessary" | "functional" | "aesthetic";
+export type FoHouseStatus = "planned" | "approved" | "in_progress" | "completed" | "paused";
+
+export type FamilyAsset = {
+  id: number;
+  name: string;
+  category: FoAssetCategory;
+  ownership_status: FoOwnershipStatus;
+  currency: FoAssetCurrency;
+  estimated_value: number;
+  valuation_date: string;
+  liquidity: FoLiquidity;
+  generates_cashflow: boolean;
+  monthly_cashflow: number;
+  notes?: string | null;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type FamilyAssetCreatePayload = {
+  name: string;
+  category: FoAssetCategory;
+  ownership_status: FoOwnershipStatus;
+  currency: FoAssetCurrency;
+  estimated_value: number;
+  valuation_date: string;
+  liquidity: FoLiquidity;
+  generates_cashflow?: boolean;
+  monthly_cashflow?: number;
+  notes?: string | null;
+  is_active?: boolean;
+};
+
+export type FamilyAssetPatchPayload = Partial<FamilyAssetCreatePayload>;
+
+export type FoRateType = "fixed" | "variable" | "uva" | "family" | "unknown";
+
+export type FamilyLiability = {
+  id: number;
+  name: string;
+  liability_type: FoLiabilityType;
+  currency: FoLiabilityCurrency;
+  original_amount: number;
+  outstanding_balance: number;
+  installment_amount: number;
+  installments_remaining: number;
+  nominal_annual_rate: number;
+  effective_annual_cost?: number | null;
+  next_due_date?: string | null;
+  linked_asset_id?: number | null;
+  notes?: string | null;
+  is_active: boolean;
+  rate_type?: FoRateType | null;
+  current_installment?: number | null;
+  total_financial_cost?: number | null;
+  prepayment_cost?: number | null;
+  allows_partial_prepayment?: boolean | null;
+  maturity_date?: string | null;
+  priority_override?: number | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type FamilyLiabilityCreatePayload = {
+  name: string;
+  liability_type: FoLiabilityType;
+  currency: FoLiabilityCurrency;
+  original_amount: number;
+  outstanding_balance: number;
+  installment_amount?: number;
+  installments_remaining?: number;
+  nominal_annual_rate?: number;
+  effective_annual_cost?: number | null;
+  next_due_date?: string | null;
+  linked_asset_id?: number | null;
+  notes?: string | null;
+  is_active?: boolean;
+  rate_type?: FoRateType | null;
+  current_installment?: number | null;
+  total_financial_cost?: number | null;
+  prepayment_cost?: number | null;
+  allows_partial_prepayment?: boolean | null;
+  maturity_date?: string | null;
+  priority_override?: number | null;
+};
+
+export type FamilyLiabilityPatchPayload = Partial<FamilyLiabilityCreatePayload>;
+
+export type CapitalPolicy = {
+  id: number;
+  name: string;
+  destination: FoPolicyDestination;
+  minimum_monthly_amount?: number | null;
+  maximum_monthly_amount?: number | null;
+  priority: number;
+  is_mandatory: boolean;
+  notes?: string | null;
+  is_active: boolean;
+};
+
+export type CapitalPolicyCreatePayload = {
+  name: string;
+  destination: FoPolicyDestination;
+  minimum_monthly_amount?: number | null;
+  maximum_monthly_amount?: number | null;
+  priority?: number;
+  is_mandatory?: boolean;
+  notes?: string | null;
+  is_active?: boolean;
+};
+
+export type CapitalPolicyPatchPayload = Partial<CapitalPolicyCreatePayload>;
+
+export type HouseProject = {
+  id: number;
+  name: string;
+  priority: FoHousePriority;
+  estimated_cost: number;
+  paid_amount: number;
+  currency: FoAssetCurrency;
+  target_date?: string | null;
+  status: FoHouseStatus;
+  notes?: string | null;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type HouseProjectCreatePayload = {
+  name: string;
+  priority: FoHousePriority;
+  estimated_cost: number;
+  paid_amount?: number;
+  currency: FoAssetCurrency;
+  target_date?: string | null;
+  status?: FoHouseStatus;
+  notes?: string | null;
+};
+
+export type HouseProjectPatchPayload = Partial<HouseProjectCreatePayload>;
+
+export type FoMonthlySnapshot = {
+  id: number;
+  month: string;
+  active_income: number;
+  consulting_income: number;
+  scalable_income: number;
+  fixed_expenses: number;
+  debt_payments: number;
+  house_spending: number;
+  investment_contributions: number;
+  free_cashflow: number;
+  currency: FoAssetCurrency;
+  notes?: string | null;
+};
+
+export type FoMonthlySnapshotCreatePayload = {
+  month: string;
+  active_income?: number;
+  consulting_income?: number;
+  scalable_income?: number;
+  fixed_expenses?: number;
+  debt_payments?: number;
+  house_spending?: number;
+  investment_contributions?: number;
+  free_cashflow?: number | null;
+  currency?: FoAssetCurrency;
+  notes?: string | null;
+};
+
+export type FamilyOfficeDashboard = {
+  assets_by_currency: Record<string, number>;
+  assets_by_category: Record<string, Record<string, number>>;
+  liabilities_by_currency: Record<string, number>;
+  liabilities_by_type: Record<string, Record<string, number>>;
+  net_worth_by_currency: Record<string, number>;
+  liquid_assets_by_currency: Record<string, number>;
+  cashflow_assets_by_currency: Record<string, number>;
+  monthly_cashflow_by_currency: Record<string, number>;
+  house_projects_by_status: Record<string, number>;
+  latest_snapshot_month: string | null;
+  latest_snapshot_currency: string | null;
+  latest_free_cashflow: number | null;
+  counts: {
+    assets: number;
+    liabilities: number;
+    house_projects: number;
+    active_policies: number;
+  };
+  alerts: string[];
+  notes: string[];
+};
+
+export async function fetchFamilyOfficeDashboard(): Promise<FamilyOfficeDashboard> {
+  const res = await fetch(`${BASE}/family-office/dashboard`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  const data: unknown = await res.json().catch(() => null);
+  if (data === null || typeof data !== "object") {
+    throw new Error("Respuesta inesperada: /family-office/dashboard");
+  }
+  return data as FamilyOfficeDashboard;
+}
+
+export async function fetchFamilyAssets(activeOnly = true): Promise<FamilyAsset[]> {
+  const qs = new URLSearchParams({ active_only: String(activeOnly) });
+  const res = await fetch(`${BASE}/family-office/assets?${qs}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  const data: unknown = await res.json().catch(() => null);
+  if (!Array.isArray(data)) throw new Error("Respuesta inesperada: assets");
+  return data as FamilyAsset[];
+}
+
+export async function createFamilyAsset(payload: FamilyAssetCreatePayload): Promise<FamilyAsset> {
+  const res = await fetch(`${BASE}/family-office/assets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyAsset;
+}
+
+export async function patchFamilyAsset(
+  id: number,
+  payload: FamilyAssetPatchPayload,
+): Promise<FamilyAsset> {
+  const res = await fetch(`${BASE}/family-office/assets/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyAsset;
+}
+
+export async function deleteFamilyAsset(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/family-office/assets/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+}
+
+export async function fetchFamilyLiabilities(activeOnly = true): Promise<FamilyLiability[]> {
+  const qs = new URLSearchParams({ active_only: String(activeOnly) });
+  const res = await fetch(`${BASE}/family-office/liabilities?${qs}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  const data: unknown = await res.json().catch(() => null);
+  if (!Array.isArray(data)) throw new Error("Respuesta inesperada: liabilities");
+  return data as FamilyLiability[];
+}
+
+export async function createFamilyLiability(
+  payload: FamilyLiabilityCreatePayload,
+): Promise<FamilyLiability> {
+  const res = await fetch(`${BASE}/family-office/liabilities`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyLiability;
+}
+
+export async function patchFamilyLiability(
+  id: number,
+  payload: FamilyLiabilityPatchPayload,
+): Promise<FamilyLiability> {
+  const res = await fetch(`${BASE}/family-office/liabilities/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyLiability;
+}
+
+export async function deleteFamilyLiability(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/family-office/liabilities/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+}
+
+export async function fetchCapitalPolicies(activeOnly = true): Promise<CapitalPolicy[]> {
+  const qs = new URLSearchParams({ active_only: String(activeOnly) });
+  const res = await fetch(`${BASE}/family-office/policies?${qs}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  const data: unknown = await res.json().catch(() => null);
+  if (!Array.isArray(data)) throw new Error("Respuesta inesperada: policies");
+  return data as CapitalPolicy[];
+}
+
+export async function createCapitalPolicy(
+  payload: CapitalPolicyCreatePayload,
+): Promise<CapitalPolicy> {
+  const res = await fetch(`${BASE}/family-office/policies`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as CapitalPolicy;
+}
+
+export async function patchCapitalPolicy(
+  id: number,
+  payload: CapitalPolicyPatchPayload,
+): Promise<CapitalPolicy> {
+  const res = await fetch(`${BASE}/family-office/policies/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as CapitalPolicy;
+}
+
+export async function deleteCapitalPolicy(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/family-office/policies/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+}
+
+export async function fetchHouseProjects(activeOnly = true): Promise<HouseProject[]> {
+  const qs = new URLSearchParams({ active_only: String(activeOnly) });
+  const res = await fetch(`${BASE}/family-office/house-projects?${qs}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  const data: unknown = await res.json().catch(() => null);
+  if (!Array.isArray(data)) throw new Error("Respuesta inesperada: house-projects");
+  return data as HouseProject[];
+}
+
+export async function createHouseProject(
+  payload: HouseProjectCreatePayload,
+): Promise<HouseProject> {
+  const res = await fetch(`${BASE}/family-office/house-projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as HouseProject;
+}
+
+export async function patchHouseProject(
+  id: number,
+  payload: HouseProjectPatchPayload,
+): Promise<HouseProject> {
+  const res = await fetch(`${BASE}/family-office/house-projects/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as HouseProject;
+}
+
+export async function deleteHouseProject(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/family-office/house-projects/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+}
+
+export async function fetchFoSnapshots(limit = 24): Promise<FoMonthlySnapshot[]> {
+  const qs = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(`${BASE}/family-office/snapshots?${qs}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await readHttpErrorMessage(res)}`);
+  const data: unknown = await res.json().catch(() => null);
+  if (!Array.isArray(data)) throw new Error("Respuesta inesperada: snapshots");
+  return data as FoMonthlySnapshot[];
+}
+
+export async function createFoSnapshot(
+  payload: FoMonthlySnapshotCreatePayload,
+): Promise<FoMonthlySnapshot> {
+  const res = await fetch(`${BASE}/family-office/snapshots`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoMonthlySnapshot;
+}
+
+/* =========================================================================
+ * Family Office etapa 2 — flujo, cobertura, asignación, apalancamiento
+ * ========================================================================= */
+
+export type FoFixedExpenseCategory =
+  | "education"
+  | "utilities"
+  | "insurance"
+  | "debt_payment"
+  | "food"
+  | "transport"
+  | "health"
+  | "housing"
+  | "taxes"
+  | "other";
+
+export type FoSourceUnit =
+  | "employment"
+  | "consulting"
+  | "salva"
+  | "investment_radar"
+  | "investments"
+  | "debt"
+  | "house"
+  | "family"
+  | "other";
+
+export type FoStrategyType =
+  | "covered_call"
+  | "dividend"
+  | "interest"
+  | "realized_gain"
+  | "realized_loss"
+  | "other";
+
+export type FoAllocationDestination =
+  | "debt"
+  | "investments"
+  | "salva"
+  | "investment_radar"
+  | "house"
+  | "emergency_fund"
+  | "cash"
+  | "other";
+
+export type FoAllocationStatus = "proposed" | "approved" | "executed" | "cancelled";
+export type FoClosureStatus = "draft" | "closed" | "reopened";
+export type FoEntryType = "income" | "expense";
+
+export type FamilyFixedExpense = {
+  id: number;
+  name: string;
+  category: FoFixedExpenseCategory;
+  currency: FoAssetCurrency;
+  expected_monthly_amount: number;
+  priority: number;
+  coverage_order: number;
+  is_essential: boolean;
+  notes?: string | null;
+  is_active: boolean;
+};
+
+export type FamilyCashflowEntry = {
+  id: number;
+  date: string;
+  month: string;
+  entry_type: FoEntryType;
+  category: string;
+  source_unit: FoSourceUnit;
+  currency: FoAssetCurrency;
+  amount: number;
+  description?: string | null;
+  fixed_expense_id?: number | null;
+  asset_id?: number | null;
+  liability_id?: number | null;
+  notes?: string | null;
+};
+
+export type FoCashStatus = "generated" | "settled" | "withdrawn" | "applied";
+
+export type InvestmentCashflowRecord = {
+  id: number;
+  month: string;
+  account_name: string;
+  strategy_type: FoStrategyType;
+  currency: FoAssetCurrency;
+  gross_income: number;
+  commissions: number;
+  taxes: number;
+  financing_cost: number;
+  net_cashflow: number;
+  linked_asset_id?: number | null;
+  fixed_expense_id?: number | null;
+  notes?: string | null;
+  cash_status?: FoCashStatus | string;
+  generated_date?: string | null;
+  settlement_date?: string | null;
+  withdrawal_date?: string | null;
+  applied_date?: string | null;
+  source_type?: string | null;
+  source_id?: string | null;
+  imported_at?: string | null;
+};
+
+export type LeverageRecord = {
+  id: number;
+  month: string;
+  liability_id?: number | null;
+  linked_asset_id?: number | null;
+  currency: FoLiabilityCurrency;
+  average_balance_used: number;
+  days_used: number;
+  nominal_annual_rate: number;
+  interest_paid: number;
+  taxes_and_fees: number;
+  total_financing_cost: number;
+  notes?: string | null;
+};
+
+export type CapitalAllocation = {
+  id: number;
+  month: string;
+  currency: FoAssetCurrency;
+  available_amount: number;
+  destination: FoAllocationDestination;
+  allocated_amount: number;
+  status: FoAllocationStatus;
+  policy_id?: number | null;
+  asset_id?: number | null;
+  liability_id?: number | null;
+  house_project_id?: number | null;
+  rationale?: string | null;
+  expected_return?: number | null;
+  expected_monthly_cashflow?: number | null;
+  expected_hours_saved?: number | null;
+  executed_date?: string | null;
+};
+
+export type FamilyMonthClosure = {
+  id: number;
+  month: string;
+  currency: FoAssetCurrency;
+  total_income: number;
+  total_expenses: number;
+  debt_service: number;
+  house_spending: number;
+  investment_contributions: number;
+  scalable_income: number;
+  free_cashflow: number;
+  amount_allocated: number;
+  unallocated_cash: number;
+  status: FoClosureStatus;
+  closed_at?: string | null;
+  notes?: string | null;
+};
+
+export type FoMonthlySummary = {
+  month: string;
+  currency: string;
+  income_by_unit: Record<string, number>;
+  expenses_by_category: Record<string, number>;
+  debt_service: number;
+  house_spending: number;
+  investment_contributions: number;
+  scalable_income: number;
+  total_income: number;
+  total_expenses: number;
+  free_cashflow: number;
+  amount_allocated: number;
+  unallocated_cash: number;
+  closure_status: FoClosureStatus | string;
+  closure: FamilyMonthClosure | null;
+  notes: string[];
+};
+
+export type FoCoverageItem = {
+  fixed_expense_id: number;
+  name: string;
+  category: string;
+  coverage_order: number;
+  priority: number;
+  is_essential: boolean;
+  expected_monthly_amount: number;
+  assigned_cashflow: number;
+  coverage_pct: number;
+  fully_covered: boolean;
+  sources: Array<Record<string, unknown>>;
+};
+
+export type FoCoverageResponse = {
+  month: string;
+  currency: string;
+  items: FoCoverageItem[];
+  total_essential_fixed_expenses: number;
+  total_covered_essential: number;
+  coverage_index: number | null;
+  first_uncovered_expense: FoCoverageItem | null;
+  notes: string[];
+};
+
+export type FoLeveragePerformance = {
+  month: string;
+  by_currency: Record<string, {
+    financed_capital: number;
+    gross_income: number;
+    realized_result: number;
+    financing_cost: number;
+    taxes_and_fees: number;
+    commissions: number;
+    net_cashflow: number;
+    net_return_on_financed_capital: number | null;
+    own_capital_note?: string;
+  }>;
+  leverage_records: LeverageRecord[];
+  investment_records: InvestmentCashflowRecord[];
+  warnings: string[];
+  notes: string[];
+};
+
+export type FoAllocationBoard = {
+  month: string;
+  currency: string;
+  free_cashflow: number;
+  amount_allocated: number;
+  unallocated_cash: number;
+  house_monthly_reserve: number;
+  allocations: CapitalAllocation[];
+  closure_status: string;
+  notes: string[];
+};
+
+export async function fetchFoMonthlySummary(month: string, currency: FoAssetCurrency): Promise<FoMonthlySummary> {
+  const qs = new URLSearchParams({ month, currency });
+  const res = await fetch(`${BASE}/family-office/monthly-summary?${qs}`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoMonthlySummary;
+}
+
+export async function fetchFoFixedExpenseCoverage(month: string, currency: FoAssetCurrency): Promise<FoCoverageResponse> {
+  const qs = new URLSearchParams({ month, currency });
+  const res = await fetch(`${BASE}/family-office/fixed-expense-coverage?${qs}`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoCoverageResponse;
+}
+
+export async function fetchFoLeveragePerformance(month: string): Promise<FoLeveragePerformance> {
+  const qs = new URLSearchParams({ month });
+  const res = await fetch(`${BASE}/family-office/leverage-performance?${qs}`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoLeveragePerformance;
+}
+
+export async function fetchFoAllocationBoard(month: string, currency: FoAssetCurrency): Promise<FoAllocationBoard> {
+  const qs = new URLSearchParams({ month, currency });
+  const res = await fetch(`${BASE}/family-office/allocation-board?${qs}`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoAllocationBoard;
+}
+
+export async function fetchFixedExpenses(activeOnly = true, currency?: FoAssetCurrency): Promise<FamilyFixedExpense[]> {
+  const qs = new URLSearchParams({ active_only: String(activeOnly) });
+  if (currency) qs.set("currency", currency);
+  const res = await fetch(`${BASE}/family-office/fixed-expenses?${qs}`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyFixedExpense[];
+}
+
+export async function createFixedExpense(payload: Omit<FamilyFixedExpense, "id" | "is_active"> & { is_active?: boolean }): Promise<FamilyFixedExpense> {
+  const res = await fetch(`${BASE}/family-office/fixed-expenses`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyFixedExpense;
+}
+
+export async function patchFixedExpense(id: number, payload: Partial<FamilyFixedExpense>): Promise<FamilyFixedExpense> {
+  const res = await fetch(`${BASE}/family-office/fixed-expenses/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyFixedExpense;
+}
+
+export async function deleteFixedExpense(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/family-office/fixed-expenses/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+}
+
+export async function fetchCashflowEntries(month?: string, currency?: FoAssetCurrency): Promise<FamilyCashflowEntry[]> {
+  const qs = new URLSearchParams();
+  if (month) qs.set("month", month);
+  if (currency) qs.set("currency", currency);
+  const res = await fetch(`${BASE}/family-office/cashflow-entries?${qs}`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyCashflowEntry[];
+}
+
+export async function createCashflowEntry(payload: Omit<FamilyCashflowEntry, "id">): Promise<FamilyCashflowEntry> {
+  const res = await fetch(`${BASE}/family-office/cashflow-entries`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyCashflowEntry;
+}
+
+export async function patchCashflowEntry(id: number, payload: Partial<FamilyCashflowEntry>): Promise<FamilyCashflowEntry> {
+  const res = await fetch(`${BASE}/family-office/cashflow-entries/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyCashflowEntry;
+}
+
+export async function deleteCashflowEntry(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/family-office/cashflow-entries/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+}
+
+export async function createInvestmentCashflow(payload: Omit<InvestmentCashflowRecord, "id" | "net_cashflow"> & { net_cashflow?: number | null }): Promise<InvestmentCashflowRecord> {
+  const res = await fetch(`${BASE}/family-office/investment-cashflow-records`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as InvestmentCashflowRecord;
+}
+
+export async function deleteInvestmentCashflow(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/family-office/investment-cashflow-records/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+}
+
+export async function createLeverageRecord(payload: Omit<LeverageRecord, "id" | "total_financing_cost"> & { total_financing_cost?: number | null }): Promise<LeverageRecord> {
+  const res = await fetch(`${BASE}/family-office/leverage-records`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as LeverageRecord;
+}
+
+export async function deleteLeverageRecord(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/family-office/leverage-records/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+}
+
+export async function createCapitalAllocation(payload: Omit<CapitalAllocation, "id">): Promise<CapitalAllocation> {
+  const res = await fetch(`${BASE}/family-office/capital-allocations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as CapitalAllocation;
+}
+
+export async function patchCapitalAllocation(id: number, payload: Partial<CapitalAllocation>): Promise<CapitalAllocation> {
+  const res = await fetch(`${BASE}/family-office/capital-allocations/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as CapitalAllocation;
+}
+
+export async function deleteCapitalAllocation(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/family-office/capital-allocations/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+}
+
+export async function closeFoMonth(month: string, currency: FoAssetCurrency, notes?: string): Promise<FamilyMonthClosure> {
+  const res = await fetch(`${BASE}/family-office/month-closures/${month}/${currency}/close`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ notes: notes ?? null }),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyMonthClosure;
+}
+
+export async function reopenFoMonth(month: string, currency: FoAssetCurrency, notes?: string): Promise<FamilyMonthClosure> {
+  const res = await fetch(`${BASE}/family-office/month-closures/${month}/${currency}/reopen`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ notes: notes ?? null }),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FamilyMonthClosure;
+}
+
+/* ---------- Family Office etapa 3 ---------- */
+
+export type FoPortfolioCurrencySummary = {
+  asset_value: number;
+  cash: number;
+  committed_capital: number;
+  realized_pnl: number;
+  premiums_collected: number;
+  open_strategies: number;
+  closed_strategies: number;
+  updated_at?: string | null;
+  missing_spot_warnings?: string[];
+  data_source?: string;
+};
+
+export type FoPortfolioSummary = {
+  portfolio_type: string;
+  by_currency: Record<string, FoPortfolioCurrencySummary>;
+  warnings?: string[];
+  notes?: string[];
+  updated_at?: string | null;
+};
+
+export type FoImportCandidate = {
+  source_type: string;
+  source_id: string;
+  month: string;
+  currency: string;
+  strategy_type?: string;
+  account_name?: string;
+  gross_income?: number;
+  net_cashflow?: number;
+  description?: string;
+  already_imported?: boolean;
+  excluded?: boolean;
+  [key: string]: unknown;
+};
+
+export type FoImportPreview = {
+  preview_only: boolean;
+  candidates: FoImportCandidate[];
+  excluded_unrealized?: FoImportCandidate[];
+  warnings?: string[];
+  notes?: string[];
+};
+
+export type FoImportConfirmResult = {
+  imported: number;
+  skipped_duplicates: number;
+  excluded: number;
+  records?: InvestmentCashflowRecord[];
+  warnings?: string[];
+  notes?: string[];
+};
+
+export type FoDebtItem = {
+  liability_id: number;
+  name: string;
+  currency: string;
+  outstanding_balance: number;
+  installment?: number | null;
+  informed_rate?: number | null;
+  nominal_annual_rate?: number | null;
+  known_effective_cost?: number | null;
+  effective_annual_cost?: number | null;
+  months_remaining?: number | null;
+  committed_monthly_cashflow?: number | null;
+  monthly_committed_cashflow?: number | null;
+  cancel_equivalent_return?: number | null;
+  cancel_equivalent_return_pct?: number | null;
+  liquidity_needed?: number | null;
+  liquidity_needed_to_cancel?: number | null;
+  missing_data?: string[];
+  informative_score?: number | null;
+  informational_score?: number | null;
+  rate_type?: string | null;
+  [key: string]: unknown;
+};
+
+export type FoDebtAnalysis = {
+  by_currency: Record<string, FoDebtItem[] | { items: FoDebtItem[]; totals?: Record<string, number> }>;
+  warnings?: string[];
+  notes?: string[];
+};
+
+export type FoDebtScenarioResult = {
+  approximate?: boolean;
+  outstanding_after?: number | null;
+  balance_after?: number | null;
+  interest_avoided_estimate?: number | null;
+  estimated_remaining_installments?: number | null;
+  estimated_term_months?: number | null;
+  months_after?: number | null;
+  monthly_cashflow_freed?: number | null;
+  warnings?: string[];
+  assumptions_used?: Record<string, unknown> | string[];
+  notes?: string[];
+  [key: string]: unknown;
+};
+
+export type FoBusinessUnit = {
+  id: number;
+  name: string;
+  unit_type: "salva" | "consulting" | "investment_radar" | "other" | string;
+  currency: FoAssetCurrency;
+  is_active: boolean;
+  notes?: string | null;
+};
+
+export type FoBusinessMetric = {
+  id: number;
+  business_unit_id: number;
+  month: string;
+  currency: FoAssetCurrency;
+  revenue: number;
+  variable_costs: number;
+  fixed_costs: number;
+  gross_profit?: number | null;
+  operating_profit?: number | null;
+  owner_hours: number;
+  outsourced_hours: number;
+  units_sold?: number | null;
+  customers?: number | null;
+  notes?: string | null;
+};
+
+export type FoBusinessProduct = {
+  id: number;
+  business_unit_id: number;
+  name: string;
+  unit: string;
+  sale_price: number;
+  variable_cost: number;
+  gross_margin: number;
+  is_active: boolean;
+  notes?: string | null;
+};
+
+export type FoInvestmentCase = {
+  id: number;
+  business_unit_id: number;
+  name: string;
+  currency: FoAssetCurrency;
+  investment_amount: number;
+  investment_type: string;
+  bottleneck: string;
+  expected_monthly_revenue_increment: number;
+  expected_monthly_cost_increment: number;
+  expected_monthly_profit_increment: number;
+  expected_hours_saved: number;
+  expected_start_month?: string | null;
+  payback_months?: number | null;
+  status: string;
+  assumptions?: string | null;
+};
+
+export type FoBusinessSummary = {
+  unit: FoBusinessUnit;
+  latest_month?: string | null;
+  latest_metrics?: FoBusinessMetric | Record<string, unknown> | null;
+  revenue?: number | null;
+  gross_profit?: number | null;
+  operating_profit?: number | null;
+  profit_per_owner_hour?: number | null;
+  units_per_owner_hour?: number | null;
+  founder_dependency_index?: number | null;
+  monthly_growth?: number | null;
+  monthly_revenue_growth?: number | null;
+  approx_working_capital?: number | null;
+  working_capital_approx?: number | null;
+  products?: FoBusinessProduct[];
+  bottleneck?: string | null;
+  current_bottleneck_hint?: string | null;
+  notes?: string[];
+  [key: string]: unknown;
+};
+
+export type FoAllocationScenario = {
+  id: number;
+  name: string;
+  month: string;
+  currency: FoAssetCurrency;
+  available_capital: number;
+  destination_type: string;
+  destination_id?: number | null;
+  allocation_amount: number;
+  expected_annual_return?: number | null;
+  expected_monthly_cashflow?: number | null;
+  expected_payback_months?: number | null;
+  expected_hours_saved?: number | null;
+  liquidity_score: number;
+  risk_score: number;
+  confidence: "low" | "medium" | "high" | string;
+  assumptions?: string | null;
+  is_selected: boolean;
+};
+
+export type FoScenarioCompare = {
+  scenarios: FoAllocationScenario[];
+  highlights?: Record<string, unknown>;
+  missing_data?: string[];
+  projection_vs_realized?: Record<string, unknown> | string[];
+  notes?: string[];
+  [key: string]: unknown;
+};
+
+export async function fetchFoPortfolioSummary(portfolioType: "real" | "radar" = "real"): Promise<FoPortfolioSummary> {
+  const qs = new URLSearchParams({ portfolio_type: portfolioType });
+  const res = await fetch(`${BASE}/family-office/integrations/portfolio-summary?${qs}`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoPortfolioSummary;
+}
+
+export async function previewFoPortfolioImport(payload: {
+  portfolio_type?: "real" | "radar";
+  include_source_ids?: string[] | null;
+  exclude_source_ids?: string[] | null;
+}): Promise<FoImportPreview> {
+  const res = await fetch(`${BASE}/family-office/integrations/portfolio-import/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ portfolio_type: "real", ...payload }),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoImportPreview;
+}
+
+export async function confirmFoPortfolioImport(payload: {
+  portfolio_type?: "real" | "radar";
+  include_source_ids: string[];
+  exclude_source_ids?: string[] | null;
+}): Promise<FoImportConfirmResult> {
+  const res = await fetch(`${BASE}/family-office/integrations/portfolio-import/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ portfolio_type: "real", ...payload }),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoImportConfirmResult;
+}
+
+export async function fetchInvestmentCashflows(month?: string, currency?: FoAssetCurrency): Promise<InvestmentCashflowRecord[]> {
+  const qs = new URLSearchParams();
+  if (month) qs.set("month", month);
+  if (currency) qs.set("currency", currency);
+  const res = await fetch(`${BASE}/family-office/investment-cashflow-records?${qs}`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as InvestmentCashflowRecord[];
+}
+
+export async function transitionInvestmentCashStatus(
+  id: number,
+  payload: { to_status: FoCashStatus; fixed_expense_id?: number | null; notes?: string | null; as_of?: string | null },
+): Promise<InvestmentCashflowRecord> {
+  const res = await fetch(`${BASE}/family-office/investment-cashflow-records/${id}/status`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as InvestmentCashflowRecord;
+}
+
+export async function fetchInvestmentCashStatusHistory(id: number): Promise<Array<Record<string, unknown>>> {
+  const res = await fetch(`${BASE}/family-office/investment-cashflow-records/${id}/status-history`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as Array<Record<string, unknown>>;
+}
+
+export async function fetchFoDebtAnalysis(): Promise<FoDebtAnalysis> {
+  const res = await fetch(`${BASE}/family-office/debt-analysis`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoDebtAnalysis;
+}
+
+export async function simulateFoDebtScenario(payload: {
+  liability_id: number;
+  prepayment_amount: number;
+  scenario_type: "reduce_term" | "reduce_installment" | "full_cancel";
+  assumptions?: Record<string, unknown> | null;
+}): Promise<FoDebtScenarioResult> {
+  const res = await fetch(`${BASE}/family-office/debt-scenarios`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoDebtScenarioResult;
+}
+
+export async function fetchBusinessUnits(activeOnly = true): Promise<FoBusinessUnit[]> {
+  const qs = new URLSearchParams({ active_only: String(activeOnly) });
+  const res = await fetch(`${BASE}/family-office/business-units?${qs}`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoBusinessUnit[];
+}
+
+export async function createBusinessUnit(payload: {
+  name: string;
+  unit_type: FoBusinessUnit["unit_type"];
+  currency: FoAssetCurrency;
+  notes?: string | null;
+  is_active?: boolean;
+}): Promise<FoBusinessUnit> {
+  const res = await fetch(`${BASE}/family-office/business-units`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoBusinessUnit;
+}
+
+export async function fetchBusinessUnitSummary(unitId: number): Promise<FoBusinessSummary> {
+  const res = await fetch(`${BASE}/family-office/business-units/${unitId}/summary`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoBusinessSummary;
+}
+
+export async function fetchBusinessProducts(unitId: number): Promise<FoBusinessProduct[]> {
+  const res = await fetch(`${BASE}/family-office/business-units/${unitId}/products`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoBusinessProduct[];
+}
+
+export async function createBusinessProduct(
+  unitId: number,
+  payload: {
+    name: string;
+    unit?: string;
+    sale_price: number;
+    variable_cost: number;
+    notes?: string | null;
+    is_active?: boolean;
+  },
+): Promise<FoBusinessProduct> {
+  const res = await fetch(`${BASE}/family-office/business-units/${unitId}/products`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoBusinessProduct;
+}
+
+export async function fetchBusinessMetrics(unitId: number): Promise<FoBusinessMetric[]> {
+  const res = await fetch(`${BASE}/family-office/business-units/${unitId}/metrics`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoBusinessMetric[];
+}
+
+export async function createBusinessMetric(
+  unitId: number,
+  payload: Omit<FoBusinessMetric, "id" | "business_unit_id" | "gross_profit" | "operating_profit"> & {
+    gross_profit?: number | null;
+    operating_profit?: number | null;
+  },
+): Promise<FoBusinessMetric> {
+  const res = await fetch(`${BASE}/family-office/business-units/${unitId}/metrics`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoBusinessMetric;
+}
+
+export async function fetchBusinessInvestmentCases(unitId: number): Promise<FoInvestmentCase[]> {
+  const res = await fetch(`${BASE}/family-office/business-units/${unitId}/investment-cases`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoInvestmentCase[];
+}
+
+export async function createBusinessInvestmentCase(
+  unitId: number,
+  payload: Omit<FoInvestmentCase, "id" | "business_unit_id" | "payback_months"> & { payback_months?: number | null },
+): Promise<FoInvestmentCase> {
+  const res = await fetch(`${BASE}/family-office/business-units/${unitId}/investment-cases`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoInvestmentCase;
+}
+
+export async function fetchAllocationScenarios(month?: string, currency?: FoAssetCurrency): Promise<FoAllocationScenario[]> {
+  const qs = new URLSearchParams();
+  if (month) qs.set("month", month);
+  if (currency) qs.set("currency", currency);
+  const res = await fetch(`${BASE}/family-office/allocation-scenarios?${qs}`);
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoAllocationScenario[];
+}
+
+export async function createAllocationScenario(
+  payload: Omit<FoAllocationScenario, "id" | "is_selected"> & { is_selected?: boolean },
+): Promise<FoAllocationScenario> {
+  const res = await fetch(`${BASE}/family-office/allocation-scenarios`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoAllocationScenario;
+}
+
+export async function compareAllocationScenarios(payload: {
+  month: string;
+  currency: FoAssetCurrency;
+  scenario_ids?: number[] | null;
+}): Promise<FoScenarioCompare> {
+  const res = await fetch(`${BASE}/family-office/allocation-scenarios/compare`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+  return (await res.json()) as FoScenarioCompare;
+}
+
+export async function deleteAllocationScenario(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/family-office/allocation-scenarios/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readHttpErrorMessage(res));
+}
