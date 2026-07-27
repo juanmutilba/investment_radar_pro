@@ -133,7 +133,29 @@ def test_stage2_endpoints_and_soft_delete_house(client):
 
     r = client.get("/family-office/fixed-expense-coverage?month=2026-07&currency=ARS")
     assert r.status_code == 200
-    assert r.json()["items"][0]["assigned_cashflow"] == 90000
+    cov = r.json()["items"][0]
+    assert cov["assigned_cashflow"] == 0
+    assert cov["covered"] == 0
+
+    income_id = client.get("/family-office/cashflow-entries?month=2026-07&currency=ARS").json()[0]["id"]
+    r = client.post(
+        "/family-office/cashflow-allocations",
+        json={
+            "month": "2026-07",
+            "currency": "ARS",
+            "source_cashflow_entry_id": income_id,
+            "destination_type": "fixed_expense",
+            "destination_id": fe_id,
+            "allocated_amount": 90000,
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    r = client.get("/family-office/fixed-expense-coverage?month=2026-07&currency=ARS")
+    assert r.status_code == 200
+    cov2 = r.json()["items"][0]
+    assert cov2["assigned_cashflow"] == 0
+    assert cov2["covered"] == 90000
 
     # Close / reopen
     r = client.post("/family-office/month-closures/2026-07/ARS/close")

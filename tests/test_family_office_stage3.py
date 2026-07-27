@@ -125,6 +125,7 @@ def test_cash_status_transitions_and_coverage_only_applied(fo_db):
     )
     cov = build_fixed_expense_coverage(month="2026-07", currency="ARS")
     assert cov["items"][0]["assigned_cashflow"] == 0
+    assert cov["items"][0]["covered"] == 0
 
     flow.transition_investment_cash_status(rid, to_status="settled")
     flow.transition_investment_cash_status(
@@ -137,8 +138,31 @@ def test_cash_status_transitions_and_coverage_only_applied(fo_db):
     assert len(hist) >= 3
 
     cov2 = build_fixed_expense_coverage(month="2026-07", currency="ARS")
-    assert cov2["items"][0]["assigned_cashflow"] == 80_000
-    assert cov2["items"][0]["fully_covered"] is False  # commitment 100k
+    assert cov2["items"][0]["covered"] == 0
+    assert cov2["items"][0]["assigned_cashflow"] == 0
+
+    income_id = flow.insert_cashflow_entry(
+        date="2026-07-10",
+        month="2026-07",
+        entry_type="income",
+        category="dividend",
+        source_unit="investments",
+        currency="ARS",
+        amount=80_000,
+    )
+    from services.family_office import create_cashflow_allocation
+
+    create_cashflow_allocation(
+        month="2026-07",
+        currency="ARS",
+        source_cashflow_entry_id=income_id,
+        destination_type="fixed_expense",
+        destination_id=fe,
+        allocated_amount=80_000,
+    )
+    cov3 = build_fixed_expense_coverage(month="2026-07", currency="ARS")
+    assert cov3["items"][0]["covered"] == 80_000
+    assert cov3["items"][0]["fully_covered"] is False  # commitment 100k
 
     # applied without fixed_expense_id fails
     rid2 = flow.insert_investment_cashflow(

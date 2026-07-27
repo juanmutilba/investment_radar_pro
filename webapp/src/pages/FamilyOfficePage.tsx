@@ -43,20 +43,19 @@ import {
 type Tab =
   | "resumen"
   | "flujo"
-  | "cobertura"
   | "asignacion"
   | "apalancamiento"
-  | "integraciones"
+  | "fuentes"
   | "deudas-analisis"
   | "negocios"
-  | "escenarios"
+  | "planificacion"
   | "activos"
   | "deudas"
   | "casa"
   | "politicas";
 
-const STAGE2_TABS = new Set(["flujo", "cobertura", "asignacion", "apalancamiento"]);
-const STAGE3_TABS = new Set(["integraciones", "deudas-analisis", "negocios", "escenarios"]);
+const STAGE2_TABS = new Set(["flujo", "asignacion", "apalancamiento"]);
+const STAGE3_TABS = new Set(["fuentes", "deudas-analisis", "negocios", "planificacion"]);
 
 function CurrencyGrid({
   title,
@@ -209,7 +208,6 @@ export function FamilyOfficePage() {
   const tabs: { id: Tab; label: string }[] = [
     { id: "resumen", label: "Resumen" },
     { id: "flujo", label: "Flujo mensual" },
-    { id: "cobertura", label: "Cobertura" },
     { id: "asignacion", label: "Asignación de capital" },
     { id: "apalancamiento", label: "Apalancamiento" },
     { id: "activos", label: "Activos" },
@@ -217,9 +215,9 @@ export function FamilyOfficePage() {
     { id: "deudas-analisis", label: "Análisis de deudas" },
     { id: "casa", label: "Casa" },
     { id: "politicas", label: "Políticas" },
-    { id: "integraciones", label: "Integraciones" },
+    { id: "fuentes", label: "Fuentes de datos" },
     { id: "negocios", label: "Negocios" },
-    { id: "escenarios", label: "Escenarios" },
+    { id: "planificacion", label: "Planificación" },
   ];
 
   return (
@@ -257,14 +255,14 @@ export function FamilyOfficePage() {
 
       {STAGE2_TABS.has(tab) ? (
         <FamilyOfficeStage2Panel
-          tab={tab as "flujo" | "cobertura" | "asignacion" | "apalancamiento"}
+          tab={tab as "flujo" | "asignacion" | "apalancamiento"}
           onError={(m) => setErr(m)}
         />
       ) : null}
 
       {STAGE3_TABS.has(tab) ? (
         <FamilyOfficeStage3Panel
-          tab={tab as "integraciones" | "deudas-analisis" | "negocios" | "escenarios"}
+          tab={tab as "fuentes" | "deudas-analisis" | "negocios" | "planificacion"}
           onError={(m) => setErr(m)}
         />
       ) : null}

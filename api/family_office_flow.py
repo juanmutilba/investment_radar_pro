@@ -22,8 +22,13 @@ from services.family_office import (
     build_leverage_performance,
     build_monthly_summary,
     close_month,
+    create_cashflow_allocation,
+    delete_cashflow_allocation as delete_cf_allocation_svc,
+    enrich_cashflow_entries,
     ensure_draft_closure,
     reopen_month,
+    require_month_writable,
+    update_cashflow_allocation as update_cf_allocation_svc,
     validate_allocation_capacity,
 )
 
@@ -156,6 +161,7 @@ class CashflowCreate(BaseModel):
     amount: float
     description: str | None = Field(default=None, max_length=4000)
     fixed_expense_id: int | None = None
+    is_fixed_expense: bool = False
     asset_id: int | None = None
     liability_id: int | None = None
     notes: str | None = Field(default=None, max_length=4000)
@@ -181,6 +187,7 @@ class CashflowUpdate(BaseModel):
     amount: float | None = None
     description: str | None = Field(default=None, max_length=4000)
     fixed_expense_id: int | None = None
+    is_fixed_expense: bool | None = None
     asset_id: int | None = None
     liability_id: int | None = None
     notes: str | None = Field(default=None, max_length=4000)
@@ -195,6 +202,64 @@ class CashflowUpdate(BaseModel):
     def month_fmt(cls, v: str | None) -> str | None:
         return None if v is None else _month_ok(v)
 
+
+CashflowAllocationDestination = Literal[
+    "fixed_expense",
+    "variable_expense",
+    "debt",
+    "investment",
+    "saving",
+    "house_project",
+    "other",
+]
+
+
+class CashflowAllocationCreate(BaseModel):
+    month: str
+    currency: FoCurrency
+    source_cashflow_entry_id: int
+    destination_type: CashflowAllocationDestination = "fixed_expense"
+    destination_id: int
+    allocated_amount: float
+    notes: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("month")
+    @classmethod
+    def month_fmt(cls, v: str) -> str:
+        return _month_ok(v)
+
+    @field_validator("allocated_amount")
+    @classmethod
+    def amt(cls, v: float) -> float:
+        n = _finite_nonneg(v, "allocated_amount")
+        if n <= 0:
+            raise ValueError("allocated_amount debe ser > 0")
+        return n
+
+
+class CashflowAllocationUpdate(BaseModel):
+    month: str | None = None
+    currency: FoCurrency | None = None
+    source_cashflow_entry_id: int | None = None
+    destination_type: CashflowAllocationDestination | None = None
+    destination_id: int | None = None
+    allocated_amount: float | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("month")
+    @classmethod
+    def month_fmt(cls, v: str | None) -> str | None:
+        return None if v is None else _month_ok(v)
+
+    @field_validator("allocated_amount")
+    @classmethod
+    def amt(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
+        n = _finite_nonneg(v, "allocated_amount")
+        if n <= 0:
+            raise ValueError("allocated_amount debe ser > 0")
+        return n
 
 
 class InvCashflowCreate(BaseModel):
@@ -440,7 +505,8 @@ def list_cashflow_entries(
             month = _month_ok(month)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return flow.list_cashflow_entries(month=month, currency=currency)
+    rows = flow.list_cashflow_entries(month=month, currency=currency)
+    return enrich_cashflow_entries(rows)
 
 
 @router.post("/cashflow-entries", status_code=201)
@@ -449,29 +515,112 @@ def create_cashflow_entry(body: CashflowCreate) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="source_unit inválido")
     if body.fixed_expense_id is not None and flow.get_fixed_expense(body.fixed_expense_id) is None:
         raise HTTPException(status_code=400, detail="fixed_expense_id no existe")
-    eid = flow.insert_cashflow_entry(**body.model_dump())
+    if body.entry_type == "income" and body.fixed_expense_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Un ingreso no se asocia a gasto fijo; use asignaciones de flujo",
+        )
+    if body.is_fixed_expense and body.entry_type != "expense":
+        raise HTTPException(status_code=400, detail="is_fixed_expense solo aplica a egresos")
+    data = body.model_dump()
+    month = (data.get("month") or str(data["date"])[:7])[:7]
+    try:
+        require_month_writable(month=month, currency=body.currency)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    eid = flow.insert_cashflow_entry(**data)
     row = flow.get_cashflow_entry(eid)
     if row is None:
         raise HTTPException(status_code=500, detail="No se pudo crear la entrada")
-    return row
+    return enrich_cashflow_entries([row])[0]
 
 
 @router.patch("/cashflow-entries/{entry_id}")
 def patch_cashflow_entry(entry_id: int, body: CashflowUpdate) -> dict[str, Any]:
-    if flow.get_cashflow_entry(entry_id) is None:
+    existing = flow.get_cashflow_entry(entry_id)
+    if existing is None:
         raise HTTPException(status_code=404, detail="Entrada no encontrada")
+    try:
+        require_month_writable(month=str(existing["month"]), currency=str(existing["currency"]))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     fields = _dump_unset(body)
+    entry_type = fields.get("entry_type", existing.get("entry_type"))
+    if fields.get("fixed_expense_id") is not None and entry_type == "income":
+        raise HTTPException(
+            status_code=400,
+            detail="Un ingreso no se asocia a gasto fijo; use asignaciones de flujo",
+        )
+    if fields.get("is_fixed_expense") and entry_type != "expense":
+        raise HTTPException(status_code=400, detail="is_fixed_expense solo aplica a egresos")
     if fields and not flow.update_cashflow_entry(entry_id, fields):
         raise HTTPException(status_code=400, detail="Sin cambios")
-    return flow.get_cashflow_entry(entry_id)  # type: ignore[return-value]
+    row = flow.get_cashflow_entry(entry_id)
+    return enrich_cashflow_entries([row])[0]  # type: ignore[arg-type]
 
 
 @router.delete("/cashflow-entries/{entry_id}")
 def delete_cashflow_entry(entry_id: int) -> dict[str, Any]:
-    if flow.get_cashflow_entry(entry_id) is None:
+    existing = flow.get_cashflow_entry(entry_id)
+    if existing is None:
         raise HTTPException(status_code=404, detail="Entrada no encontrada")
+    try:
+        require_month_writable(month=str(existing["month"]), currency=str(existing["currency"]))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     flow.delete_cashflow_entry(entry_id)
     return {"ok": True, "id": entry_id}
+
+
+@router.get("/cashflow-allocations")
+def list_cf_allocations(
+    month: str | None = Query(default=None),
+    currency: FoCurrency | None = Query(default=None),
+    source_cashflow_entry_id: int | None = Query(default=None),
+    destination_type: CashflowAllocationDestination | None = Query(default=None),
+    destination_id: int | None = Query(default=None),
+) -> list[dict[str, Any]]:
+    if month:
+        try:
+            month = _month_ok(month)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return flow.list_cashflow_allocations(
+        month=month,
+        currency=currency,
+        source_cashflow_entry_id=source_cashflow_entry_id,
+        destination_type=destination_type,
+        destination_id=destination_id,
+    )
+
+
+@router.post("/cashflow-allocations", status_code=201)
+def create_cf_allocation(body: CashflowAllocationCreate) -> dict[str, Any]:
+    try:
+        return create_cashflow_allocation(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/cashflow-allocations/{allocation_id}")
+def patch_cf_allocation(allocation_id: int, body: CashflowAllocationUpdate) -> dict[str, Any]:
+    if flow.get_cashflow_allocation(allocation_id) is None:
+        raise HTTPException(status_code=404, detail="Asignación no encontrada")
+    try:
+        return update_cf_allocation_svc(allocation_id, _dump_unset(body))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/cashflow-allocations/{allocation_id}")
+def delete_cf_allocation(allocation_id: int) -> dict[str, Any]:
+    if flow.get_cashflow_allocation(allocation_id) is None:
+        raise HTTPException(status_code=404, detail="Asignación no encontrada")
+    try:
+        delete_cf_allocation_svc(allocation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "id": allocation_id}
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ from pathlib import Path
 from persistence.sqlite.paths import default_db_path
 
 # Incrementar al aplicar migraciones DDL (ver bloque _apply_schema_if_needed).
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
 
 
 def _schema_sql() -> str:
@@ -470,6 +470,7 @@ def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
           amount REAL NOT NULL CHECK (amount >= 0),
           description TEXT,
           fixed_expense_id INTEGER REFERENCES family_fixed_expenses (id) ON DELETE SET NULL,
+          is_fixed_expense INTEGER NOT NULL DEFAULT 0 CHECK (is_fixed_expense IN (0, 1)),
           asset_id INTEGER REFERENCES family_assets (id) ON DELETE SET NULL,
           liability_id INTEGER REFERENCES family_liabilities (id) ON DELETE SET NULL,
           notes TEXT,
@@ -819,6 +820,70 @@ def _migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
         """
     )
 
+def _ensure_cashflow_allocations_schema(conn: sqlite3.Connection) -> None:
+    """Idempotente: is_fixed_expense + family_cashflow_allocations (F1)."""
+    tables = {
+        str(r[0])
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if "family_cashflow_entries" in tables:
+        cols = {
+            str(r[1])
+            for r in conn.execute("PRAGMA table_info(family_cashflow_entries)").fetchall()
+        }
+        if "is_fixed_expense" not in cols:
+            conn.execute(
+                "ALTER TABLE family_cashflow_entries "
+                "ADD COLUMN is_fixed_expense INTEGER NOT NULL DEFAULT 0"
+            )
+    if "family_cashflow_allocations" not in tables:
+        conn.execute(
+            """
+            CREATE TABLE family_cashflow_allocations (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              month TEXT NOT NULL,
+              currency TEXT NOT NULL CHECK (currency IN ('ARS', 'USD')),
+              source_cashflow_entry_id INTEGER NOT NULL
+                REFERENCES family_cashflow_entries (id) ON DELETE CASCADE,
+              destination_type TEXT NOT NULL CHECK (destination_type IN (
+                'fixed_expense', 'variable_expense', 'debt', 'investment',
+                'saving', 'house_project', 'other'
+              )),
+              destination_id INTEGER NOT NULL,
+              allocated_amount REAL NOT NULL CHECK (allocated_amount > 0),
+              notes TEXT,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_family_cf_alloc_month_currency
+        ON family_cashflow_allocations (month, currency)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_family_cf_alloc_source
+        ON family_cashflow_allocations (source_cashflow_entry_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_family_cf_alloc_destination
+        ON family_cashflow_allocations (destination_type, destination_id)
+        """
+    )
+
+
+def _migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
+    """Family Office F1: asignaciones de flujo + is_fixed_expense en movimientos."""
+    _ensure_cashflow_allocations_schema(conn)
+
+
 def _ensure_family_office_tables(conn: sqlite3.Connection) -> None:
     """Idempotente: crea tablas FO faltantes y columna is_active en house_projects."""
     tables = {
@@ -843,6 +908,7 @@ def _ensure_family_office_tables(conn: sqlite3.Connection) -> None:
             )
     if "business_units" not in tables:
         _migrate_v8_to_v9(conn)
+    _ensure_cashflow_allocations_schema(conn)
     conn.commit()
 
 def _apply_schema_if_needed(conn: sqlite3.Connection) -> None:
@@ -880,6 +946,9 @@ def _apply_schema_if_needed(conn: sqlite3.Connection) -> None:
         elif version < 9:
             _migrate_v8_to_v9(conn)
             version = 9
+        elif version < 10:
+            _migrate_v9_to_v10(conn)
+            version = 10
         else:
             break
     conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
