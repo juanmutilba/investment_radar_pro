@@ -164,6 +164,32 @@ export const ALLOCATION_DESTINATION_LABELS: Record<string, string> = {
   other: "Otro",
 };
 
+/** Destinos en escenarios de planificación (subset de asignación + portfolio). */
+export const SCENARIO_DESTINATION_LABELS: Record<string, string> = {
+  debt: "Deuda",
+  portfolio: "Cartera / inversiones",
+  salva: "Salva Foods",
+  investment_radar: "Herramienta (legacy)",
+  house: "Casa",
+  emergency_fund: "Fondo de emergencia",
+  cash: "Caja",
+};
+
+export const SCENARIO_DESTINATIONS_UI = [
+  "debt",
+  "portfolio",
+  "salva",
+  "house",
+  "emergency_fund",
+  "cash",
+] as const;
+
+export const CONFIDENCE_LABELS: Record<string, string> = {
+  low: "Baja",
+  medium: "Media",
+  high: "Alta",
+};
+
 export function labelOrCode(map: Record<string, string>, code: string | null | undefined): string {
   if (!code) return "—";
   return map[code] ?? `${code} (legacy)`;
