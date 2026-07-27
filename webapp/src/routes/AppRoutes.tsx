@@ -8,6 +8,7 @@ import { CedearsPage } from "@/pages/CedearsPage";
 import { CryptoPage } from "@/pages/CryptoPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { EventosPage } from "@/pages/EventosPage";
+import { FamilyOfficePage } from "@/pages/FamilyOfficePage";
 import { OptionsPage } from "@/pages/OptionsPage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 
@@ -44,6 +45,7 @@ export function AppRoutes() {
           }
         />
         <Route path="cartera" element={<CarteraPage />} />
+        <Route path="family-office" element={<FamilyOfficePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

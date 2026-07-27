@@ -19,6 +19,7 @@ const ITEMS: NavItem[] = [
   { to: "/futuros", label: "Futuros", placeholder: true },
   { to: "/alertas", label: "Alertas" },
   { to: "/cartera", label: "Cartera" },
+  { to: "/family-office", label: "Family Office" },
 ];
 
 export function Sidebar() {
